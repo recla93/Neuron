@@ -1234,7 +1234,138 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="pre_turn",
+            description=(
+                "Call at the START of each turn to load context in one shot. "
+                "Equivalent to status + get_context(format='compact'). Returns active "
+                "context summary and knowledge for the given topic. Ideal for providers "
+                "without automatic injection hooks."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Current topic or question to fetch context for",
+                    },
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional keywords to broaden context search",
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Max tokens for context output (default 200)",
+                        "default": 200,
+                    },
+                },
+                "required": ["topic"],
+            },
+        ),
     ]
+
+
+def _resolve_context(
+    search_kws: set[str],
+    depth: int,
+    g: "Graph",
+    ctx: str,
+) -> tuple[list, list, bool, str | None, "Graph"]:
+    """Core context-resolution logic shared by get_context and pre_turn.
+
+    Returns (related_links_sorted, top_nodes, used_fallback, inherited_ctx, g).
+    `g` may change when context inheritance kicks in.
+    """
+    # Normalize search keywords to match graph's lowercased node/link keys
+    search_kws = {kw.strip().lower() for kw in search_kws if kw.strip()}
+    related_nodes: set[str] = set()
+    related_links: list = []
+    current = search_kws.copy()
+    for _ in range(depth):
+        new_kws: set[str] = set()
+        for lk in g.links:
+            if lk.source in current and lk.target not in current:
+                new_kws.add(lk.target)
+                related_links.append(lk)
+            elif lk.target in current and lk.source not in current:
+                new_kws.add(lk.source)
+                related_links.append(lk)
+        current = new_kws
+        related_nodes.update(current)
+    related_nodes.update(search_kws)
+
+    # Vector fallback
+    used_fallback = False
+    if not related_links:
+        existing = {nd.keyword for nd in g.nodes}
+        if not search_kws & existing:
+            vec_results = _search_embeddings(list(search_kws), top_n=5, graph=g)
+            if vec_results:
+                vec_kws = {kw for kw, _ in vec_results}
+                current = vec_kws.copy()
+                for _ in range(depth):
+                    new_kws = set()
+                    for lk in g.links:
+                        if lk.source in current and lk.target not in current:
+                            new_kws.add(lk.target)
+                            related_links.append(lk)
+                        elif lk.target in current and lk.source not in current:
+                            new_kws.add(lk.source)
+                            related_links.append(lk)
+                    current = new_kws
+                    related_nodes.update(current)
+                related_nodes.update(vec_kws)
+                used_fallback = True
+
+    # Context inheritance: walk parent chain if still empty
+    inherited_ctx: str | None = None
+    if not related_links:
+        chain = _g.resolve_chain(ctx or None)
+        for ancestor_g in chain[1:]:
+            for lk in ancestor_g.links:
+                if lk.source in search_kws or lk.target in search_kws:
+                    related_links.append(lk)
+                    related_nodes.add(lk.source)
+                    related_nodes.add(lk.target)
+            if related_links:
+                g = ancestor_g
+                for cname, cg in _g._graphs.items():
+                    if cg is ancestor_g:
+                        inherited_ctx = cname
+                        break
+                break
+
+    # Rank links
+    seen_pairs: set[tuple[str, str]] = set()
+    deduped: list = []
+    for lk in sorted(related_links,
+                     key=lambda lk: (WEIGHT_ORDER.get(lk.weight, 0), lk.last_active_turn),
+                     reverse=True):
+        pair = (lk.source, lk.target)
+        rev  = (lk.target, lk.source)
+        if pair not in seen_pairs and rev not in seen_pairs:
+            seen_pairs.add(pair)
+            deduped.append(lk)
+    related_links_sorted = deduped
+
+    # Rank nodes
+    node_scores: dict[str, float] = {}
+    for nd_kw in related_nodes:
+        nd = g.get_node(nd_kw)
+        if nd is None:
+            continue
+        base = float(nd.salience)
+        recency = 2.0 if (g.turn_count - nd.turn) <= 5 else 0.0
+        link_score = sum(
+            WEIGHT_ORDER.get(lk.weight, 0)
+            for lk in related_links_sorted
+            if lk.source == nd_kw or lk.target == nd_kw
+        )
+        node_scores[nd_kw] = base + recency + link_score * 0.5
+    top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
+
+    return related_links_sorted, top_nodes, used_fallback, inherited_ctx, g
 
 
 @app.call_tool()
@@ -1337,85 +1468,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if isinstance(extra_kws, list):
             search_kws.update(extra_kws)
         depth = min(arguments.get("depth", 1), 3)
-        related_nodes: set[str] = set()
-        related_links: list[Link] = []
-        current = search_kws.copy()
-        for _ in range(depth):
-            new_kws: set[str] = set()
-            for lk in g.links:
-                if lk.source in current and lk.target not in current:
-                    new_kws.add(lk.target)
-                    related_links.append(lk)
-                elif lk.target in current and lk.source not in current:
-                    new_kws.add(lk.source)
-                    related_links.append(lk)
-            current = new_kws
-            related_nodes.update(current)
-        related_nodes.update(search_kws)
-
-        # fallback vettoriale: se nessun link trovato e keyword inesistenti, cerca per similarità
-        used_fallback = False
-        if not related_links:
-            existing = {nd.keyword for nd in g.nodes}
-            if not search_kws & existing:
-                vec_results = _search_embeddings(list(search_kws), top_n=5, graph=g)
-                if vec_results:
-                    vec_kws = {kw for kw, _ in vec_results}
-                    current = vec_kws.copy()
-                    for _ in range(depth):
-                        new_kws = set()
-                        for lk in g.links:
-                            if lk.source in current and lk.target not in current:
-                                new_kws.add(lk.target)
-                                related_links.append(lk)
-                            elif lk.target in current and lk.source not in current:
-                                new_kws.add(lk.source)
-                                related_links.append(lk)
-                        current = new_kws
-                        related_nodes.update(current)
-                    related_nodes.update(vec_kws)
-                    used_fallback = True
-
-        # Rank links: strong > medium > tangential, then by recency (last_active_turn desc)
-        related_links_sorted = sorted(
-            related_links,
-            key=lambda lk: (WEIGHT_ORDER.get(lk.weight, 0), lk.last_active_turn),
-            reverse=True,
-        )
-
-        # Rank nodes by composite score: salience + link weight contributions + recency
-        node_scores: dict[str, float] = {}
-        for nd_kw in related_nodes:
-            nd = g.get_node(nd_kw)
-            if nd is None:
-                continue
-            base = float(nd.salience)
-            # recency boost: nodes active in the last 5 turns get +2
-            recency = 2.0 if (g.turn_count - nd.turn) <= 5 else 0.0
-            # link weight sum: each link connected to this node contributes
-            link_score = sum(
-                WEIGHT_ORDER.get(lk.weight, 0)
-                for lk in related_links
-                if lk.source == nd_kw or lk.target == nd_kw
-            )
-            node_scores[nd_kw] = base + recency + link_score * 0.5
-
-        top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
-
-        # Dedup output links (two keywords may share the same neighbor)
-        seen_pairs: set[tuple[str, str]] = set()
-        deduped: list = []
-        for lk in related_links_sorted:
-            pair = (lk.source, lk.target)
-            rev  = (lk.target, lk.source)
-            if pair not in seen_pairs and rev not in seen_pairs:
-                seen_pairs.add(pair)
-                deduped.append(lk)
-        related_links_sorted = deduped
-
         fmt        = arguments.get("format", "full")
         max_tokens = int(arguments.get("max_tokens", 400))
-        char_budget = max_tokens * 4  # ~4 chars per token
+        char_budget = max_tokens * 4
+
+        related_links_sorted, top_nodes, used_fallback, inherited_ctx, g = \
+            _resolve_context(search_kws, depth, g, ctx)
+
 
         if fmt == "compact":
             # Single-line summary — ideal for system-prompt injection
@@ -1431,11 +1490,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 parts.append("nodes:" + ",".join(node_strs))
             if used_fallback:
                 parts.append("(vector fallback)")
+            if inherited_ctx:
+                parts.append(f"(from:{inherited_ctx})")
             out = " | ".join(parts) if parts else "no context"
             return [TextContent(type="text", text=out[:char_budget])]
 
         # Full format (default)
-        lines = [f"Context{' (vector fallback)' if used_fallback else ''}:"]
+        _ctx_suffix = ""
+        if used_fallback:
+            _ctx_suffix = " (vector fallback)"
+        elif inherited_ctx:
+            _ctx_suffix = f" (inherited from: {inherited_ctx})"
+        lines = [f"Context{_ctx_suffix}:"]
         if related_links_sorted:
             lines.append("Links (by weight):")
             for lk in related_links_sorted[:10]:
@@ -1749,6 +1815,41 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         contexts = _g.list_contexts(arguments.get("parent"))
         lines = [f"  {c['context']:30s} nodes={c['nodes']} links={c['links']} turns={c['turns']}{' <- active' if c['active'] else ''}" for c in contexts]
         return [TextContent(type="text", text="\n".join(lines) or "No contexts found.")]
+
+    if name == "pre_turn":
+        topic_pt = arguments.get("topic", "")
+        extra_kws_pt = arguments.get("keywords", [])
+        max_tokens_pt = int(arguments.get("max_tokens", 200))
+        char_budget_pt = max_tokens_pt * 4
+        # Status line
+        g_pt = _g.get()
+        ctx_label = _g.active
+        total_pt  = len(g_pt.links)
+        active_pt = len(g_pt.get_active_links())
+        status_line = (f"[neuron] ctx={ctx_label} turn={g_pt.turn_count} "
+                       f"nodes={len(g_pt.nodes)} links={total_pt}(active {active_pt})")
+        # Compact context via shared helper (no recursive MCP call)
+        search_kws_pt: set[str] = {topic_pt} if topic_pt else set()
+        if isinstance(extra_kws_pt, list):
+            search_kws_pt.update(extra_kws_pt)
+        lks, nodes_pt, fallback_pt, inh_pt, _ = \
+            _resolve_context(search_kws_pt, 1, g_pt, "")
+        parts_pt: list[str] = []
+        if lks:
+            parts_pt.append("links:" + "|".join(
+                f"{lk.source}-[{lk.weight[0]}]->{lk.target}" for lk in lks[:6]
+            ))
+        if nodes_pt:
+            parts_pt.append("nodes:" + ",".join(
+                f"{kw}({sc:.0f})" for kw, sc in nodes_pt[:5]
+            ))
+        if fallback_pt:
+            parts_pt.append("(vector fallback)")
+        if inh_pt:
+            parts_pt.append(f"(from:{inh_pt})")
+        ctx_text_pt = " | ".join(parts_pt) if parts_pt else "no context"
+        out_pt = f"{status_line}\n{ctx_text_pt}"
+        return [TextContent(type="text", text=out_pt[:char_budget_pt])]
 
     if name == "confirm":
         keywords = [str(k) for k in arguments.get("keywords", [])]

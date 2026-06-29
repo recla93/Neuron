@@ -39,31 +39,45 @@ python -m neuron
     }
   },
   "instructions": [
-    "path/to/skills/neural-stimulus/auto-context.md"
+    "%LOCALAPPDATA%\\Programs\\neuron\\skills\\auto-context.md"
   ]
 }
 ```
+
+The `instructions` field loads the auto-context skill, which tells the model to call
+`neuron_pre_turn` at the start of each turn and `neuron_store_turn` after responding.
 
 ### Other clients
 
 Claude Desktop, Cursor, Windsurf, VS Code, Zed — see [DEVELOPER.md](DEVELOPER.md#mcp-client-configuration).
 
+## Context inheritance
+
+When the active context has no results for a topic, `neuron_get_context` and `neuron_pre_turn`
+automatically search parent contexts (e.g. `default`) and annotate the output with `(from:<parent>)`.
+This means nodes stored in `default` are always accessible regardless of which context is active.
+
 ## MCP Tools
 
 | Tool | Description |
 |---|---|
-| `neuron_status` | Graph state |
-| `neuron_auto(text)` | Extract, save, return context (recommended) |
-| `neuron_get_context(keywords)` | Retrieve related nodes |
-| `neuron_vector_search(keywords)` | Semantic vector search |
-| `neuron_summary` | Graph summary |
-| `neuron_store_turn` | Manually save a turn |
-| `neuron_extract(text)` | Standalone semantic extraction |
-| `neuron_find_candidates(keywords)` | Find similar keywords (pre-store) |
+| `neuron_pre_turn(topic, keywords)` | **PRE shortcut** — status + compact context in one call |
+| `neuron_status` | Graph state (nodes, links, active context) |
+| `neuron_get_context(topic, ...)` | Retrieve related nodes and links; `format=compact` for injection; inherits from parent contexts automatically |
+| `neuron_store_turn` | Save turn: keywords, links, entities, tags |
+| `neuron_confirm(keywords)` | Boost salience of nodes that influenced the response |
+| `neuron_auto(text)` | Heuristic extraction + save in one call (fallback for smaller models) |
+| `neuron_extract(text)` | Standalone semantic extraction (no save) |
+| `neuron_find_candidates(keywords)` | Find similar existing keywords before storing (dedup) |
+| `neuron_merge(canonical, aliases)` | Absorb duplicate nodes into a single canonical node |
+| `neuron_vector_search(keywords)` | Semantic vector search (no link traversal) |
+| `neuron_summary` | Top nodes and recent links overview |
 | `neuron_forgotten` | Concepts not touched in N turns |
-| `neuron_prune` | Prune tangential links |
-| `neuron_dedup` / `neuron_flash` | Toggle features |
-| `neuron_export` / `neuron_reset` | Export / Reset graph |
+| `neuron_switch_context(context)` | Switch active domain context (e.g. `java/spring`) |
+| `neuron_list_contexts` | List all available contexts |
+| `neuron_prune` | Force pruning of expired tangential links |
+| `neuron_flash` / `neuron_dedup` | Toggle semantic flash / dedup features |
+| `neuron_export` / `neuron_reset` | Export full graph as JSON / clear graph |
 
 ## API Keys (standalone chat only)
 

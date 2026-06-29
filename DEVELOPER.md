@@ -7,6 +7,7 @@
 - [Dependencies](#dependencies)
 - [Vector Embeddings](#vector-embeddings)
 - [Fallback Chain](#fallback-chain)
+- [Key Behaviors](#key-behaviors)
 - [MCP Client Configuration](#mcp-client-configuration)
 - [Interactive CLI Mode](#interactive-cli-mode)
 - [Development Setup](#development-setup)
@@ -22,21 +23,26 @@ YOUR MCP CLIENT (OpenCode, Claude Desktop, Cursor, etc.)
      │  calls MCP tools (stdin/stdout)
      ▼
 ┌──────────────────────────────────────────────────────────┐
-│  mcp_server.py  (Python)                                 │
-│  ├── 14 MCP tools                                         │
-│  ├── vector embedding (384-dim semantic)                   │
+│  server.py  (Python)                                      │
+│  ├── 19 MCP tools                                         │
+│  ├── vector embedding (384-dim semantic, fastembed)        │
 │  └── search: Turso vector_distance_cos() or Python        │
+├──────────────────────────────────────────────────────────┤
+│  models.py — Node, Link, Graph dataclasses                │
+│  registry.py — GraphRegistry (multi-context, inheritance) │
 └────────────────────────────────┬─────────────────────────┘
                                  ▼
 ┌────────────────────────────────┬─────────────────────────┐
 │  Turso Database (pyturso) — native vector search          │
-│  ├── graph.db (nodes, links, embedding vectors)           │
+│  ├── <context>.db per context (nodes, links, vectors)     │
 │  ├── vector_distance_cos() inside Turso                   │
 │  └── Python fallback (cosine similarity in memory)        │
 └───────────────────────────────────────────────────────────┘
 ```
 
-The MCP server runs as a **stdio subprocess** of the MCP client. It has no HTTP layer, no daemon, no background process — every LLM tool call starts the server, processes the request, and waits for the next one.
+The MCP server runs as a **stdio subprocess** of the MCP client. No HTTP layer, no daemon — every LLM tool call is processed inline.
+
+**Multi-context:** each context (`default`, `java/spring`, `python/django`, ...) is a separate graph stored in its own `.db` file. Contexts form a hierarchy: `java/spring` inherits from `java`, which inherits from `default`. When a lookup finds no results in the active context, `get_context` and `pre_turn` automatically walk up the chain.
 
 ## Project Structure
 
@@ -46,8 +52,9 @@ Neuron/
 │   └── neuron/
 │       ├── __init__.py        # Package init, version
 │       ├── __main__.py        # `python -m neuron` entry point
-│       ├── engine.py          # Engine: graph CRUD, embedding, LLM clients
-│       └── server.py          # MCP server (14 tools, Turso/SQLite)
+│       ├── models.py          # Node, Link, Graph dataclasses + SQLite persistence
+│       ├── registry.py        # GraphRegistry — multi-context, resolve_chain inheritance
+│       └── server.py          # MCP server (19 tools, Turso/SQLite)
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py
@@ -61,10 +68,18 @@ Neuron/
 ├── skills/
 │   ├── SKILL_base.md          # Minimal LLM instructions
 │   ├── SKILL_full.md          # Full LLM instructions
-│   └── auto-context.md        # Auto-context priming
-├── install.ps1                # Windows installer
+│   └── auto-context.md        # PRE+POST auto-context skill (provider-agnostic)
+├── clients/                   # MCP config examples per client
+│   ├── claude-desktop.example.json
+│   ├── claude-code.example.json
+│   ├── cursor.example.json
+│   ├── vscode.example.json
+│   ├── zed.example.json
+│   ├── cline-roocode.example.json
+│   ├── opencode.example.json
+│   └── generic-mcp.example.json
+├── install.ps1                # Windows installer (auto-registers OpenCode, Claude Desktop, Cursor)
 ├── pyproject.toml
-├── opencode.example.json
 ├── README.md
 ├── DEVELOPER.md
 ├── LICENSE
@@ -116,6 +131,43 @@ vec = list(embedder.embed("database"))[0]  # 384-dim float32
 | Embedding | fastembed 384-dim | — |
 | Database | pyturso (Turso) | sqlite3 (no vector search) |
 | Vector search | `vector_distance_cos()` SQL | Python cosine in memory |
+
+## Key Behaviors
+
+### Context inheritance
+
+`get_context` and `pre_turn` always search the full resolution chain when the active graph returns no results:
+
+```
+active: java/spring  →  java  →  default
+```
+
+If "virtual threads" exists only in `default`, querying it from `java/spring` still returns it, annotated with `(from:default)`. No client-side configuration needed.
+
+### pre_turn shortcut
+
+`neuron_pre_turn(topic, keywords)` is a single-call alternative to `status` + `get_context(compact)`. It returns a one-liner status followed by compact context:
+
+```
+[neuron] ctx=backend turn=14 nodes=42 links=31(active 18)
+links:kotlin_flow-[s]->coroutines|spring_boot-[m]->di | nodes:kotlin_flow(22),spring_boot(18)
+```
+
+Designed for providers without automatic injection hooks (OpenCode, Cursor, etc.) — one call at turn start gives everything needed to answer with memory.
+
+### Keyword normalization and dedup
+
+All keywords are normalized at ingestion (`strip().lower()`). `add_node` deduplicates on the normalized key and max-merges salience rather than creating duplicates. `add_link` normalizes source/target and deduplicates in both directions.
+
+### Auto-link thresholds
+
+Semantic auto-links (generated from `store_turn`) use cosine similarity thresholds: `≥0.65` → strong, `≥0.45` → medium, `≥0.30` → tangential. Top 10 candidates per keyword are evaluated per call, with cross-call dedup to avoid re-adding existing links.
+
+### Salience and decay
+
+Nodes accumulate salience from `store_turn` (intent weight) and `confirm` (explicit feedback boost). Nodes not referenced in the last 5 turns lose 1 salience point. Tangential links expire after 5 inactive turns via `prune_tangential()`.
+
+---
 
 ## MCP Client Configuration
 

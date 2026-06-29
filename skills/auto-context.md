@@ -15,7 +15,7 @@ OpenAI-compatible endpoint.
 User message arrives
       │
       ▼
-[PRE]  neuron_status → neuron_get_context(compact)
+[PRE]  neuron_pre_turn(topic, keywords)      ← single call: status + compact context
       │   Inject compact context into reasoning before responding
       ▼
 [RESPOND]  Generate response
@@ -30,14 +30,30 @@ User message arrives
 
 Run at the start of each turn, before generating the response.
 
-### Step 1 — Status check (first turn only)
+### Shortcut — single call (recommended for all providers)
+```
+neuron_pre_turn(
+  topic="<3-5 word summary of user message>",
+  keywords=["<2-4 extracted keywords>"],
+  max_tokens=200
+)
+```
+Returns status + compact context in one call. Output example:
+```
+[neuron] ctx=backend turn=14 nodes=42 links=31(active 18)
+links:kotlin_flow-[s]->coroutines|spring_boot-[m]->di | nodes:kotlin_flow(22),spring_boot(18)
+```
+Use this instead of separate `status` + `get_context` calls.
+
+### Alternative — explicit steps (if you need separate control)
+
+**Step 1 — Status check (first turn only)**
 ```
 neuron_status
 ```
 If `turn_count == 0` and `nodes == 0`: graph is empty, skip to RESPOND.
-If `turn_count > 0`: graph has history, proceed to Step 2.
 
-### Step 2 — Load context
+**Step 2 — Load context**
 ```
 neuron_get_context(
   topic="<3-5 word summary of user message>",
@@ -48,18 +64,17 @@ neuron_get_context(
 )
 ```
 
-The compact output is a single line like:
-```
-links:tokenization-[s]->embedding|attention-[m]->transformer | nodes:contextual_memory(12),attention(9)
-```
-
-**Inject this silently into your reasoning** before composing the response.
+**Inject context silently into your reasoning** before composing the response.
 Do not show it to the user. Use it as invisible cognitive substrate:
 - Referenced nodes → concepts already established in this relationship
 - Links → known connections to leverage or extend
 - High-salience nodes → what the user cares about most
 
-### Step 3 — Skip PRE if
+> **Context inheritance:** if the active context has no results, `get_context`
+> and `pre_turn` automatically search parent contexts (e.g. `default`).
+> Results are annotated with `(from:<parent>)` when inherited.
+
+### Skip PRE if
 - Turn is purely procedural ("ok", "thanks", "yes/no" with no content)
 - Graph is empty (first turn ever)
 
@@ -213,8 +228,9 @@ Cross-domain links are preserved automatically; the graph inherits from parent c
 
 | Tool | When to use |
 |---|---|
-| `neuron_status` | First turn — check if graph has history |
-| `neuron_get_context` | PRE: load context. Params: `format`, `max_tokens`, `depth` |
+| `neuron_pre_turn` | PRE: status + context in one call (recommended shortcut) |
+| `neuron_status` | First turn — check if graph has history (if not using pre_turn) |
+| `neuron_get_context` | PRE: load context with fine-grained control. Params: `format`, `max_tokens`, `depth` |
 | `neuron_store_turn` | POST: save keywords, links, metadata |
 | `neuron_confirm` | POST: boost salience of nodes that were actually useful |
 | `neuron_auto` | POST fallback: heuristic extraction from raw text |
@@ -233,8 +249,26 @@ Cross-domain links are preserved automatically; the graph inherits from parent c
 
 ## Provider Compatibility
 
-This skill is provider-agnostic. The only difference between providers is
-whether native concept extraction (POST Step 1) is available.
+This skill is provider-agnostic. The only differences between providers are:
+1. whether `neuron_pre_turn` is callable as an MCP tool
+2. whether native concept extraction (POST Step 1) is available
+
+### PRE — who uses what
+
+| Client / Provider | Recommended PRE |
+|---|---|
+| OpenCode | `neuron_pre_turn(topic, keywords)` — single MCP call |
+| Claude Desktop | `neuron_pre_turn(topic, keywords)` |
+| Claude Code | `neuron_pre_turn(topic, keywords)` |
+| Cursor | `neuron_pre_turn(topic, keywords)` |
+| Any client with MCP tool access | `neuron_pre_turn(topic, keywords)` |
+| Client where pre_turn is unavailable | `neuron_status` → `neuron_get_context(format="compact")` |
+
+`neuron_pre_turn` is available on all standard Neuron MCP server deployments (v3.3+).
+It internally calls the same resolution logic as `neuron_get_context` — no difference in
+output quality, just one fewer round-trip.
+
+### POST — extraction by model capability
 
 | Provider | Native extraction | Recommended |
 |---|---|---|

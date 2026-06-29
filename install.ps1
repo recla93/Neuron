@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Neuron v3.2 — Installer Windows
+    Neuron v3.3 — Installer Windows
 .DESCRIPTION
     Python -> Rust -> Windows SDK -> MSVC Build Tools (minimal) -> pip (3 retry, hard fail).
     Each download tries 3 different URLs before giving up.
@@ -14,7 +14,7 @@ $ErrorActionPreference = "Continue"
 $SrcDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DestDir = "$env:LOCALAPPDATA\Programs\neuron"
 
-Write-Host "Neuron v3.2 — Installer" -ForegroundColor Cyan
+Write-Host "Neuron v3.3 — Installer" -ForegroundColor Cyan
 Write-Host "Source: $SrcDir  ->  Destination: $DestDir`n"
 
 # ---------------------------------------------------------------
@@ -290,7 +290,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: fastembed not installed" -Foregrou
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: mcp not installed" -ForegroundColor Red; exit 1 }
 
 Write-Host "`n=============================================================" -ForegroundColor Green
-Write-Host "  Neuron v3.2 installed!" -ForegroundColor Green
+Write-Host "  Neuron v3.3 installed!" -ForegroundColor Green
 Write-Host "  Engine: Turso DB | Embedding: 384-dim semantic" -ForegroundColor Green
 Write-Host "  Path: $DestDir" -ForegroundColor Green
 Write-Host "=============================================================" -ForegroundColor Green

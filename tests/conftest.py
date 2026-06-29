@@ -1,10 +1,7 @@
-"""Test fixtures for Neuron."""
-
-import os
+"""pytest configuration — sets up PYTHONPATH for the src layout."""
 import sys
-import tempfile
+import os
 
-# Ensure src/ is on path for the package import
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
+src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
+if src not in sys.path:
+    sys.path.insert(0, src)

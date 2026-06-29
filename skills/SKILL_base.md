@@ -1,39 +1,56 @@
-# Neuron — Base Skill
+# Neuron v3.3 — Base Skill
 
-You are a skill for cumulative cognitive stimulation.
-Each message leaves semantic traces that connect over time,
-like the associative memory of the human brain.
-You do not show a graph, but use connections as the invisible foundation of reasoning,
-enriching each response with accumulated context.
+Persistent semantic memory across conversations.
+Each exchange leaves traces in a concept graph; connections accumulate over
+time, enriching responses with context that would otherwise be lost.
+
+> **If your client supports MCP tools** (OpenCode, Claude Desktop, Cursor, etc.),
+> use `auto-context.md` instead — it gives you full PRE+POST tool control.
+> This skill is for clients without MCP tool access.
 
 ---
 
-## PHASE 1 — EXTRACTION
+## PHASE 1 — PRE: load context
+
+At the start of each turn, before generating the response:
+
+**If MCP tools are available**, call:
+```
+neuron_pre_turn(topic="<3-5 word summary>", keywords=["kw1", "kw2"])
+```
+This returns status + compact context in one call. Inject it silently into
+your reasoning before responding.
+
+**If MCP tools are not available**, recall internally from prior turns:
+which keywords appeared, what links were established, what the last topic was.
+Use this as invisible cognitive substrate — do not show it to the user.
+
+---
+
+## PHASE 2 — EXTRACTION
 
 Analyze the current message and extract internally:
 
 ```json
 {
   "topic": "main topic in 3-5 words",
-  "entities": ["people", "technologies", "concepts", "places"],
+  "entities": ["people", "technologies", "concepts"],
   "intent": "question|task|exploration|clarification|feedback",
   "sentiment": "neutral|positive|critical|urgent",
-  "domain": "AI|backend|frontend|gaming|architecture|general",
-  "keywords": ["kw1", "kw2", "kw3", "kw4", "kw5"],
-  "tags": ["free labels beyond the domain"],
-  "references": [{"type": "file|url|commit", "path": "path", "description": "notes"}]
+  "domain": "AI|backend|frontend|architecture|general",
+  "keywords": ["kw1", "kw2", "kw3", "kw4"],
+  "tags": ["optional free labels"]
 }
 ```
 
 Keywords must be abstract and generalizable.
-Example: "contextual memory" instead of "the way you remember things".
+Example: "contextual memory" not "the way you remember things".
 
 ---
 
-## PHASE 2 — LINKING
+## PHASE 3 — LINKING
 
-Compare extracted keywords with the record of previous turns.
-For each semantically related pair, create a link:
+For each semantically related keyword pair, create a link:
 
 ```json
 {
@@ -45,74 +62,46 @@ For each semantically related pair, create a link:
 }
 ```
 
-Consider node metadata (domain, topic) when deciding
-connections, not just keyword strings. This produces more varied links
-and reduces bias toward `instance-of`.
-
 **Weights:**
 - `strong` → same semantic area, direct impact on current reasoning
-- `medium` → indirect correlation but useful as context
-- `tangential` → weak connection, removed after 5 inactive turns
+- `medium` → indirect but useful connection
+- `tangential` → weak, expires after 5 inactive turns
 
-**Pruning rule:** tangential links expire after 5 inactive turns.
-Strong and medium links remain until explicit reset.
-
----
-
-## PHASE 3 — INJECTION (invisible to the user)
-
-Before generating the response, internally build a common thread:
-
-```
-"The current topic is [X].
- Relevant active connections:
-   - [keyword_A] is an evolution of [keyword_B] (turn N): [rationale]
-   - [keyword_C] contrasts with [keyword_D] (turn M): [rationale]
- Considering these connections, the reasoning must..."
-```
-
-This thread is NOT shown to the user. It is the cognitive substrate of the response.
+Links between nodes of the same domain auto-upgrade from `tangential` to `medium`.
 
 ---
 
-## PHASE 4 — OUTPUT
+## PHASE 4 — POST: save turn
 
-Respond normally, semantically enriched by the common thread.
-
-The response must:
-- Be coherent with the conversation history (even if distant in time)
-- Implicitly reference connected concepts without forced citations
-- Feel like natural reasoning, not a list of references
-
-At the end of the response, add the link summary (strong and medium only):
-
+**If MCP tools are available**, call:
 ```
-> 🧠 Link: ⬤ `source` →(type)→ `target` [strong] | ◉ `source2` →(type)→ `target2` [medium]
+neuron_store_turn(
+  topic="...", domain="...", intent="...", sentiment="...",
+  keywords=["kw1", "kw2", "kw3"],
+  links=[{"source": "...", "target": "...", "link_type": "...", "weight": "...", "rationale": "..."}]
+)
 ```
+
+If the context loaded in PRE directly influenced your response, also call:
+```
+neuron_confirm(keywords=["useful_kw1", "useful_kw2"], boost=2)
+```
+
+**If MCP tools are not available**, maintain the graph in memory: add nodes,
+increment inactivity counters, remove tangential links inactive >5 turns.
 
 ---
 
-## PHASE 5 — REGISTER UPDATE
+## PHASE 5 — OUTPUT
 
-- Add new nodes (keyword + topic + domain + sentiment + turn)
-- Add new links
-- Increment the inactivity counter for all untouched links
-- Update `last_active_turn` for the links involved
-- Remove tangential links with inactivity > 5 turns
+Respond normally, semantically enriched by the loaded context.
+The response must feel like natural reasoning — not a list of references.
 
----
+At the end of the response, optionally add the link summary (strong and medium only):
 
-## Behavioral Notes
-
-**Link types:** in single-domain sessions, `instance-of` predominates. Variety
-increases with mixed domains (backend + AI + architecture).
-
-**Deduplication:** in long sessions >20 turns, group identical keywords
-into a single node (increase salience, update turn) instead of creating
-new ones.
-
-**Indicators:** strong/medium ratio >40% = healthy. <20% = links too weak.
-3+ link types = good variety. <8 nodes/turn = granularity ok.
+```
+> 🧠 Link: ⬤ `source` →(type)→ `target` [strong]
+```
 
 ---
 
@@ -120,8 +109,23 @@ new ones.
 
 | Command | Action |
 |---|---|
-| `/neuron status` | Show active nodes + links with weights |
-| `/neuron reset` | Clear network and history, restart from scratch |
-| `/neuron prune` | Force immediate pruning of tangential links |
-| `/neuron summary` | Generate a text summary of the current network |
-| `/neuron export` | Export the complete network as JSON |
+| `neuron_pre_turn(topic, keywords)` | PRE shortcut: status + compact context |
+| `neuron_status` | Graph state (nodes, links, active context) |
+| `neuron_get_context(topic)` | Retrieve context for a specific topic |
+| `neuron_store_turn(...)` | Save turn manually |
+| `neuron_confirm(keywords)` | Boost salience of nodes that were useful |
+| `neuron_summary` | Overview of top nodes and recent links |
+| `neuron_switch_context(context)` | Switch active domain (e.g. `java/spring`) |
+| `neuron_prune` | Force pruning of expired tangential links |
+| `neuron_reset` | Clear graph and restart |
+| `neuron_export` | Export full graph as JSON |
+
+---
+
+## Graph health (quick reference)
+
+| Signal | Healthy | Warning |
+|---|---|---|
+| strong+medium ratio | >40% | <20% = links too weak |
+| Link type variety | 3+ types | 1 type = instance-of bias |
+| Nodes per turn | 3-5 avg | >8 = keywords too granular |
