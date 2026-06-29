@@ -382,6 +382,26 @@ class SemanticExtractor:
         if not keywords:
             keywords = [text[:KEYWORD_MAX_LENGTH].strip() or "conversazione"]
         entities = SemanticExtractor._extract_entities(tokens, scored)
+        # ponytail: fold compound entities (bigrams) into keywords so "Kotlin Flow" becomes a node
+        for ent in entities[:4]:
+            if " " in ent:
+                low = ent.lower()
+                if low not in keywords:
+                    keywords.append(low)
+                    if len(keywords) >= 8:
+                        break
+        # Promote entity bigrams to keywords (fix fragmentation: "Kotlin Flow" stays whole)
+        kw_set = set(keywords)
+        for ent in entities:
+            ent_low = ent.lower()
+            if (len(ent.split()) > 1             # bigram or longer
+                    and ent_low not in kw_set
+                    and len(ent) <= KEYWORD_MAX_LENGTH
+                    and KEYWORD_PATTERN.match(ent)):
+                keywords.append(ent_low)
+                kw_set.add(ent_low)
+                if len(keywords) >= 8:
+                    break
         domain = SemanticExtractor._detect_domain(tokens, scored)
         intent = SemanticExtractor._detect_intent(text)
         sentiment = SemanticExtractor._detect_sentiment(text, tokens)
@@ -520,17 +540,22 @@ def _auto_link(new_kw: list[str], turn: int, graph: Graph | None = None) -> list
     MAX_AUTO_LINKS = 8
 
     for kw in new_kw:
-        candidates = _search_embeddings([kw], top_n=5, graph=g)
+        candidates = _search_embeddings([kw], top_n=10, graph=g)
         for candidate_kw, sim in candidates:
             if candidate_kw == kw or candidate_kw in new_kw:
                 continue
-            if sim < 0.15:
+            if sim < 0.30:          # raised from 0.15 — cuts tangential noise
                 continue
             pair = (kw, candidate_kw)
             rev_pair = (candidate_kw, kw)
             if pair in added_pairs or rev_pair in added_pairs:
                 continue
-            weight = "strong" if sim > 0.6 else "medium" if sim > 0.35 else "tangential"
+            # also skip if link already exists in the graph (cross-call dedup)
+            if any((lk.source == kw and lk.target == candidate_kw) or
+                   (lk.source == candidate_kw and lk.target == kw)
+                   for lk in g.links):
+                continue
+            weight = "strong" if sim > 0.65 else "medium" if sim > 0.45 else "tangential"
             links.append(Link(
                 source=kw, target=candidate_kw,
                 link_type="analogy",
@@ -1376,6 +1401,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             node_scores[nd_kw] = base + recency + link_score * 0.5
 
         top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
+
+        # Dedup output links (two keywords may share the same neighbor)
+        seen_pairs: set[tuple[str, str]] = set()
+        deduped: list = []
+        for lk in related_links_sorted:
+            pair = (lk.source, lk.target)
+            rev  = (lk.target, lk.source)
+            if pair not in seen_pairs and rev not in seen_pairs:
+                seen_pairs.add(pair)
+                deduped.append(lk)
+        related_links_sorted = deduped
 
         fmt        = arguments.get("format", "full")
         max_tokens = int(arguments.get("max_tokens", 400))
