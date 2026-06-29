@@ -114,19 +114,34 @@ class Graph:
     # Node map helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _norm(kw: str) -> str:
+        """Normalize keyword: strip + lowercase. Used as map key."""
+        return kw.strip().lower()
+
     def _rebuild_node_map(self) -> None:
         self._node_map.clear()
         for nd in self.nodes:
-            self._node_map[nd.keyword] = nd
+            self._node_map[self._norm(nd.keyword)] = nd
 
     def get_node(self, keyword: str) -> Node | None:
-        return self._node_map.get(keyword)
+        return self._node_map.get(self._norm(keyword))
 
     # ------------------------------------------------------------------
     # Mutation — node
     # ------------------------------------------------------------------
 
     def add_node(self, node: Node) -> None:
+        # Normalize keyword on ingestion — prevents case duplicates
+        node.keyword = self._norm(node.keyword)
+
+        # Dedup: if a node with same normalized keyword already exists, merge salience
+        existing = self._node_map.get(node.keyword)
+        if existing:
+            existing.salience = max(existing.salience, node.salience)
+            self._dirty = True
+            return
+
         if node.vector is None:
             node.vector = _get_vector(node.keyword)
 
@@ -150,6 +165,9 @@ class Graph:
     # ------------------------------------------------------------------
 
     def add_link(self, link: Link) -> None:
+        # Normalize source/target to match node map keys
+        link.source = self._norm(link.source)
+        link.target = self._norm(link.target)
         # dedup: skip if an equivalent link already exists in either direction
         for existing in self.links:
             if (existing.source == link.source and existing.target == link.target
@@ -375,13 +393,15 @@ class Graph:
             ):
                 if domain_filter and row[0] not in node_kws and row[1] not in node_kws:
                     continue
-                self.links.append(Link(
-                    source=row[0], target=row[1], link_type=row[2],
-                    weight=row[3], rationale=row[4],
-                    created_turn=row[5], last_active_turn=row[6], inactive_turns=row[7],
-                ))
-            self._dirty = False
-        except sqlite3.DatabaseError:
-            pass
+                link = Link(
+                    source=row[0], target=row[1], link_type=row[2], weight=row[3],
+                    rationale=row[4] or "",
+                    created_turn=row[5] or 0,
+                    last_active_turn=row[6] or 0,
+                    inactive_turns=row[7] or 0,
+                )
+                self.links.append(link)
         finally:
             conn.close()
+        self._rebuild_node_map()
+        self._dirty = False

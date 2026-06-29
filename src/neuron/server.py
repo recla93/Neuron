@@ -1159,6 +1159,30 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="merge",
+            description=(
+                "Merge duplicate or near-duplicate nodes. "
+                "Moves all links from `aliases` into `canonical`, sums salience, then deletes the aliases. "
+                "Use after find_candidates reveals near-duplicates (e.g. 'spring boot' / 'Spring Boot' / 'Spring Boot 3.2')."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "canonical": {
+                        "type": "string",
+                        "description": "The keyword to keep as the single authoritative node",
+                    },
+                    "aliases": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Keywords to absorb into canonical and then delete",
+                    },
+                    "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
+                },
+                "required": ["canonical", "aliases"],
+            },
+        ),
+        Tool(
             name="switch_context",
             description="Switch active context (creates if new). E.g. 'java/spring', 'python/django'.",
             inputSchema={
@@ -1709,6 +1733,59 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "confirmed": confirmed,
             "boost": boost,
             "skipped": skipped,
+        }, ensure_ascii=False))]
+
+    if name == "merge":
+        canonical = g._norm(arguments["canonical"])
+        aliases   = [g._norm(a) for a in arguments.get("aliases", [])]
+        canon_nd  = g.get_node(canonical)
+        if not canon_nd:
+            from neuron.models import Node as _Node
+            canon_nd = _Node(keyword=canonical, turn=g.turn_count, domain="general",
+                             topic="", sentiment="neutral")
+            g.add_node(canon_nd)
+
+        merged, missing = [], []
+        for alias in aliases:
+            alias_nd = g.get_node(alias)
+            if not alias_nd:
+                missing.append(alias)
+                continue
+            # Transfer salience
+            canon_nd.salience += alias_nd.salience
+            # Rewire all links that reference this alias
+            for lk in g.links:
+                if lk.source == alias:
+                    lk.source = canonical
+                if lk.target == alias:
+                    lk.target = canonical
+            # Remove self-loops
+            g.links = [lk for lk in g.links if lk.source != lk.target]
+            # Remove alias node
+            g.nodes = [nd for nd in g.nodes if nd.keyword != alias]
+            g._rebuild_node_map()
+            merged.append(alias)
+
+        # Re-dedup links after rewiring
+        seen: set[tuple] = set()
+        unique_links = []
+        for lk in g.links:
+            key = (lk.source, lk.target, lk.link_type)
+            if key not in seen:
+                seen.add(key)
+                unique_links.append(lk)
+        g.links = unique_links
+
+        if merged:
+            g._dirty = True
+            _g.save(ctx or None)
+
+        return [TextContent(type="text", text=json.dumps({
+            "canonical": canonical,
+            "merged": merged,
+            "missing": missing,
+            "canonical_salience": canon_nd.salience,
+            "links_total": len(g.links),
         }, ensure_ascii=False))]
 
     return [TextContent(type="text", text=f"Unknown command: {name}")]
