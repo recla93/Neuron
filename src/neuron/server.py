@@ -24,6 +24,7 @@ except ImportError:
 from fastembed import TextEmbedding
 
 from mcp.server import Server
+from mcp.server.lowlevel import NotificationOptions
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent, ServerCapabilities, ToolsCapability
