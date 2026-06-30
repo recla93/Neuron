@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: neuron
+Version: 3.3.0
+Summary: Neuron - persistent semantic memory for AI (semantic graph + vector search with Turso)
+Author: Claudio C.
+License: PolyForm Noncommercial License 1.0.0
+Keywords: mcp,semantic-memory,vector-embedding,turso,graph
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: Other/Proprietary License
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Python: >=3.10
+License-File: LICENSE
+Requires-Dist: mcp>=1.28.0
+Requires-Dist: pyturso==0.6.1
+Requires-Dist: fastembed>=0.5.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Provides-Extra: cloud
+Requires-Dist: libsql-client>=0.3.1; extra == "cloud"
+Dynamic: license-file

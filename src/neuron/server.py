@@ -1937,13 +1937,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
+    from neuron import __version__
     async with stdio_server() as (read_stream, write_stream):
         await app.run(
             read_stream,
             write_stream,
             InitializationOptions(
                 server_name="neuron",
-                server_version="0.1.0",
+                server_version=__version__,
                 capabilities=app.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},
@@ -1952,6 +1953,15 @@ async def main() -> None:
         )
 
 
-if __name__ == "__main__":
-    import asyncio
+def cli() -> None:
+    """Synchronous entry point for the ``neuron-mcp`` console script.
+
+    ``main()`` is a coroutine, so it cannot be used directly as a
+    ``[project.scripts]`` target (the script would get an un-awaited
+    coroutine). This wrapper runs the event loop.
+    """
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()

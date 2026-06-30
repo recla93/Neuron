@@ -206,3 +206,64 @@ raggiungibili via vector search (`node_vectors`). Per ricollegarli servirebbe un
 rigenerazione semantica dei link con `fastembed` installato (non disponibile in questo
 ambiente). La logica runtime di prune (`prune_tangential`, soglia 5 turni inattivi) è
 risultata corretta; in `graphs/` non ci sono grafi live da prunare nel repo sorgente.
+
+## T9 — Packaging + GitHub Release (wheel) + riscrittura installer
+**Stato:** completed
+**Problema:** (1) `pyproject.toml` non aveva `[tool.setuptools]` → con src-layout
+`python -m build` non trovava il package `neuron` (wheel vuoto/build fallita). (2) Il DB
+seed `base_knowledge.db` non veniva impacchettato (`*.db` in .gitignore, no MANIFEST, no
+package-data) e `registry.py` lo cercava via path relativo al repo (inesistente in un
+pacchetto installato). (3) Entry-point `neuron-mcp = neuron.server:main` rotto: `main` è
+`async`. (4) Versione duplicata in `pyproject.toml` e `__init__.py`. (5) `install.ps1` con
+bug: `Invoke-PipRetry` trattava `$LASTEXITCODE -eq $null` come successo (fallimenti pip
+silenziosi); check Python `[double]"3.10" -lt 3.10` (= 3.1, locale-fragile); componente
+MSVC errato (`UCRTSDK`); refresh PATH incompleto; codice morto. (6) pyturso non ha wheel
+`win_amd64` su PyPI → su Windows pip compila da sorgente Rust.
+**File rilevanti:** `pyproject.toml`, `MANIFEST.in`, `src/neuron/__init__.py`,
+`src/neuron/server.py` (`main`/`cli`), `src/neuron/registry.py` (seed resolve/guard),
+`src/neuron/data/` (seed packaged), `.github/workflows/release.yml`,
+`.github/workflows/ci.yml`, `install.ps1`, `scripts/run_mcp.bat`, `INSTALL.md`,
+`README.md`, `DEVELOPER.md`, `.gitignore`, `RELEASE_PLAN.md`.
+**Risoluzione (2026-06-30):** scelta **Opzione B (hybrid), dependency-first**.
+(1) `pyproject.toml`: `[tool.setuptools]` src-layout discovery + `package-data` (data/*.db)
++ versione `dynamic` da `__init__.py`; pin `pyturso==0.6.1`. (2) Seed spostato in
+`src/neuron/data/base_knowledge.db`, caricato via `importlib.resources`; aggiunto
+`_seed_is_loadable()` (header SQLite + size >= 512) e try/except nel load → seed
+mancante/placeholder/corrotto NON crasha più. `MANIFEST.in` per l'sdist. (3) Aggiunto
+`cli()` sync in `server.py`; entry-point → `neuron.server:cli`; `server_version` ora da
+`__version__`. (5) `install.ps1` riscritto: verifica Python 3.10–3.13 (compare int),
+`Invoke-Pip` trusta solo `$LASTEXITCODE -eq 0`, install via `pip --find-links vendor` del
+wheel (nessun compilatore), fallback MSVC **minimale** (`VC.Tools.x86.x64` +
+`Windows11SDK.22621`, mai full VS) solo se il prebuilt fallisce. (6)
+`.github/workflows/release.yml`: job `build-pyturso-win` (matrix 3.10–3.13) costruisce le
+wheel `win_amd64` su `windows-latest` e le allega alla Release insieme a wheel+sdist di
+Neuron. `ci.yml` ora ha un job `build` che verifica il wheel. `run_mcp.bat` non usa più
+`PYTHONPATH=src`. Nuovo `INSTALL.md` (automatico + manuale + troubleshooting). `.gitignore`
+ora versiona il seed (`!.../base_knowledge.db`) ma re-ignora `*.prerepair-*`.
+**Verifica:** `python -m build` OK (wheel contiene `neuron/data/base_knowledge.db`, entry
+`neuron.server:cli`, versione 3.3.0 dinamica); install del wheel in venv pulito → import OK;
+`pytest tests/` = **60 passed** (con seed placeholder, degradazione graziosa confermata).
+**Nota residua (DA FARE manualmente):** generare il vero `src/neuron/data/base_knowledge.db`
+con `scripts/import_vault.py` (vedi T10) prima di taggare una release (ora è un placeholder).
+
+## T10 — Sostituire seed_vault.py con import_vault.py (path-agnostico)
+**Stato:** completed
+**Problema:** `scripts/seed_vault.py` era hardcoded su un vault Obsidian personale
+(`C:\Users\recla\...`, `D:\Desktop\...`), scriveva nella path legacy `knowledge/` e non
+generava embeddings (`node_vectors` vuota → ricerca semantica morta finché non si lanciava
+`populate_vectors.py`). Inadatto come tool di seeding generico/pubblico.
+**File rilevanti:** `scripts/import_vault.py` (nuovo), `scripts/seed_vault.py` (stub
+deprecato), `scripts/populate_vectors.py`, `src/neuron/registry.py`, `INSTALL.md`,
+`DEVELOPER.md`.
+**Risoluzione (2026-06-30):** creato `scripts/import_vault.py`: vault root SOLO da
+`NEURON_VAULT`/`--vault` (nessun path hardcoded), output configurabile via `--out` (default
+`./knowledge/base_knowledge.db`, locale), embeddings 384-dim inline se `fastembed` presente
+(altrimenti skip con messaggio e degradazione graziosa). Schema identico a quello atteso dal
+server. `seed_vault.py` ridotto a stub che reindirizza al nuovo tool (il mount non
+permetteva il `rm`). Aggiornati i riferimenti in `registry.py`, `INSTALL.md`, `DEVELOPER.md`.
+**Verifica:** import su vault finto → DB SQLite valido (45KB, header corretto, accettato da
+`registry._seed_is_loadable`), 3 nodi/5 link/4 meta, skip vettori senza fastembed OK.
+**Decisione di prodotto (recla):** il seed pubblico spedito NON deve essere note personali
+di nessuno; `import_vault.py` resta un tool LOCALE (output da copiare a mano in
+`src/neuron/data/` solo se si vuole spedirlo). Il seed pubblico definitivo è una scelta
+separata ancora da fare.

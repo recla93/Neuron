@@ -564,11 +564,28 @@ python -m compileall src/
 
 ## CI/CD
 
-GitHub Actions workflow in `.github/workflows/ci.yml` (on push / PR, `windows-latest`,
-Python 3.12): caches the fastembed ONNX model, `pip install -e .[dev]`, byte-compiles
-`src/`, runs `pytest tests/ -v`, and finally dry-runs the deploy script
-(`scripts/deploy.ps1 -DryRun`) as a sync-logic sanity check. Linux/macOS can be added per
-contributor request.
+Two workflows:
+
+- **`.github/workflows/ci.yml`** (on push / PR): a `test` job on `windows-latest`
+  (caches the fastembed ONNX model, `pip install -e .[dev]`, byte-compiles `src/`,
+  runs `pytest tests/ -v`) and a `build` job on `ubuntu-latest` that runs
+  `python -m build` and verifies the resulting wheel imports `neuron`.
+- **`.github/workflows/release.yml`** (on tag `v*`): builds the Windows
+  `pyturso` wheels (matrix 3.10–3.13), builds the Neuron wheel + sdist, and
+  publishes a GitHub Release with all assets attached. See
+  [INSTALL.md](INSTALL.md) for how those assets are consumed.
+
+### Releasing
+
+1. Bump `__version__` in `src/neuron/__init__.py` (the single source of truth;
+   `pyproject.toml` reads it dynamically).
+2. Ensure `src/neuron/data/base_knowledge.db` is the real seed (not the
+   placeholder). Build a local seed with `python scripts/import_vault.py`
+   (set `NEURON_VAULT` or pass `--vault`), then copy the resulting DB into
+   `src/neuron/data/base_knowledge.db` when you deliberately want to ship it.
+3. Tag and push: `git tag v3.3.0 && git push --tags`. `release.yml` does the rest.
+4. To bump `pyturso`, change the pin in `pyproject.toml` **and** the version in
+   `release.yml`'s `build-pyturso-win` job together.
 
 ### Deploy / sync to the active install
 

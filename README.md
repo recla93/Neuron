@@ -6,23 +6,33 @@ with vector embeddings and semantic links, retrievable in later sessions.
 
 ## Installation
 
+See **[INSTALL.md](INSTALL.md)** for the full guide, including a manual
+fallback and troubleshooting.
+
 ### Windows
 
 ```powershell
 .\install.ps1
 ```
 
-The installer handles everything: Python → Rust → Windows SDK + MSVC (C++ tools only)
-→ pip (mcp, fastembed, pyturso, 3 retries, hard fail). **fastembed is mandatory** — 384-dim semantic embeddings.
+Neuron installs as a real Python package into a dedicated venv. The installer
+uses a **pre-built `pyturso` wheel** shipped in `.\vendor`, so no C/Rust
+compiler is needed; it only falls back to installing the *minimal* MSVC build
+tools if your Python version is outside the prebuilt range (3.10–3.13).
+**fastembed is mandatory** — 384-dim semantic embeddings.
 
-At the end, it asks whether to install packages for the **standalone chat** (`run_interactive.py`).
-If you use Neuron only as an MCP server (OpenCode/Claude/Cursor), choose **0 (None)**.
+At the end it asks whether to install packages for the **standalone chat**
+(`run_interactive.py`). For MCP-only use (OpenCode/Claude/Cursor), choose
+**0 (None)**.
 
 ### Linux / macOS
 
+`pyturso` has prebuilt wheels on PyPI for Linux/macOS, so a plain install works:
+
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install mcp pyturso fastembed  # fastembed is mandatory
+pip install neuron-<version>-py3-none-any.whl   # from the GitHub release
+# or, from a source checkout:  pip install ".[dev]"
 python -m neuron
 ```
 
@@ -47,6 +57,26 @@ export TURSO_AUTH_TOKEN="..."
 When both are set, `neuron.db.connect()` talks to the remote Turso database
 instead of the local file — no code changes needed. Leave them unset to
 keep everything local (the current default).
+
+## Seed knowledge
+
+Neuron can start with a **seed graph** of concepts so the AI isn't blank on
+turn one. The seed ships inside the wheel at `neuron/data/base_knowledge.db`.
+Neuron runs fine without a real seed — it just starts empty and learns from
+your conversations.
+
+To build a seed from an Obsidian vault, use the import tool. It reads the vault
+root from the `NEURON_VAULT` env var (or `--vault`) and writes a **local** DB:
+
+```bash
+export NEURON_VAULT=/path/to/your/vault      # Windows: set NEURON_VAULT=C:\path\to\vault
+python scripts/import_vault.py               # -> ./knowledge/base_knowledge.db
+```
+
+If `fastembed` is installed, 384-dim vectors are generated inline so semantic
+search works immediately. The output stays local; copy it to
+`src/neuron/data/base_knowledge.db` only when you deliberately want to ship it
+as the packaged seed. See [INSTALL.md](INSTALL.md) for details.
 
 ## MCP Configuration
 

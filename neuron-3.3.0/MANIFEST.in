@@ -1,0 +1,16 @@
+# Ensure the seed knowledge DB is included in the source distribution (sdist).
+# The wheel picks it up via [tool.setuptools.package-data] in pyproject.toml;
+# the sdist needs it declared here as well.
+recursive-include src/neuron/data *.db
+
+# Useful top-level docs/config for the sdist.
+include README.md
+include DEVELOPER.md
+include INSTALL.md
+include LICENSE
+include CLAUDE.md
+
+# Keep junk out of the sdist.
+global-exclude *.py[cod]
+global-exclude __pycache__/*
+prune tests

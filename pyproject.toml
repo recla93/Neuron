@@ -1,6 +1,6 @@
 [project]
 name = "neuron"
-version = "3.3.0"
+dynamic = ["version"]
 description = "Neuron - persistent semantic memory for AI (semantic graph + vector search with Turso)"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }
@@ -20,7 +20,12 @@ keywords = ["mcp", "semantic-memory", "vector-embedding", "turso", "graph"]
 
 dependencies = [
     "mcp>=1.28.0",
-    "pyturso>=0.6.1",
+    # Pinned exactly: there is no win_amd64 wheel for pyturso on PyPI, so on
+    # Windows pip would compile it from Rust source. The release workflow
+    # pre-builds a win_amd64 wheel and install.ps1 feeds it via --find-links;
+    # a loose ">=" could resolve to a newer version with no vendored wheel and
+    # silently fall back to compiling. Bump this together with release.yml.
+    "pyturso==0.6.1",
     "fastembed>=0.5.0",
 ]
 
@@ -34,8 +39,22 @@ cloud = [
 ]
 
 [project.scripts]
-neuron-mcp = "neuron.server:main"
+neuron-mcp = "neuron.server:cli"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# --- Packaging: src-layout discovery + version + bundled seed DB ------------
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "neuron.__version__"}
+
+# Ship the seed knowledge DB inside the wheel (loaded via importlib.resources).
+[tool.setuptools.package-data]
+neuron = ["data/*.db"]

@@ -41,11 +41,51 @@ class GraphRegistry:
         self._active: str = "default"
         self._cross_db = os.path.join(graphs_dir, "_cross_links.json")
         self._load_cross_links()
-        # seed path: knowledge/base_knowledge.db (one level above graphs/)
-        parent = os.path.dirname(os.path.normpath(graphs_dir))
-        self._seed_path = os.path.join(parent, "knowledge", "base_knowledge.db")
+        # seed path: prefer the DB bundled inside the installed package
+        # (src/neuron/data/base_knowledge.db, shipped in the wheel). Fall back
+        # to the legacy repo-relative location (knowledge/base_knowledge.db,
+        # one level above graphs/) for source checkouts / dev runs.
+        self._seed_path = self._resolve_seed_path(graphs_dir)
         # track which contexts were loaded from seed (immutable source)
         self._seed_loaded: set[str] = set()
+
+    @staticmethod
+    def _resolve_seed_path(graphs_dir: str) -> str:
+        """Locate the seed knowledge DB, packaged location first.
+
+        1. ``neuron/data/base_knowledge.db`` via ``importlib.resources`` — this
+           is what ships in the installed wheel.
+        2. ``<repo>/knowledge/base_knowledge.db`` (legacy, repo-relative) — used
+           when running from a source checkout where the package data isn't
+           populated. Returned even if absent so existing "missing seed"
+           handling downstream is unchanged.
+        """
+        try:
+            from importlib.resources import files
+            packaged = files("neuron").joinpath("data", "base_knowledge.db")
+            if packaged.is_file():
+                return str(packaged)
+        except (ImportError, ModuleNotFoundError, FileNotFoundError, AttributeError):
+            pass
+        parent = os.path.dirname(os.path.normpath(graphs_dir))
+        return os.path.join(parent, "knowledge", "base_knowledge.db")
+
+    def _seed_is_loadable(self) -> bool:
+        """True only if the seed path looks like a real SQLite/Turso database.
+
+        Guards against a missing file or the shipped placeholder (a tiny text
+        stub used before the real base_knowledge.db is generated). A valid
+        SQLite file is >= 512 bytes and starts with the "SQLite format 3\\000"
+        magic header.
+        """
+        p = self._seed_path
+        try:
+            if not os.path.isfile(p) or os.path.getsize(p) < 512:
+                return False
+            with open(p, "rb") as f:
+                return f.read(16) == b"SQLite format 3\x00"
+        except OSError:
+            return False
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -71,13 +111,20 @@ class GraphRegistry:
             db = self._db_path(ctx)
             if os.path.exists(db) and os.path.getsize(db) > 0:
                 g.load_sqlite(db)
-            if len(g.nodes) == 0 and os.path.exists(self._seed_path):
-                if ctx == "default":
-                    g.load_sqlite(self._seed_path)
-                    self._seed_loaded.add("default")
-                else:
-                    g.load_sqlite(self._seed_path, domain_filter=ctx)
-                    self._seed_loaded.add(ctx)
+            if len(g.nodes) == 0 and self._seed_is_loadable():
+                # A missing, empty, placeholder, or corrupt seed must not crash
+                # the server — degrade to an empty graph. The seed is only a
+                # warm-start convenience; a fresh checkout ships a placeholder
+                # until base_knowledge.db is regenerated (scripts/import_vault.py).
+                try:
+                    if ctx == "default":
+                        g.load_sqlite(self._seed_path)
+                        self._seed_loaded.add("default")
+                    else:
+                        g.load_sqlite(self._seed_path, domain_filter=ctx)
+                        self._seed_loaded.add(ctx)
+                except Exception:
+                    pass
             self._graphs[ctx] = g
         return self._graphs[ctx]
 
