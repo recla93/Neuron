@@ -21,6 +21,9 @@ param(
     [switch]$NoInstall
 )
 
+# Self-reinvoke with ExecutionPolicy Bypass
+if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) { $env:__NEURON_BYPASS='1'; powershell -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters; exit $LASTEXITCODE }
+
 $ErrorActionPreference = "Stop"
 
 # Repo root = parent of this script's folder

@@ -2,7 +2,12 @@
 .SYNOPSIS
   Neuron v3.1 - Semantic graph summary (Turso vector search + semantic/feature hashing embedding).
   Reads graph.db directly (no LLM, zero context tokens).
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\neuron-summary.ps1
 #>
+
+# Self-reinvoke with ExecutionPolicy Bypass
+if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) { $env:__NEURON_BYPASS='1'; powershell -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters; exit $LASTEXITCODE }
 
 $NSDir = if (Test-Path "$env:LOCALAPPDATA\Programs\neuron\graph.db") {
     "$env:LOCALAPPDATA\Programs\neuron"

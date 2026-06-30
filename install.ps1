@@ -6,7 +6,14 @@
     Each download tries 3 different URLs before giving up.
     If MSVC fails after 3 attempts, activates GNU toolchain (MinGW).
     No fallback on Python dependencies: if mcp/fastembed/pyturso fails, it exits.
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File install.ps1
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File install.ps1 -skipLlmProviders
 #>
+
+# Self-reinvoke with ExecutionPolicy Bypass
+if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) { $env:__NEURON_BYPASS='1'; powershell -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters; exit $LASTEXITCODE }
 
 param([switch]$skipLlmProviders)
 
@@ -302,7 +309,7 @@ Write-Host "  Path: $DestDir" -ForegroundColor Green
 Write-Host "=============================================================" -ForegroundColor Green
 Write-Host "`nCommands:"
 Write-Host "  Server MCP:  scripts\run_mcp.bat"
-Write-Host "  Check:       scripts\check.ps1"
-Write-Host "  Repair:      scripts\check.ps1 -Repair"
+Write-Host "  Check:       powershell -ExecutionPolicy Bypass -File scripts\check.ps1"
+Write-Host "  Repair:      powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Repair"
 Write-Host "Restart any registered MCP client (Claude Desktop, OpenCode, Cursor) to activate Neuron."
 Write-Host "Other clients (incl. Perplexity macOS, ChatGPT via bridge): see DEVELOPER.md > MCP Client Configuration."

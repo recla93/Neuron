@@ -4,7 +4,14 @@
 .DESCRIPTION
     Checks every required component. With -Repair, attempts to fix what's missing.
     Exit code: 0 = all good, 1 = issues (repairable with -Repair).
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\check.ps1
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Repair
 #>
+
+# Self-reinvoke with ExecutionPolicy Bypass
+if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) { $env:__NEURON_BYPASS='1'; powershell -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters; exit $LASTEXITCODE }
 
 param([switch]$Repair)
 
@@ -81,5 +88,5 @@ Check -Label "opencode.json" -Condition { Test-Path $oc }
 Write-Host ""
 if ($issues.Count -eq 0) { Write-Host "All OK. Neuron ready." -ForegroundColor Green; exit 0 }
 Write-Host "Issues ($($issues.Count)): $($issues -join ', ')" -ForegroundColor Yellow
-if (-not $Repair) { Write-Host "Use: check.ps1 -Repair to fix" -ForegroundColor Cyan }
+if (-not $Repair) { Write-Host "Use: powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Repair to fix" -ForegroundColor Cyan }
 exit 1
