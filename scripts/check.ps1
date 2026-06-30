@@ -88,5 +88,5 @@ Check -Label "opencode.json" -Condition { Test-Path $oc }
 Write-Host ""
 if ($issues.Count -eq 0) { Write-Host "All OK. Neuron ready." -ForegroundColor Green; exit 0 }
 Write-Host "Issues ($($issues.Count)): $($issues -join ', ')" -ForegroundColor Yellow
-if (-not $Repair) { Write-Host "Use: powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Repair to fix" -ForegroundColor Cyan }
+if (-not $Repair) { Write-Host "Use: check.bat -Repair to fix" -ForegroundColor Cyan }
 exit 1

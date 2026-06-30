@@ -309,7 +309,7 @@ Write-Host "  Path: $DestDir" -ForegroundColor Green
 Write-Host "=============================================================" -ForegroundColor Green
 Write-Host "`nCommands:"
 Write-Host "  Server MCP:  scripts\run_mcp.bat"
-Write-Host "  Check:       powershell -ExecutionPolicy Bypass -File scripts\check.ps1"
-Write-Host "  Repair:      powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Repair"
+Write-Host "  Check:       scripts\check.bat"
+Write-Host "  Repair:      scripts\check.bat -Repair"
 Write-Host "Restart any registered MCP client (Claude Desktop, OpenCode, Cursor) to activate Neuron."
 Write-Host "Other clients (incl. Perplexity macOS, ChatGPT via bridge): see DEVELOPER.md > MCP Client Configuration."
