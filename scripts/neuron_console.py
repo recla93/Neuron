@@ -11,12 +11,9 @@ from datetime import datetime
 GRAPHS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "graphs"))
 SEED_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "knowledge", "base_knowledge.db"))
 
-try:
-    import turso as sqlite3
-    ENGINE = "Turso"
-except ImportError:
-    import sqlite3
-    ENGINE = "SQLite"
+from neuron import db as _db
+sqlite3 = _db
+ENGINE = _db.ENGINE_NAME
 
 
 def _fmt(n: int) -> str:

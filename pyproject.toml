@@ -1,6 +1,6 @@
 [project]
 name = "neuron"
-version = "3.2.0"
+version = "3.3.0"
 description = "Neuron - persistent semantic memory for AI (semantic graph + vector search with Turso)"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }
@@ -28,6 +28,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+]
+cloud = [
+    "libsql-client>=0.3.1",
 ]
 
 [project.scripts]

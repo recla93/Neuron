@@ -1,16 +1,13 @@
 """One-time migration: populate node_vectors in existing base_knowledge.db.
 Run once, then commit the updated seed. Removes node_vectors-wal if present.
 """
-import os, sys, struct, sqlite3, time
+import os, sys, struct, time
 
 SEED = os.path.join(os.path.dirname(__file__), "..", "knowledge", "base_knowledge.db")
 SEED = os.path.normpath(SEED)
 
-try:
-    import turso as sqlite3
-    TURSO = True
-except ImportError:
-    TURSO = False
+from neuron import db as sqlite3
+TURSO = sqlite3.LOCAL_TURSO_ENGINE
 
 from fastembed import TextEmbedding
 _embedder = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")

@@ -26,3 +26,7 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v
+
+      - name: Deploy script dry-run (sync sanity)
+        shell: powershell
+        run: ./scripts/deploy.ps1 -DryRun -Dest "${{ runner.temp }}\neuron-deploy-check"

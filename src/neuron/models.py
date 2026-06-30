@@ -12,6 +12,8 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from neuron import db as _db
+
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
@@ -256,7 +258,7 @@ class Graph:
         if not self._dirty and not force:
             return
 
-        conn = sqlite3.connect(path)
+        conn = _db.connect(path)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
@@ -339,9 +341,9 @@ class Graph:
             conn.close()
 
     def load_sqlite(self, path: str, domain_filter: str | None = None) -> None:
-        if not os.path.exists(path):
+        if not _db.REMOTE_TURSO and not os.path.exists(path):
             return
-        conn = sqlite3.connect(path)
+        conn = _db.connect(path)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
@@ -378,7 +380,7 @@ class Graph:
             try:
                 for row in conn.execute("SELECT keyword, embedding FROM node_vectors"):
                     vec_map[row[0]] = unpack_vector(row[1])
-            except sqlite3.DatabaseError:
+            except Exception:
                 pass
             for nd in self.nodes:
                 nd.vector = vec_map.get(nd.keyword) or _get_vector(nd.keyword)

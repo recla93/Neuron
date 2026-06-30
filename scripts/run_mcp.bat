@@ -1,5 +1,5 @@
 @echo off
-REM Neuron v3.2 — MCP stdio launcher
+REM Neuron v3.3 — MCP stdio launcher
 REM Seed knowledge loaded directly from knowledge/base_knowledge.db
 
 set DIR=%~dp0..

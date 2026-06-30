@@ -32,6 +32,7 @@ def _make_mod(name):
 
 mcp = _make_mod("mcp")
 srv = _make_mod("mcp.server")
+low = _make_mod("mcp.server.lowlevel")
 mdl = _make_mod("mcp.server.models")
 std = _make_mod("mcp.server.stdio")
 typ = _make_mod("mcp.types")
@@ -47,6 +48,7 @@ class _FakeSrv:
 async def _fake_stdio(*a, **kw): yield None, None
 
 srv.Server                    = _FakeSrv
+low.NotificationOptions       = type("NotificationOptions", (), {})
 mdl.InitializationOptions     = type("IO", (), {})
 std.stdio_server              = _fake_stdio
 typ.Tool                      = type("Tool", (), {"__init__": lambda s, **kw: None})
@@ -63,11 +65,13 @@ from neuron.models import (
     WEIGHT_ORDER, TANGENTIAL_EXPIRY_TURNS, MAX_NODES,
     pack_vector, unpack_vector, VECTOR_DIM,
 )
+import neuron.server as _srv
 from neuron.server import (
     SemanticExtractor,
     CONTEXT_SWITCH_THRESHOLD, _domain_signal,
     flash_enabled,
     validate_turn_input,
+    _build_context_window, ExtractionResult,
 )
 
 
@@ -387,3 +391,152 @@ class TestValidation:
 
 def test_flash_enabled_by_default():
     assert flash_enabled is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Semantic flashes — _build_context_window (dormant pulse / cross-domain spark /
+# creative leap), the most original feature of the project. Previously only the
+# `flash_enabled` default flag was covered; these tests exercise the function
+# end-to-end and assert each of the 3 sub-mechanisms plus the gating conditions.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _extraction(keywords, topic="t", domain="backend"):
+    return ExtractionResult(topic=topic, keywords=keywords, entities=[],
+                            domain=domain, intent="question", sentiment="neutral",
+                            tags=[domain])
+
+
+class TestSemanticFlashes:
+    """Each test runs in isolation: the global registry (_g._graphs/_active),
+    `_search_embeddings` and `flash_enabled` are snapshotted and restored, so the
+    flash logic is deterministic and independent of embedding internals."""
+
+    @contextlib.contextmanager
+    def _isolated(self, search=None, flash=None):
+        saved_graphs = dict(_srv._g._graphs)
+        saved_active = _srv._g._active
+        saved_se = _srv._search_embeddings
+        saved_flag = _srv.flash_enabled
+        _srv._g._graphs.clear()
+        _srv._g._active = "default"
+        if search is not None:
+            _srv._search_embeddings = search
+        if flash is not None:
+            _srv.flash_enabled = flash
+        try:
+            yield
+        finally:
+            _srv._search_embeddings = saved_se
+            _srv.flash_enabled = saved_flag
+            _srv._g._graphs.clear()
+            _srv._g._graphs.update(saved_graphs)
+            _srv._g._active = saved_active
+
+    # -- gating --------------------------------------------------------------
+
+    def test_no_flashes_before_turn_4(self):
+        with self._isolated(search=lambda *a, **k: [("docker", 0.9)]):
+            g = Graph()
+            g.add_node(Node(keyword="docker", turn=0, topic="t", domain="architecture",
+                            sentiment="neutral", salience=5))
+            out = _build_context_window(_extraction(["kubernetes"]), turn=3, graph=g)
+            assert "Flash semantici" not in out
+
+    def test_no_flashes_when_disabled(self):
+        with self._isolated(search=lambda *a, **k: [("docker", 0.9)], flash=False):
+            g = Graph()
+            g.add_node(Node(keyword="docker", turn=0, topic="t", domain="architecture",
+                            sentiment="neutral", salience=5))
+            out = _build_context_window(_extraction(["kubernetes"]), turn=10, graph=g)
+            assert "Flash semantici" not in out
+
+    # -- 1. dormant pulse ----------------------------------------------------
+
+    def test_dormant_pulse_emitted(self):
+        # high-salience node, silent for many turns, surfaced by the embedding search
+        with self._isolated(search=lambda kws, top_n=8, graph=None: [("docker", 0.9)]):
+            g = Graph()
+            g.add_node(Node(keyword="docker", turn=0, topic="infra", domain="architecture",
+                            sentiment="neutral", salience=5))
+            out = _build_context_window(_extraction(["kubernetes"]), turn=10, graph=g)
+            assert "Dormant pulse" in out
+            assert "docker" in out
+
+    def test_dormant_pulse_skips_recent_node(self):
+        # node referenced recently is not dormant -> no pulse even if semantically close
+        with self._isolated(search=lambda kws, top_n=8, graph=None: [("docker", 0.9)]):
+            g = Graph()
+            g.add_node(Node(keyword="docker", turn=9, topic="infra", domain="architecture",
+                            sentiment="neutral", salience=5))
+            out = _build_context_window(_extraction(["kubernetes"]), turn=10, graph=g)
+            assert "Dormant pulse" not in out
+
+    # -- 2. cross-domain spark ----------------------------------------------
+
+    def test_cross_domain_spark_emitted(self):
+        active_g = Graph()
+        other_g = Graph()
+        other_g.add_node(Node(keyword="spring", turn=1, topic="t", domain="backend",
+                              sentiment="neutral", salience=4))
+
+        def fake_search(kws, top_n=8, graph=None):
+            return [("spring", 0.9)] if graph is other_g else []
+
+        with self._isolated(search=fake_search):
+            _srv._g._graphs["default"] = active_g
+            _srv._g._graphs["java"] = other_g
+            _srv._g._active = "default"
+            out = _build_context_window(_extraction(["kotlin"], domain="frontend"),
+                                        turn=10, graph=active_g)
+            assert "Cross-domain spark" in out
+            assert "spring" in out
+
+    # -- 3. creative leap ----------------------------------------------------
+
+    def test_creative_leap_emitted(self):
+        # 2-hop path kotlin -> coroutines -> unity, where unity is a different domain
+        with self._isolated(search=lambda *a, **k: []):
+            g = Graph()
+            for kw, dom in [("kotlin", "backend"), ("coroutines", "backend"), ("unity", "gaming")]:
+                g.add_node(Node(keyword=kw, turn=9, topic="t", domain=dom,
+                                sentiment="neutral", salience=5))
+            g.add_link(Link(source="kotlin", target="coroutines", link_type="deepening",
+                            weight="strong", rationale="r", created_turn=1, last_active_turn=9))
+            g.add_link(Link(source="coroutines", target="unity", link_type="analogy",
+                            weight="medium", rationale="r", created_turn=1, last_active_turn=9))
+            out = _build_context_window(_extraction(["kotlin"], domain="backend"),
+                                        turn=10, graph=g)
+            assert "Creative leap" in out
+            assert "unity" in out
+
+    def test_creative_leap_skipped_same_domain(self):
+        # the 2-hop target shares the active domain -> not an unexpected association
+        with self._isolated(search=lambda *a, **k: []):
+            g = Graph()
+            for kw in ["kotlin", "coroutines", "channels"]:
+                g.add_node(Node(keyword=kw, turn=9, topic="t", domain="backend",
+                                sentiment="neutral", salience=5))
+            g.add_link(Link(source="kotlin", target="coroutines", link_type="deepening",
+                            weight="strong", rationale="r", created_turn=1, last_active_turn=9))
+            g.add_link(Link(source="coroutines", target="channels", link_type="analogy",
+                            weight="medium", rationale="r", created_turn=1, last_active_turn=9))
+            out = _build_context_window(_extraction(["kotlin"], domain="backend"),
+                                        turn=10, graph=g)
+            assert "Creative leap" not in out
+
+    # -- end-to-end structure ------------------------------------------------
+
+    def test_window_contains_links_and_nodes(self):
+        with self._isolated(search=lambda *a, **k: []):
+            g = Graph()
+            g.add_node(Node(keyword="docker", turn=10, topic="t", domain="architecture",
+                            sentiment="neutral", salience=7))
+            g.add_node(Node(keyword="kubernetes", turn=10, topic="t", domain="architecture",
+                            sentiment="neutral", salience=6))
+            g.add_link(Link(source="docker", target="kubernetes", link_type="deepening",
+                            weight="strong", rationale="r", created_turn=1, last_active_turn=10))
+            out = _build_context_window(_extraction(["docker"], domain="architecture"),
+                                        turn=10, graph=g)
+            assert "Active links:" in out
+            assert "Salient nodes" in out
+            assert "docker" in out

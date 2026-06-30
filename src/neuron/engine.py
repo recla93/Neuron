@@ -1,8 +1,33 @@
-﻿"""Neuron v3.1 — Cumulative cognitive stimulation skill.
+﻿"""Neuron — Standalone interactive-CLI engine (NOT the production MCP path).
 
-Every message leaves semantic traces that connect with each other over time,
-like the associative memory of the human brain. Connections enrich
-each response as invisible cognitive substrate.
+ROLE / SCOPE
+------------
+This module is the engine behind ``scripts/run_interactive.py`` *only* — a
+terminal "playground" that drives a real LLM provider (Ollama, OpenAI,
+Anthropic, Gemini, Azure, OpenAI-compatible) for local experimentation and
+manual testing of the semantic-memory behaviour.
+
+It is **not** the production code path. The real MCP server that ships to
+clients is ``neuron.server`` (``src/neuron/server.py``). The two were written
+separately and intentionally **do not** share an implementation: concept
+extraction, semantic linking and the "flash" mechanism are reimplemented here
+in a self-contained way (this file even defines its own ``Node`` dataclass
+instead of reusing ``neuron.models``).
+
+Consequences — read before editing:
+  * Do **not** expect functional parity with ``server.py``. A fix or feature
+    added to one side is *not* automatically reflected in the other.
+  * Behavioural guarantees for "Neuron as an MCP server" refer to
+    ``server.py``, not to this engine.
+  * This file is versioned independently (historically "v3.1") and may lag the
+    server (currently v3.3). The version skew is expected, not a bug.
+
+If you need to change the production behaviour, edit ``server.py``. Touch this
+file only for the interactive CLI.
+
+Original design note: every message leaves semantic traces that connect with
+each other over time, like the associative memory of the human brain;
+connections enrich each response as invisible cognitive substrate.
 """
 
 from __future__ import annotations
@@ -10,11 +35,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Protocol
+
+from neuron import db as _db
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +635,7 @@ class Neuron:
         path = db_path or self._db_path
         if not path:
             return
-        conn = sqlite3.connect(path)
+        conn = _db.connect(path)
         try:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS meta (
@@ -687,7 +713,7 @@ class Neuron:
         path = db_path or self._db_path
         if not path or not os.path.exists(path):
             return
-        conn = sqlite3.connect(path)
+        conn = _db.connect(path)
         try:
             # Meta
             cursor = conn.execute("SELECT key, value FROM meta")
@@ -1082,3 +1108,9 @@ def create_azure(
         ),
         **kwargs,
     )
+
+
+# NOTE: factory helpers above (create_local/openai/anthropic/gemini/azure/compatible)
+# are the public surface of this CLI-only engine, consumed by
+# scripts/run_interactive.py. They have no equivalent in neuron.server (the MCP
+# production path) and are intentionally not kept in parity with it.

@@ -1,6 +1,7 @@
-"""Neuron v3.2 — MCP Server with pyturso (Turso Database engine) + native vector search.
+"""Neuron v3.3 — MCP Server with Turso (local pyturso engine or cloud) + native vector search.
 
-Database: Turso Database (Rust) via pyturso — vector_distance_cos() for vector similarity.
+Database: see neuron.db — local pyturso engine by default, or real Turso cloud
+(libsql-client) when TURSO_DATABASE_URL/TURSO_AUTH_TOKEN are set.
 Embedding: 384-dim semantic (fastembed, mandatory).
 Search: Turso SQL (vector_distance_cos) or Python fallback.
 """
@@ -14,14 +15,12 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-try:
-    import turso as sqlite3
-    TURSO_ENGINE = True
-except ImportError:
-    import sqlite3  # type: ignore[no-redef]
-    TURSO_ENGINE = False
+import sqlite3
 
 from fastembed import TextEmbedding
+
+from neuron import db as _db
+TURSO_ENGINE = _db.LOCAL_TURSO_ENGINE
 
 from mcp.server import Server
 from mcp.server.lowlevel import NotificationOptions
@@ -490,10 +489,15 @@ def _llm_extract(text: str) -> dict | None:
         return None
 
 
-def _auto_extract(text: str, use_llm: bool = False) -> ExtractionResult:
-    """Extract: heuristic (0 token) by default, LLM only if requested."""
+async def _auto_extract(text: str, use_llm: bool = False) -> ExtractionResult:
+    """Extract: heuristic (0 token) by default, LLM only if requested.
+
+    `_llm_extract` does a *synchronous* HTTP request, so it is offloaded to a
+    worker thread via `asyncio.to_thread` to avoid blocking the MCP server's
+    single event loop while the model responds.
+    """
     if use_llm:
-        llm_result = _llm_extract(text)  # sync HTTP — caller should use asyncio.to_thread if in async ctx
+        llm_result = await asyncio.to_thread(_llm_extract, text)
         if llm_result:
             return ExtractionResult(
                 topic=llm_result["topic"],
@@ -730,7 +734,7 @@ def _search_embeddings(
         db_paths = [p for p in [seed_path, _active_db_path()] if p and os.path.exists(p)]
         for db in db_paths:
             try:
-                conn = sqlite3.connect(db)
+                conn = _db.connect_local(db)
                 rows = conn.execute(
                     "SELECT keyword, sim FROM ("
                     "  SELECT keyword, 1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS sim "
@@ -776,7 +780,7 @@ def _refine_domain(keywords: list[str]) -> tuple[str | None, list[str]]:
         seed_path = getattr(_g, '_seed_path', None)
         if seed_path and os.path.exists(seed_path):
             try:
-                conn = sqlite3.connect(seed_path)
+                conn = _db.connect_local(seed_path)
                 rows = conn.execute("""
                     SELECT n.domain, 1.0 - vector_distance_cos(f32blob(nv.embedding), f32blob(?)) AS sim
                     FROM node_vectors nv
@@ -1385,7 +1389,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         types = len({lk.link_type for lk in g.links})
         pr = (g.pruned_count / (total + g.pruned_count) * 100) if (total + g.pruned_count) else 0
         npt = len(g.nodes) / max(g.turn_count, 1)
-        engine = "Turso" if TURSO_ENGINE else "SQLite"
+        engine = _db.ENGINE_NAME
         return [TextContent(type="text", text=(
             f"Context: {ctx_label}\n"
             f"Turn {g.turn_count} | Nodes: {len(g.nodes)} | Links: {total} (active {active})\n"
@@ -1535,7 +1539,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if not results:
             return [TextContent(type="text", text="No candidates found.")]
 
-        engine_tag = "Turso" if TURSO_ENGINE else "Python"
+        engine_tag = _db.ENGINE_NAME if TURSO_ENGINE else "Python"
         lines = [f"Candidates for {keywords} ({engine_tag} vector search):"]
         for kw, score in results:
             nd = g.get_node(kw)
@@ -1558,7 +1562,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         results = _search_embeddings(keywords, top_n, graph=g)
         if not results:
             return [TextContent(type="text", text="No results.")]
-        engine_tag = "Turso" if TURSO_ENGINE else "Python"
+        engine_tag = _db.ENGINE_NAME if TURSO_ENGINE else "Python"
         lines = [f"Vector search for {keywords} ({VECTOR_DIM}dim, {engine_tag}):"]
         for kw, score in results:
             nd = g.get_node(kw)
@@ -1580,7 +1584,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             f"Turns: {g.turn_count}  |  Nodes: {len(g.nodes)}  |  Links: {total} (active {active})",
             f"Strong: {strong}  |  Medium: {medium}  |  Tangential: {total - strong - medium}",
             f"Link types: {types}  |  Pruned: {g.pruned_count}",
-            f"Engine: {'Turso' if TURSO_ENGINE else 'SQLite'}  |  Embedding: {VECTOR_DIM}dim",
+            f"Engine: {_db.ENGINE_NAME}  |  Embedding: {VECTOR_DIM}dim",
         ]
         top_kw = sorted(g.nodes, key=lambda nd: -nd.salience)[:10]
         if top_kw:
@@ -1639,7 +1643,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "extract":
         text = arguments["text"]
         use_llm = arguments.get("use_llm", False)
-        result = _auto_extract(text, use_llm=use_llm)
+        result = await _auto_extract(text, use_llm=use_llm)
         return [TextContent(type="text", text=json.dumps({
             "topic": result.topic,
             "keywords": result.keywords,
@@ -1652,7 +1656,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "auto":
         text = arguments["text"][:3000]  # truncate: embedding is effective up to ~3k chars
-        extraction = _auto_extract(text)
+        extraction = await _auto_extract(text)
         shift_detected, overlap = _detect_topic_shift(extraction.keywords, graph=g)
         # normalize domain via aliases, refine if general
         domain = _normalize_domain(extraction.domain)

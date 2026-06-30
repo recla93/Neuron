@@ -7,8 +7,11 @@
 - [Dependencies](#dependencies)
 - [Vector Embeddings](#vector-embeddings)
 - [Fallback Chain](#fallback-chain)
+- [Enabling Turso Cloud](#enabling-turso-cloud)
 - [Key Behaviors](#key-behaviors)
 - [MCP Client Configuration](#mcp-client-configuration)
+  - [Transport: local stdio vs remote](#transport-local-stdio-vs-remote)
+  - [Config by client reference](#config-by-client-reference)
 - [Interactive CLI Mode](#interactive-cli-mode)
 - [Development Setup](#development-setup)
 - [CI/CD](#cicd)
@@ -52,13 +55,16 @@ Neuron/
 │   └── neuron/
 │       ├── __init__.py        # Package init, version
 │       ├── __main__.py        # `python -m neuron` entry point
+│       ├── db.py              # DB tier selector: Turso cloud > local pyturso > sqlite3
 │       ├── models.py          # Node, Link, Graph dataclasses + SQLite persistence
 │       ├── registry.py        # GraphRegistry — multi-context, resolve_chain inheritance
-│       └── server.py          # MCP server (19 tools, Turso/SQLite)
+│       ├── server.py          # MCP server — PRODUCTION path (19 tools, Turso/SQLite)
+│       └── engine.py          # Standalone CLI engine for run_interactive.py — NOT production
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py
-│   └── test_server.py         # Smoke tests
+│   ├── test_core.py           # Core/unit tests
+│   └── test_server.py         # MCP server smoke tests
 ├── scripts/
 │   ├── run_interactive.py     # Interactive CLI chat (6 LLM providers)
 │   ├── run_mcp.bat            # Windows MCP stdio launcher
@@ -93,11 +99,18 @@ Neuron/
 |---|---|---|
 | `mcp>=1.28.0` | yes | MCP SDK |
 | `fastembed>=0.5.0` | yes | 384-dim semantic embedding |
-| `pyturso>=0.6.1` | yes | Turso DB engine (vector_distance_cos) |
+| `pyturso>=0.6.1` | yes | Local Turso DB engine (vector_distance_cos) |
+| `libsql-client>=0.3.1` | no (`neuron[cloud]`) | Real Turso cloud DB, used when `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` are set |
 | `ollama` | no | LLM provider for chat mode |
 | `openai` | no | LLM provider for chat mode |
 | `anthropic` | no | LLM provider for chat mode |
 | `google-generativeai` | no | LLM provider for chat mode |
+
+All database access in the codebase goes through `neuron.db` (`connect()` /
+`connect_local()`), which picks the engine tier: remote Turso cloud > local
+pyturso engine > stdlib sqlite3. There is no other sqlite3-direct code path
+left — `models.py` (graph persistence), `server.py` (vector search) and the
+dev scripts under `scripts/` all use it.
 
 The MCP server runs with only the first 3. The LLM providers are only for `run_interactive.py`.
 
@@ -126,11 +139,58 @@ vec = list(embedder.embed("database"))[0]  # 384-dim float32
 
 ### Runtime (`mcp_server.py`)
 
-| Component | Primary | Fallback |
-|---|---|---|
-| Embedding | fastembed 384-dim | — |
-| Database | pyturso (Turso) | sqlite3 (no vector search) |
-| Vector search | `vector_distance_cos()` SQL | Python cosine in memory |
+| Component | Primary | Secondary | Final fallback |
+|---|---|---|---|
+| Embedding | fastembed 384-dim | — | — |
+| Database | Turso cloud (`libsql-client`, if `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` set) | pyturso (local Turso engine) | sqlite3 (no vector search) |
+| Vector search | `vector_distance_cos()` SQL (cloud or local engine) | — | Python cosine in memory |
+
+## Enabling Turso Cloud
+
+The cloud tier (`RemoteTursoConnection` in `src/neuron/db.py`) is implemented but ships
+**disabled**: with no credentials, Neuron uses the local pyturso engine. The environment is
+prepared so cloud can be switched on without code changes — connectivity against a real
+Turso DB has not yet been validated end-to-end (tracked as a separate task).
+
+To enable it:
+
+1. **Install the cloud extra first** (the server imports `libsql_client` at startup once the
+   credentials are set, so installing it first avoids an import crash):
+
+   ```bash
+   pip install -e .[cloud]      # or:  pip install "neuron[cloud]"
+   ```
+
+2. **Set both credentials** (see `.env.example` for a template). Both must be present and
+   non-empty, or Neuron silently stays on the local tier:
+
+   ```bash
+   export TURSO_DATABASE_URL="libsql://your-db-your-org.turso.io"
+   export TURSO_AUTH_TOKEN="..."
+   ```
+
+3. **Run the offline readiness check** — reports the resolved tier and flags a
+   half-configured state (credentials set but extra missing, or only one var set). It never
+   opens a connection and never prints the token:
+
+   ```bash
+   python scripts/check_cloud_config.py
+   ```
+
+4. **Validate connectivity (final step, currently out of scope).** With both the extra and
+   the credentials in place, run a one-off query in a dev shell to confirm the real Turso DB
+   answers and `vector_distance_cos()` is available server-side, e.g.:
+
+   ```python
+   from neuron import db
+   conn = db.connect("graph_default.db")   # → RemoteTursoConnection when cloud is configured
+   print(conn.execute("select 1").fetchone())
+   conn.close()
+   ```
+
+Tier selection is automatic and ordered: **Turso cloud** (both env vars) → **local pyturso**
+(installed) → **stdlib sqlite3** (last resort, no native vector search). `connect_local()`
+always stays local for file-scoped seed/vector operations even when cloud is active.
 
 ## Key Behaviors
 
@@ -155,6 +215,27 @@ links:kotlin_flow-[s]->coroutines|spring_boot-[m]->di | nodes:kotlin_flow(22),sp
 
 Designed for providers without automatic injection hooks (OpenCode, Cursor, etc.) — one call at turn start gives everything needed to answer with memory.
 
+### Concept extraction (heuristic by default, LLM opt-in)
+
+Extraction runs on the per-turn hot path (`auto` tool → `_auto_extract`). Two modes exist:
+
+- **Heuristic (default):** `SemanticExtractor` — lexical analysis, token scoring, pattern
+  matching. Zero tokens, deterministic, fast, fully unit-tested. Used by `auto` and by
+  `extract` unless overridden.
+- **LLM (opt-in):** `_llm_extract` calls an Ollama / OpenAI-compatible endpoint
+  (`NS_LLM_ENDPOINT`, `NS_LLM_MODEL`). Exposed only via the `extract` tool with
+  `use_llm=true`; the `auto` pipeline never enables it.
+
+**Design decision — heuristic stays the default; LLM is not enabled on the live path.**
+The `auto` pipeline runs every turn, so an LLM call there would add a synchronous HTTP
+round-trip per turn, introduce a hard dependency on a running model endpoint, and make the
+path non-deterministic. The heuristic already covers topic/keywords/domain/intent/sentiment.
+Use `extract(use_llm=true)` when higher-quality concepts are worth the latency/cost for a
+specific call. ⚠️ Known issue: `_llm_extract` is synchronous and is currently called from
+the async `call_tool` handler without `asyncio.to_thread`, so a `use_llm=true` call blocks
+the event loop until it returns. Wrapping it in `asyncio.to_thread` is tracked separately
+before LLM extraction is recommended for any high-throughput use.
+
 ### Keyword normalization and dedup
 
 All keywords are normalized at ingestion (`strip().lower()`). `add_node` deduplicates on the normalized key and max-merges salience rather than creating duplicates. `add_link` normalizes source/target and deduplicates in both directions.
@@ -170,6 +251,31 @@ Nodes accumulate salience from `store_turn` (intent weight) and `confirm` (expli
 ---
 
 ## MCP Client Configuration
+
+### Transport: local stdio vs remote
+
+Neuron is a **local stdio MCP server** — it has no HTTP layer and is launched as a
+subprocess by the client (`python -m neuron`, or `run_mcp.bat` on Windows). How you mount it
+depends on what transport the client speaks:
+
+- **Local-stdio clients** (Claude Desktop, Claude Code, Cursor, OpenCode, Cline/Roocode,
+  VS Code Copilot, Windsurf, Zed, Continue.dev, Cody, Amazon Q, and the **Perplexity macOS**
+  app) accept a launch command directly. Register the command below and restart the client.
+- **Remote-only clients** (ChatGPT / OpenAI Apps & connectors) connect to an **HTTPS MCP
+  endpoint**, not a local process. To use Neuron there, wrap the stdio server with a
+  stdio→HTTP bridge (e.g. [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)) and
+  register the resulting URL as a custom connector — see
+  [ChatGPT / OpenAI](#chatgpt--openai-via-bridge) below.
+
+The launch command itself is the same everywhere:
+
+| Platform | Command | Args |
+|---|---|---|
+| **Windows** (active install) | `cmd` | `/c %LOCALAPPDATA%\Programs\neuron\scripts\run_mcp.bat` |
+| **Windows** (dev repo) / **Linux** / **macOS** | `python3` | `-m neuron` (inside the project venv) |
+
+On Linux/macOS, run from the project venv so `mcp`, `fastembed` and `pyturso` are importable
+(`source .venv/bin/activate` or point the client at `.venv/bin/python3`).
 
 ### OpenCode
 
@@ -318,6 +424,38 @@ In `.vscode/settings.json`:
 }
 ```
 
+### Perplexity (macOS app — local MCP)
+
+The Perplexity **Mac** app can run local MCP servers through its `PerplexityXPC` helper
+(Perplexity → Settings → Connectors → Add local MCP). There is no JSON config file: you fill
+in the command and args in the UI.
+
+| Field | Value |
+|---|---|
+| Command | `/path/to/Neuron/.venv/bin/python3` (or `python3` if the venv is active) |
+| Arguments | `-m neuron` |
+
+Install the `PerplexityXPC` helper when prompted, then add Neuron as a local connector and
+enable it. Local MCP is currently macOS-only; on Windows use one of the stdio clients above,
+or the bridge route below. Remote custom connectors are a paid-tier Perplexity feature.
+
+### ChatGPT / OpenAI (via bridge)
+
+ChatGPT (Developer Mode connectors / Apps SDK) only talks to **remote HTTPS** MCP endpoints —
+it cannot launch a local stdio process. Expose Neuron over HTTP with a bridge, then register
+the URL:
+
+```bash
+# 1. Run Neuron behind an HTTP bridge (example with mcp-remote / a stdio→HTTP proxy)
+npx mcp-remote --port 8000 -- python3 -m neuron
+# 2. Make the port reachable over HTTPS (reverse proxy, tunnel, or a hosted box)
+# 3. In ChatGPT → Settings → Connectors (Developer Mode) → add the https://… MCP URL
+```
+
+Notes: MCP connectors in ChatGPT require Developer Mode (beta) and are limited to Plus / Pro /
+Business / Enterprise / Education plans on the web. Because this exposes a network endpoint,
+restrict access (auth/tunnel) — Neuron itself ships with no auth layer.
+
 ### Config by client reference
 
 | Client | Config file | Server key | Restart |
@@ -333,8 +471,11 @@ In `.vscode/settings.json`:
 | **Continue.dev** | `~/.continue/config.json` | `experimental.mcpServers` | IDE restart |
 | **Cody** | `~/.cody/mcp.json` | `mcpServers` | IDE restart |
 | **Amazon Q** | `~/.aws/amazon-q/mcp.json` | `mcpServers` | IDE restart |
+| **Perplexity (macOS)** | in-app UI (no file) | Settings → Connectors → local MCP | re-enable connector |
+| **ChatGPT / OpenAI** | in-app UI (no file) | Developer Mode → Connectors (HTTPS URL) | reconnect connector |
 
-On Linux/macOS, replace `cmd /c %LOCALAPPDATA%...` with `python3 -m neuron`.
+On Linux/macOS, replace `cmd /c %LOCALAPPDATA%...` with `python3 -m neuron`. ChatGPT requires a
+stdio→HTTP bridge; Perplexity local MCP is macOS-only (see the subsections above).
 
 ---
 
@@ -342,6 +483,12 @@ On Linux/macOS, replace `cmd /c %LOCALAPPDATA%...` with `python3 -m neuron`.
 
 Neuron includes a standalone chat mode (`run_interactive.py`) that connects directly to an LLM.
 This is separate from the MCP server — it exists for testing and terminal use.
+
+> **Not the production path.** `run_interactive.py` is powered by `src/neuron/engine.py`,
+> a self-contained engine that reimplements extraction/linking/flash independently of
+> `server.py`. The two do **not** share code and are **not** kept in functional parity:
+> the engine is versioned on its own (historically "v3.1") and may lag the server (v3.3).
+> Edit `engine.py` only for the interactive CLI; for production MCP behaviour edit `server.py`.
 
 ### Supported Providers
 
@@ -417,23 +564,34 @@ python -m compileall src/
 
 ## CI/CD
 
-GitHub Actions workflow in `.github/workflows/ci.yml`:
+GitHub Actions workflow in `.github/workflows/ci.yml` (on push / PR, `windows-latest`,
+Python 3.12): caches the fastembed ONNX model, `pip install -e .[dev]`, byte-compiles
+`src/`, runs `pytest tests/ -v`, and finally dry-runs the deploy script
+(`scripts/deploy.ps1 -DryRun`) as a sync-logic sanity check. Linux/macOS can be added per
+contributor request.
 
-```yaml
-on: [push, pull_request]
-jobs:
-  check:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install mcp fastembed pyturso
-      - run: python -m compileall src/
-      - run: python -c "import mcp; import turso; from fastembed import TextEmbedding; print('OK')"
+### Deploy / sync to the active install
+
+The MCP server actually used by clients runs from a **separate install dir**
+(`%LOCALAPPDATA%\Programs\neuron`), populated by `install.ps1`. That installer also sets up
+the toolchain (Rust/MSVC), creates the venv and installs deps — heavy, and not what you want
+for a quick "push my code edits to the install" loop. Use `scripts/deploy.ps1` for that:
+
+```powershell
+# preview exactly what would change (no writes):
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -DryRun
+
+# sync changed/new files, then byte-compile + import-check the install:
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
+
+# also remove files deleted from source, and run the test suite in the install:
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Prune -RunTests
 ```
 
-On PR: verifies syntax + imports on Windows. Linux/macOS can be added per contributor request.
+It copies only the deployable set (code, config, docs, the seed `knowledge\base_knowledge.db`),
+never the install's `.venv`, `graphs\` or `knowledge_grown\`, is idempotent (MD5 diff), and
+checks that the deployed `__version__` matches source. This replaces hand-copying and keeps
+source ↔ install from drifting between releases.
 
 ## License
 

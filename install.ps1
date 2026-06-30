@@ -264,7 +264,13 @@ if (Test-Path $cur) {
     } catch { Write-Host "   [!] Cursor config parse error: $_" -ForegroundColor Red }
 } else { Write-Host "   [ ] Cursor — mcp.json not found (run Cursor once first)" -ForegroundColor DarkYellow }
 
-Write-Host "   See clients/ folder for config examples for VS Code, Zed, Cline, and others."
+Write-Host "   Auto-registered: OpenCode, Claude Desktop, Cursor (restart them to activate)."
+Write-Host "   Manual setup (one-time):"
+Write-Host "     - Claude Code, Cline/Roocode, VS Code, Windsurf, Zed, Continue.dev, Cody, Amazon Q"
+Write-Host "       -> see clients\ folder for ready-made config snippets, or DEVELOPER.md."
+Write-Host "     - Perplexity (macOS only): Settings > Connectors > local MCP (command 'python3 -m neuron')."
+Write-Host "     - ChatGPT / OpenAI: needs a stdio->HTTP bridge (mcp-remote) + a remote connector URL."
+Write-Host "   Full per-client instructions: DEVELOPER.md (MCP Client Configuration)."
 
 # ===============================================================
 # 9. SHORTCUT
@@ -299,3 +305,4 @@ Write-Host "  Server MCP:  scripts\run_mcp.bat"
 Write-Host "  Check:       scripts\check.ps1"
 Write-Host "  Repair:      scripts\check.ps1 -Repair"
 Write-Host "Restart any registered MCP client (Claude Desktop, OpenCode, Cursor) to activate Neuron."
+Write-Host "Other clients (incl. Perplexity macOS, ChatGPT via bridge): see DEVELOPER.md > MCP Client Configuration."

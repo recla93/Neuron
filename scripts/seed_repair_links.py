@@ -12,10 +12,7 @@ import os, sys
 
 SEED = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "knowledge", "base_knowledge.db"))
 
-try:
-    import turso as sqlite3
-except ImportError:
-    import sqlite3
+from neuron import db as sqlite3
 
 try:
     from fastembed import TextEmbedding
@@ -49,8 +46,8 @@ def main():
     after_links = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
     print(f"Deleted {dangling} dangling links. Remaining: {after_links}")
 
-    # VACUUM to reclaim space
-    if "turso" not in str(sqlite3):
+    # VACUUM to reclaim space (no-op / unsupported on the Turso engines)
+    if not sqlite3.LOCAL_TURSO_ENGINE and not sqlite3.REMOTE_TURSO:
         conn.execute("VACUUM")
 
     after = os.path.getsize(SEED)

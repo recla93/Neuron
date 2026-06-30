@@ -38,6 +38,10 @@ htmlcov/
 config.json
 ~/.neuron/
 
+# Claude
+.claude/
+
 # Garbage
 .fuse_hidden*
 *.bak
+.mount_probe.txt
