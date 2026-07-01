@@ -17,7 +17,10 @@ if errorlevel 1 goto :err
 
 echo.
 echo [2/4] Building vendored pyturso wheel into .\vendor ...
-python -m pip wheel "pyturso==0.6.1" --no-deps -w vendor
+REM --find-links vendor: prefer an already-vendored prebuilt wheel matching this
+REM Python's ABI (e.g. cp314-win_amd64) over compiling from the PyPI sdist. Without
+REM this flag pip always rebuilds from source and needs Rust + the MSVC linker.
+python -m pip wheel "pyturso==0.6.1" --no-deps --find-links vendor -w vendor
 if errorlevel 1 goto :err
 
 echo.

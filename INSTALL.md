@@ -75,8 +75,12 @@ Neuron-master\
 To build a wheel for **your** Python version (needs Rust + MSVC installed):
 
 ```powershell
-python -m pip wheel "pyturso==0.6.1" --no-deps -w vendor
+python -m pip wheel "pyturso==0.6.1" --no-deps --find-links vendor -w vendor
 ```
+
+(`--find-links vendor` makes pip prefer an already-vendored wheel matching your Python's
+ABI over compiling from source, if one happens to already be there — harmless either way,
+but avoids an unnecessary compile when a wheel already exists.)
 
 This drops `pyturso-0.6.1-cp<XY>-cp<XY>-win_amd64.whl` into `vendor\`, where
 `<XY>` is your Python minor version (e.g. `cp313` for Python 3.13).
