@@ -161,32 +161,57 @@ To enable it:
    pip install -e .[cloud]      # or:  pip install "neuron[cloud]"
    ```
 
-2. **Set both credentials** (see `.env.example` for a template). Both must be present and
-   non-empty, or Neuron silently stays on the local tier:
+2. **Connect, test for real, and save — one command (recommended):**
+
+   ```bash
+   python scripts/connect_turso.py
+   ```
+
+   It prompts for the database URL and auth token (token entry is hidden), then actually
+   connects and runs a **read + write probe** against the real Turso DB. Only if the probe
+   succeeds does it offer to save the two credentials into `.env`. The token is never printed
+   or logged. Flags: `--check-only` (test, never write), `--url/--token/--yes` for
+   non-interactive/installer use. This is the online counterpart to the offline
+   `check_cloud_config.py`.
+
+   > The URL saved may differ in scheme from what you typed: `libsql://` uses a WebSocket
+   > transport that some Turso endpoints reject with `WSServerHandshakeError: 400`; the tool
+   > transparently falls back to `https://` (Hrana-over-HTTP, same SQL) and saves whichever
+   > scheme actually connected, so the server uses the working transport too.
+
+   **The server auto-loads `.env` at startup** (T16): on launch, Neuron searches up from its
+   working directory for a `.env` and populates any unset variables from it (a real
+   environment variable always wins). So once `connect_turso.py` has written `.env`, the
+   cloud is used automatically — no need to also wire the vars into the client `env` block.
+   Override the file location with `NEURON_ENV_FILE=/path/.env`, or disable with
+   `NEURON_NO_DOTENV=1`. Auto-loading is always skipped under pytest so the suite never hits
+   the live cloud. To smoke-test the live path end-to-end: `python scripts/smoke_cloud.py`.
+
+   Prefer to set the env vars by hand instead? Export both (or copy `.env.example` → `.env`);
+   both must be non-empty or Neuron silently stays on the local tier:
 
    ```bash
    export TURSO_DATABASE_URL="libsql://your-db-your-org.turso.io"
    export TURSO_AUTH_TOKEN="..."
    ```
 
-3. **Run the offline readiness check** — reports the resolved tier and flags a
-   half-configured state (credentials set but extra missing, or only one var set). It never
-   opens a connection and never prints the token:
+3. **Offline sanity check (optional)** — reports the resolved tier and flags a
+   half-configured state (credentials set but extra missing, or only one var set). Never
+   connects, never prints the token:
 
    ```bash
    python scripts/check_cloud_config.py
    ```
 
-4. **Validate connectivity (final step, currently out of scope).** With both the extra and
-   the credentials in place, run a one-off query in a dev shell to confirm the real Turso DB
-   answers and `vector_distance_cos()` is available server-side, e.g.:
+### Sharing one cloud DB across a team (≤ 6)
 
-   ```python
-   from neuron import db
-   conn = db.connect("graph_default.db")   # → RemoteTursoConnection when cloud is configured
-   print(conn.execute("select 1").fetchone())
-   conn.close()
-   ```
+All members point at the **same** `TURSO_DATABASE_URL`; each pastes their **own** auth token
+(create per-member tokens with the Turso CLI so they can be revoked individually). Everyone
+then runs `python scripts/connect_turso.py` once. Because the store is keyed by a `context`
+column (see `save_sqlite`/`load_sqlite`), several contexts coexist in the shared tables
+without colliding, and each member's saves upsert only their delta — no save wipes another's
+rows. A solo user and the team run the **same code**; the only difference is the connection
+string, so nothing behaves differently when working alone.
 
 Tier selection is automatic and ordered: **Turso cloud** (both env vars) → **local pyturso**
 (installed) → **stdlib sqlite3** (last resort, no native vector search). `connect_local()`
@@ -263,8 +288,8 @@ depends on what transport the client speaks:
   app) accept a launch command directly. Register the command below and restart the client.
 - **Remote-only clients** (ChatGPT / OpenAI Apps & connectors) connect to an **HTTPS MCP
   endpoint**, not a local process. To use Neuron there, wrap the stdio server with a
-  stdio→HTTP bridge (e.g. [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)) and
-  register the resulting URL as a custom connector — see
+  stdio→HTTP bridge ([`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) in server mode),
+  expose it over a public HTTPS tunnel, and register that URL as a custom connector — see
   [ChatGPT / OpenAI](#chatgpt--openai-via-bridge) below.
 
 The launch command itself is the same everywhere:
@@ -442,19 +467,41 @@ or the bridge route below. Remote custom connectors are a paid-tier Perplexity f
 ### ChatGPT / OpenAI (via bridge)
 
 ChatGPT (Developer Mode connectors / Apps SDK) only talks to **remote HTTPS** MCP endpoints —
-it cannot launch a local stdio process. Expose Neuron over HTTP with a bridge, then register
-the URL:
+it cannot launch a local stdio process. Neuron is a stdio server, so you put a **stdio→HTTP
+bridge in front of it** and give ChatGPT the bridge's public URL. Transport and storage are
+independent: the bridge only changes *how the client reaches Neuron*; the wrapped
+`python -m neuron` still resolves its storage tier from the environment exactly as usual
+(local files, or the shared Turso Cloud if `.env` / the env provide the credentials).
+
+Use a bridge that **runs a stdio server and exposes it over HTTP/SSE** — the right tool is
+[`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) in *server* mode. (Do **not** use
+`mcp-remote`: that goes the other direction — it lets a stdio *client* reach a remote HTTP
+server, which is the opposite of what we need.)
 
 ```bash
-# 1. Run Neuron behind an HTTP bridge (example with mcp-remote / a stdio→HTTP proxy)
-npx mcp-remote --port 8000 -- python3 -m neuron
-# 2. Make the port reachable over HTTPS (reverse proxy, tunnel, or a hosted box)
-# 3. In ChatGPT → Settings → Connectors (Developer Mode) → add the https://… MCP URL
+# 1. Wrap Neuron's stdio server and serve it over HTTP/SSE on localhost.
+#    (exact flag names vary by mcp-proxy version — see its README)
+uvx mcp-proxy --port 8000 -- python3 -m neuron
+#    → local endpoint, e.g. http://127.0.0.1:8000/sse
+
+# 2. Expose that local port over PUBLIC HTTPS — ChatGPT connectors are remote and
+#    can't reach localhost. A quick tunnel:
+cloudflared tunnel --url http://127.0.0.1:8000
+#    → gives a https://<random>.trycloudflare.com URL
+
+# 3. In ChatGPT → Settings → Connectors (Developer Mode) → add the public HTTPS URL
+#    (append the SSE path, e.g. https://<random>.trycloudflare.com/sse).
 ```
 
-Notes: MCP connectors in ChatGPT require Developer Mode (beta) and are limited to Plus / Pro /
-Business / Enterprise / Education plans on the web. Because this exposes a network endpoint,
-restrict access (auth/tunnel) — Neuron itself ships with no auth layer.
+Notes:
+- MCP connectors in ChatGPT require Developer Mode (beta) and are limited to Plus / Pro /
+  Business / Enterprise / Education plans on the web.
+- **Security:** the tunnel exposes a network endpoint and Neuron ships with **no auth layer**.
+  Keep the tunnel private/short-lived, or put access control in front of it (e.g. Cloudflare
+  Access), and revoke it when unused.
+- A **native** HTTP transport (Neuron serving Streamable HTTP directly, no bridge) is a
+  possible future addition — see T15 in `TASKLIST.md`. It would remove the bridge hop but
+  still needs a public HTTPS endpoint for ChatGPT, so the bridge is the simplest path today.
 
 ### Config by client reference
 
@@ -573,7 +620,7 @@ Two workflows:
 - **`.github/workflows/release.yml`** (on tag `v*`): builds the Windows
   `pyturso` wheels (matrix 3.10–3.13), builds the Neuron wheel + sdist, and
   publishes a GitHub Release with all assets attached. See
-  [INSTALL.md](INSTALL.md) for how those assets are consumed.
+  [INSTALL.md](../INSTALL.md) for how those assets are consumed.
 
 ### Releasing
 
@@ -612,4 +659,4 @@ source ↔ install from drifting between releases.
 
 ## License
 
-PolyForm Noncommercial License 1.0.0. See [LICENSE](LICENSE).
+PolyForm Noncommercial License 1.0.0. See [LICENSE](../LICENSE).

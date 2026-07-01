@@ -178,11 +178,12 @@ jobs:
   build-pyturso-win:
     runs-on: windows-latest          # ha già Rust + MSVC + Windows SDK
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]   # 3.14: a team member runs it
     steps:
       - uses: actions/setup-python@v5
-        with: { python-version: "${{ matrix.python }}" }
+        with: { python-version: "${{ matrix.python }}", allow-prereleases: true }
       - run: pip wheel "pyturso==0.6.1" --no-deps -w wheelhouse
       - uses: actions/upload-artifact@v4
         with: { name: pyturso-win-${{ matrix.python }}, path: wheelhouse/*.whl }

@@ -5,7 +5,7 @@ recursive-include src/neuron/data *.db
 
 # Useful top-level docs/config for the sdist.
 include README.md
-include DEVELOPER.md
+include docs/DEVELOPER.md
 include INSTALL.md
 include LICENSE
 include CLAUDE.md

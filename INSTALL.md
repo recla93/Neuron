@@ -168,7 +168,7 @@ the README. Restart the client after editing its config.
 
 Ready-made snippets for Claude Code, Cline/Roocode, VS Code, Windsurf, Zed,
 Continue.dev, Cody, Amazon Q, Perplexity and ChatGPT are in the `clients/`
-folder and in [DEVELOPER.md](DEVELOPER.md#mcp-client-configuration).
+folder and in [docs/DEVELOPER.md](docs/DEVELOPER.md#mcp-client-configuration).
 
 ---
 

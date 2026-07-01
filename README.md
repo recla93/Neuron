@@ -1,13 +1,23 @@
 # Neuron — Persistent semantic memory for AI
 
-Neuron is an **MCP server** that gives LLMs long-term memory.
-It builds a concept graph across conversations: each exchange saves keywords
-with vector embeddings and semantic links, retrievable in later sessions.
+Neuron is an **MCP server** that gives LLMs long-term memory. Across conversations it builds a
+**concept graph**: every exchange saves keywords with 384-dim vector embeddings and semantic
+links, retrievable in later sessions — per topic **context**, with inheritance from parent
+contexts. It runs **local-first** (a single `.db` file, no network) and can optionally back a
+**shared team memory** on Turso Cloud, where several people write into the same knowledge at
+once without stepping on each other.
 
-## Installation
+- **Local by default** — embedded libSQL (pyturso) with native `vector_distance_cos()`, or
+  stdlib sqlite3 as a last resort. No daemon, no HTTP port.
+- **Shared & concurrent (optional)** — point everyone at one Turso Cloud DB. Writes are
+  incremental and atomic: two people editing the same node both count, and no one's save wipes
+  another's rows. See the [Team guide](docs/TEAM.md).
+- **Any MCP client** — Claude Desktop/Code, Cursor, OpenCode, VS Code, Windsurf, Zed, and more
+  via local stdio; ChatGPT via an HTTP [bridge](docs/BRIDGE.md).
 
-See **[INSTALL.md](INSTALL.md)** for the full guide, including a manual
-fallback and troubleshooting.
+Requires **Python 3.10–3.14**.
+
+## Install
 
 ### Windows
 
@@ -15,15 +25,11 @@ fallback and troubleshooting.
 .\install.ps1
 ```
 
-Neuron installs as a real Python package into a dedicated venv. The installer
-uses a **pre-built `pyturso` wheel** shipped in `.\vendor`, so no C/Rust
-compiler is needed; it only falls back to installing the *minimal* MSVC build
-tools if your Python version is outside the prebuilt range (3.10–3.13).
-**fastembed is mandatory** — 384-dim semantic embeddings.
-
-At the end it asks whether to install packages for the **standalone chat**
-(`run_interactive.py`). For MCP-only use (OpenCode/Claude/Cursor), choose
-**0 (None)**.
+Neuron installs as a real Python package into a dedicated venv, using a **pre-built `pyturso`
+wheel** from `.\vendor` (Python 3.10–3.14) so no C/Rust compiler is needed — it only falls back
+to the *minimal* MSVC build tools if your Python is outside that prebuilt range. `fastembed`
+(semantic embeddings) is mandatory. See **[INSTALL.md](INSTALL.md)** for the manual path and
+troubleshooting.
 
 ### Linux / macOS
 
@@ -31,75 +37,72 @@ At the end it asks whether to install packages for the **standalone chat**
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install neuron-<version>-py3-none-any.whl   # from the GitHub release
+pip install neuron-<version>-py3-none-any.whl     # from the GitHub release
 # or, from a source checkout:  pip install ".[dev]"
 python -m neuron
 ```
 
-## Database engine
+## Storage: local, or shared on Turso Cloud
 
-By default Neuron persists the graph through the **local pyturso engine**
-(embedded libSQL, native `vector_distance_cos()`, single local `.db` file —
-no cloud, no network). This is consistent across the whole codebase
-(`neuron.db`): main graph storage, seed vector search, and dev scripts all
-go through the same connection layer.
+Neuron resolves its storage tier automatically, in this order:
 
-To switch to **real Turso cloud** (memory that survives across machines,
-not just one local file), install the optional `cloud` extra and set two
-environment variables:
+1. **Turso Cloud** — when `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are set. Memory is shared
+   and survives across machines; `vector_distance_cos()` runs server-side.
+2. **Local pyturso** — embedded libSQL, native vector search, one local file (the default).
+3. **stdlib sqlite3** — last resort, Python-side cosine similarity.
+
+Everything goes through one connection layer (`neuron.db`), so the tiers are interchangeable
+with **no code changes** — the only difference between working solo and as a team is the
+connection string.
+
+### Turn on the cloud (recommended flow)
 
 ```bash
-pip install "neuron[cloud]"   # adds libsql-client
-export TURSO_DATABASE_URL="libsql://your-db.turso.io"
-export TURSO_AUTH_TOKEN="..."
+pip install "neuron[cloud]"          # adds libsql-client
+python scripts/connect_turso.py      # prompts for URL + token, TESTS the connection for real,
+                                     # then saves them to .env (the token is never printed)
 ```
 
-When both are set, `neuron.db.connect()` talks to the remote Turso database
-instead of the local file — no code changes needed. Leave them unset to
-keep everything local (the current default).
+`connect_turso.py` runs a live read + write probe before saving, and transparently falls back
+from the `libsql://` (WebSocket) URL to `https://` if the endpoint rejects the WS handshake —
+saving whichever scheme actually works. The server **auto-loads `.env`** at startup, so once
+it's saved the cloud is used automatically (a real environment variable always wins; disable
+with `NEURON_NO_DOTENV=1`). To validate end-to-end against your Turso DB:
+`python scripts/smoke_cloud.py`.
+
+For a whole team on one shared DB, see the **[Team guide](docs/TEAM.md)**.
 
 ## Seed knowledge
 
-Neuron can start with a **seed graph** of concepts so the AI isn't blank on
-turn one. The seed ships inside the wheel at `neuron/data/base_knowledge.db`.
-Neuron runs fine without a real seed — it just starts empty and learns from
-your conversations.
-
-To build a seed from an Obsidian vault, use the import tool. It reads the vault
-root from the `NEURON_VAULT` env var (or `--vault`) and writes a **local** DB:
+Neuron can start from a **seed graph** so the AI isn't blank on turn one. The seed ships inside
+the wheel at `neuron/data/base_knowledge.db`; without one, Neuron just starts empty and learns.
+To build a seed from an Obsidian vault:
 
 ```bash
-export NEURON_VAULT=/path/to/your/vault      # Windows: set NEURON_VAULT=C:\path\to\vault
-python scripts/import_vault.py               # -> ./knowledge/base_knowledge.db
+export NEURON_VAULT=/path/to/vault    # Windows: set NEURON_VAULT=C:\path\to\vault
+python scripts/import_vault.py         # -> ./knowledge/base_knowledge.db (local)
 ```
 
-If `fastembed` is installed, 384-dim vectors are generated inline so semantic
-search works immediately. The output stays local; copy it to
-`src/neuron/data/base_knowledge.db` only when you deliberately want to ship it
-as the packaged seed. See [INSTALL.md](INSTALL.md) for details.
+Copy the result to `src/neuron/data/base_knowledge.db` only when you deliberately want to ship
+it as the packaged seed. Details in [INSTALL.md](INSTALL.md).
 
-## MCP Configuration
+## Mounting in an MCP client
 
 Neuron is a **local stdio MCP server**: the client launches it as a subprocess
-(`python -m neuron`, or `run_mcp.bat` on Windows) — there's no daemon or HTTP port.
-Mounting it therefore means registering that launch command with your client.
-
-On Windows, `install.ps1` auto-registers **OpenCode**, **Claude Desktop** and **Cursor**.
-Everything else is a one-time manual entry:
+(`python3 -m neuron`, or `run_mcp.bat` on Windows). Mounting means registering that launch
+command. On Windows, `install.ps1` auto-registers **OpenCode**, **Claude Desktop** and
+**Cursor**; everything else is a one-time manual entry.
 
 | Client | How to mount | Notes |
 |---|---|---|
 | OpenCode, Claude Desktop, Cursor | auto-registered by `install.ps1` | restart the client |
-| Claude Code, Cline/Roocode, VS Code, Windsurf, Zed, Continue.dev, Cody, Amazon Q | add the launch command (see [DEVELOPER.md](DEVELOPER.md#mcp-client-configuration)) | local stdio |
-| **Perplexity** (macOS app) | Settings → Connectors → add local MCP; command `python3`, args `-m neuron` | macOS-only; needs the PerplexityXPC helper |
-| **ChatGPT / OpenAI** | wrap Neuron in a stdio→HTTP bridge (e.g. `mcp-remote`), then add the HTTPS URL as a connector | Developer Mode, paid plans; no local stdio support |
+| Claude Code, Cline/Roocode, VS Code, Windsurf, Zed, Continue.dev, Cody, Amazon Q | add the launch command | local stdio |
+| **Perplexity** (macOS app) | Settings → Connectors → add local MCP (`python3 -m neuron`) | macOS-only; needs the PerplexityXPC helper |
+| **ChatGPT / OpenAI** | via an HTTP bridge — see the **[Bridge guide](docs/BRIDGE.md)** | Developer Mode, paid plans; no local stdio |
 
-The universal launch command is `python3 -m neuron` (run inside the project venv so `mcp`,
-`fastembed` and `pyturso` resolve); on the Windows install it's
-`cmd /c %LOCALAPPDATA%\Programs\neuron\scripts\run_mcp.bat`. Full per-client JSON snippets and
-the ChatGPT/Perplexity walkthroughs are in [DEVELOPER.md](DEVELOPER.md#mcp-client-configuration).
-
-### OpenCode (`~/.config/opencode/opencode.json`)
+Per-client JSON snippets live in [`clients/`](clients/) and the full walkthrough is in
+**[docs/DEVELOPER.md](docs/DEVELOPER.md#mcp-client-configuration)**. Example, OpenCode
+(`~/.config/opencode/opencode.json`):
 
 ```json
 {
@@ -109,61 +112,57 @@ the ChatGPT/Perplexity walkthroughs are in [DEVELOPER.md](DEVELOPER.md#mcp-clien
       "type": "local"
     }
   },
-  "instructions": [
-    "%LOCALAPPDATA%\\Programs\\neuron\\skills\\auto-context.md"
-  ]
+  "instructions": ["%LOCALAPPDATA%\\Programs\\neuron\\skills\\auto-context.md"]
 }
 ```
 
 The `instructions` field loads the auto-context skill, which tells the model to call
 `neuron_pre_turn` at the start of each turn and `neuron_store_turn` after responding.
 
-### Other clients
-
-Claude Desktop, Claude Code, Cursor, Cline/Roocode, Windsurf, VS Code, Zed, Continue.dev,
-Cody, Amazon Q, plus Perplexity (macOS) and ChatGPT (via bridge) — see
-[DEVELOPER.md](DEVELOPER.md#mcp-client-configuration).
-
 ## Context inheritance
 
 When the active context has no results for a topic, `neuron_get_context` and `neuron_pre_turn`
-automatically search parent contexts (e.g. `default`) and annotate the output with `(from:<parent>)`.
-This means nodes stored in `default` are always accessible regardless of which context is active.
+automatically search parent contexts (e.g. `default`) and annotate the output with
+`(from:<parent>)` — so nodes stored in `default` stay reachable from any context.
 
-## MCP Tools
+## MCP tools
 
 | Tool | Description |
 |---|---|
 | `neuron_pre_turn(topic, keywords)` | **PRE shortcut** — status + compact context in one call |
 | `neuron_status` | Graph state (nodes, links, active context) |
-| `neuron_get_context(topic, ...)` | Retrieve related nodes and links; `format=compact` for injection; inherits from parent contexts automatically |
-| `neuron_store_turn` | Save turn: keywords, links, entities, tags |
+| `neuron_get_context(topic, ...)` | Related nodes and links; `format=compact` for injection; inherits from parents |
+| `neuron_store_turn` | Save a turn: keywords, links, entities, tags |
 | `neuron_confirm(keywords)` | Boost salience of nodes that influenced the response |
 | `neuron_auto(text)` | Heuristic extraction + save in one call (fallback for smaller models) |
 | `neuron_extract(text)` | Standalone semantic extraction (no save) |
 | `neuron_find_candidates(keywords)` | Find similar existing keywords before storing (dedup) |
-| `neuron_merge(canonical, aliases)` | Absorb duplicate nodes into a single canonical node |
+| `neuron_merge(canonical, aliases)` | Absorb duplicate nodes into one canonical node |
 | `neuron_vector_search(keywords)` | Semantic vector search (no link traversal) |
 | `neuron_summary` | Top nodes and recent links overview |
 | `neuron_forgotten` | Concepts not touched in N turns |
-| `neuron_switch_context(context)` | Switch active domain context (e.g. `java/spring`) |
-| `neuron_list_contexts` | List all available contexts |
+| `neuron_switch_context(context)` / `neuron_list_contexts` | Switch / list domain contexts (e.g. `java/spring`) |
 | `neuron_prune` | Force pruning of expired tangential links |
 | `neuron_flash` / `neuron_dedup` | Toggle semantic flash / dedup features |
-| `neuron_export` / `neuron_reset` | Export full graph as JSON / clear graph |
+| `neuron_export` / `neuron_reset` | Export the graph as JSON / clear it |
 
-## API Keys (standalone chat only)
-
-Environment variables for cloud providers:
-- `OPENAI_API_KEY` — OpenAI / Azure / Compatible
-- `ANTHROPIC_API_KEY` — Claude
-- `GEMINI_API_KEY` — Google Gemini
-
-Or save the config with `--save-config`:
+## Development
 
 ```bash
-python scripts/run_interactive.py --provider openai --model gpt-4o --save-config
+pip install -e ".[dev]"
+python -m pytest tests/ -v        # unit tests (mock fastembed/mcp/turso — no network)
+python -m build                   # wheel + sdist (CI verifies this on every push)
 ```
+
+Architecture, per-client config, the DB layer, and the cloud/bridge details are in
+**[docs/DEVELOPER.md](docs/DEVELOPER.md)**. Release/CI mechanics are in
+[docs/RELEASE_PLAN.md](docs/RELEASE_PLAN.md).
+
+## Standalone chat (optional)
+
+A CLI playground (`scripts/run_interactive.py`) can talk to cloud providers — it is **not** the
+production path (the MCP server uses a 0-token heuristic by default). Provider keys:
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`.
 
 ## License
 

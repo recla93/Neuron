@@ -42,7 +42,9 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# Secrets
+# Secrets — the real .env (with Turso credentials) must never be committed.
+# (.env.example ends in ".example", so it stays tracked.)
+.env
 *.env
 config.json
 ~/.neuron/
