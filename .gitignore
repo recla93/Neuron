@@ -49,8 +49,14 @@ config.json
 
 # Claude
 .claude/
+/CLAUDE.md
+/TASKLIST.md
 
 # Garbage
 .fuse_hidden*
 *.bak
 .mount_probe.txt
+
+# Accidentally-committed extracted sdist (e.g. neuron-3.3.0/, a full duplicate
+# source tree unpacked at repo root during a local `python -m build` check).
+/neuron-[0-9]*.[0-9]*.[0-9]*/
