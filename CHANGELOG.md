@@ -18,8 +18,6 @@ Release.
 ## [Unreleased]
 
 _Next up, after 4.0.0 ships:_
-- A curated-memory skill so MCP clients recognise Neuron as support and use it
-  the right way (quality up, tokens down).
 - An optional local-LLM (Ollama) validator layer on top of the 0-token heuristic,
   configurable from `Configuration.bat`.
 
@@ -39,6 +37,11 @@ split until this ships.
 - **`help` tool** — lists every Neuron command with a one-line explanation, grouped
   (per-turn loop / search / contexts / upkeep / data); `status` ends with a pointer
   to it, so the human (not just the model) sees what each feature does.
+- **Curated-memory skill** (`skills/neuron-curated-memory/SKILL.md`) — teaches any
+  MCP client to use Neuron well: load context before answering, then save a *curated*
+  turn (3-5 concept keywords, never verbs/filler, typed links, no self-links).
+  Install as a Claude skill (copy the folder into `~/.claude/skills/`) or point a
+  client's instructions at the file.
 - **Complete prebuilt PyTurso wheel matrix (CPython 3.10–3.14)** in `vendor/` — every
   supported Python installs fully offline, no Rust/MSVC compiler needed.
 - **Embedding-model pre-warm** at the end of install (skippable, offline-safe) so the
