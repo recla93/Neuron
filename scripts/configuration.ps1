@@ -82,6 +82,39 @@ function Show-Banner {
     Write-Host '  ---------------------------------------------------------------' -ForegroundColor DarkGray
 }
 
+# Current console width (safe default when it can't be read).
+function Get-ConWidth {
+    $w = 80; try { $w = [Console]::WindowWidth } catch {}
+    if ($w -lt 20) { $w = 80 }
+    return $w
+}
+
+# Write one frame line PADDED to the full width, so redrawing over a previous
+# frame (without Clear-Host) leaves no leftover characters -> no flicker.
+function Write-FrameLine {
+    param([string]$Text = "", [System.ConsoleColor]$Fg = [System.ConsoleColor]::Gray)
+    $w = Get-ConWidth
+    if ($Text.Length -ge $w) { $Text = $Text.Substring(0, $w - 1) } else { $Text = $Text.PadRight($w - 1) }
+    Write-Host $Text -ForegroundColor $Fg
+}
+
+# One menu row; highlighted rows keep the green background only under the label
+# but still pad the rest of the line (default colors) to erase any ghost.
+function Write-MenuOption {
+    param([string]$Text, [switch]$Selected)
+    $w = Get-ConWidth
+    if ($Selected) {
+        $label = " $Text "
+        Write-Host "   > " -NoNewline -ForegroundColor Green
+        Write-Host $label   -NoNewline -ForegroundColor Black -BackgroundColor Green
+        $pad = ($w - 1) - (5 + $label.Length)
+        if ($pad -gt 0) { Write-Host (' ' * $pad) -NoNewline }
+        Write-Host ""
+    } else {
+        Write-FrameLine ("     " + $Text)
+    }
+}
+
 # Arrow-key menu. Returns the selected 0-based index, or -1 for Esc/back.
 # Falls back to a numbered prompt when the console can't do live key reads
 # (e.g. input redirected) so it never hard-crashes.
@@ -94,37 +127,32 @@ function Show-Menu {
 
     $redirected = $false
     try { $redirected = [Console]::IsInputRedirected } catch { $redirected = $true }
-
-    if ($redirected) {
-        Clear-Host; Show-Banner
-        Write-Host "`n  $Title`n" -ForegroundColor Cyan
-        for ($i = 0; $i -lt $Options.Count; $i++) { Write-Host ("   {0}) {1}" -f $i, $Options[$i]) }
-        $raw = Read-Host "`n  Choose a number (blank = back)"
-        if ($raw -match '^\d+$' -and [int]$raw -lt $Options.Count) { return [int]$raw }
-        return -1
-    }
+    if ($redirected) { return (Read-NumberedMenu -Title $Title -Options $Options) }
 
     $sel = 0
     try { [Console]::CursorVisible = $false } catch {}
+    Clear-Host                       # clear ONCE; later frames overwrite in place
     try {
         while ($true) {
-            Clear-Host; Show-Banner
-            Write-Host ""
-            Write-Host "  $Title" -ForegroundColor Cyan
-            Write-Host "  Up/Down to move  -  Enter to choose  -  Esc to go back`n" -ForegroundColor DarkGray
+            # Home the cursor instead of clearing every frame - a full Clear-Host
+            # on each keypress is what makes the menu flicker. Every line is padded
+            # to the window width so moving the highlight leaves no ghost characters.
+            try { [Console]::SetCursorPosition(0, 0) } catch { Clear-Host }
+            Show-Banner
+            Write-FrameLine ""
+            Write-FrameLine "  $Title" -Fg Cyan
+            Write-FrameLine "  Up/Down to move  -  Enter to choose  -  Esc to go back" -Fg DarkGray
+            Write-FrameLine ""
             for ($i = 0; $i -lt $Options.Count; $i++) {
-                if ($i -eq $sel) {
-                    Write-Host "   > " -NoNewline -ForegroundColor Green
-                    Write-Host (" {0} " -f $Options[$i]) -ForegroundColor Black -BackgroundColor Green
-                } else {
-                    Write-Host "     $($Options[$i])" -ForegroundColor Gray
-                }
+                Write-MenuOption -Text $Options[$i] -Selected:($i -eq $sel)
             }
-            if ($Descriptions.Count -gt $sel -and $Descriptions[$sel]) {
-                Write-Host ""
-                Write-Host "   $($Descriptions[$sel])" -ForegroundColor DarkCyan
-            }
-            $k = [Console]::ReadKey($true)
+            Write-FrameLine ""
+            $desc = if ($Descriptions.Count -gt $sel -and $Descriptions[$sel]) { "   " + $Descriptions[$sel] } else { "" }
+            Write-FrameLine $desc -Fg DarkCyan
+            # Some hosts (ISE, embedded consoles) can't do live key reads and throw
+            # here - fall back to the numbered prompt instead of crashing.
+            try { $k = [Console]::ReadKey($true) }
+            catch { return (Read-NumberedMenu -Title $Title -Options $Options) }
             switch ($k.Key) {
                 'UpArrow'   { $sel = ($sel - 1 + $Options.Count) % $Options.Count }
                 'DownArrow' { $sel = ($sel + 1) % $Options.Count }
@@ -137,6 +165,17 @@ function Show-Menu {
     } finally {
         try { [Console]::CursorVisible = $true } catch {}
     }
+}
+
+# Numbered fallback menu (redirected stdin, or a host without live key input).
+function Read-NumberedMenu {
+    param([string]$Title, [string[]]$Options)
+    Clear-Host; Show-Banner
+    Write-Host "`n  $Title`n" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Options.Count; $i++) { Write-Host ("   {0}) {1}" -f $i, $Options[$i]) }
+    $raw = Read-Host "`n  Choose a number (blank = back)"
+    if ($raw -match '^\d+$' -and [int]$raw -lt $Options.Count) { return [int]$raw }
+    return -1
 }
 
 # Yes/No prompt built on the arrow menu (default No).
@@ -297,9 +336,31 @@ function Invoke-Neuron {
     & $InstallVenvPy -c "from fastembed import TextEmbedding; print('  [OK] fastembed')"
     & $InstallVenvPy -c "import mcp; print('  [OK] mcp')"
     & $InstallVenvPy -c "import neuron; print('  [OK] neuron', neuron.__version__)"
+
+    Invoke-ModelPrewarm -py $InstallVenvPy
+
     Write-Host "`n  Neuron installed into $InstallDir" -ForegroundColor Green
     Write-Host "  Next: 'Add Neuron to your AI' (menu item 5) to wire it into your app." -ForegroundColor Green
     Pause-Any
+}
+
+# Download the 384-dim embedding model up front so the first real use is instant
+# and any network problem surfaces here, not mid-conversation. The model itself
+# is mandatory (every graph/vector op needs it); only the *download timing* is
+# deferred. Fully skippable and offline-safe.
+function Invoke-ModelPrewarm {
+    param([string]$py)
+    if (-not (Confirm-YesNo "Pre-download the ~80MB embedding model now? (recommended - makes first use instant; skip if offline)")) {
+        Write-Host "  Skipped - the model will download automatically on first use." -ForegroundColor DarkYellow
+        return
+    }
+    Write-Host "`n  Downloading the embedding model (~80MB, one-time). This can take a minute..." -ForegroundColor Yellow
+    & $py -c "from fastembed import TextEmbedding; e=TextEmbedding('sentence-transformers/all-MiniLM-L6-v2'); list(e.embed(['warm up'])); print('  [OK] embedding model cached - first use will be instant')"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [!] Could not download it now (offline or blocked)." -ForegroundColor DarkYellow
+        Write-Host "      No problem - Neuron will fetch it automatically the first time you" -ForegroundColor DarkYellow
+        Write-Host "      use it online. Nothing else is affected." -ForegroundColor DarkYellow
+    }
 }
 
 # All-in-one (2 -> 4) -------------------------------------------------------
@@ -339,10 +400,12 @@ function Invoke-Tests {
 
 function Invoke-Console {
     Clear-Host; Show-Banner
-    Write-Host "`n  Live Log Console - press Ctrl+C to stop and return to the menu.`n" -ForegroundColor Yellow
+    Write-Host "`n  Live Graph Console - refreshes only when the graph changes." -ForegroundColor Yellow
+    Write-Host "  Press Ctrl+C to stop and return to the menu.`n" -ForegroundColor DarkGray
     $py = Get-RunnerPython
     if (-not $py) { Write-Host "  [X] No Python available." -ForegroundColor Red; Pause-Any; return }
-    if (-not (Test-NeuronReady $py)) { Show-NotInstalled "The Live Log Console"; Pause-Any; return }
+    if (-not (Test-NeuronReady $py)) { Show-NotInstalled "The Live Graph Console"; Pause-Any; return }
+    # --watch polls quietly and only re-prints when node/link/vector counts change.
     Push-Location $Repo
     try { & $py "$ScriptDir\neuron_console.py" --watch=3 } catch {} finally { Pop-Location }
     Pause-Any
@@ -428,20 +491,33 @@ function Get-ConfigPython {
     return $InstallVenvPy   # not there yet; still write it - install fills it in
 }
 
+# Returns: a parsed object; a NEW empty object for a missing/empty file; or
+# $null when the file EXISTS but can't be parsed (e.g. JSONC with // comments or
+# trailing commas, common in VS Code settings.json). In that last case the caller
+# MUST NOT overwrite the file - we'd clobber the user's real settings.
 function Load-Json {
     param([string]$path)
     if (Test-Path $path) {
         $raw = Get-Content $path -Raw -ErrorAction SilentlyContinue
         if ($raw -and $raw.Trim()) {
             try { return ($raw | ConvertFrom-Json) }
-            catch {
-                Copy-Item $path "$path.neuron-bak" -Force -ErrorAction SilentlyContinue
-                Write-Host "  [!] Existing file wasn't valid JSON; backed it up to:" -ForegroundColor DarkYellow
-                Write-Host "      $path.neuron-bak" -ForegroundColor DarkYellow
-            }
+            catch { return $null }   # exists but unparseable -> signal "hands off"
         }
     }
     return (New-Object psobject)
+}
+
+# Called when we refuse to touch an unparseable config: show the user exactly
+# what to paste, so nothing is lost and they can still finish by hand.
+function Show-CannotMerge {
+    param([string]$Path, [string]$Vpy)
+    Write-Host "  [!] Your config already exists but isn't plain JSON (it may use" -ForegroundColor DarkYellow
+    Write-Host "      // comments or trailing commas): $Path" -ForegroundColor DarkYellow
+    Write-Host "      To avoid wiping your settings, I did NOT modify it." -ForegroundColor DarkYellow
+    Write-Host "      Add this 'neuron' entry to the MCP servers section by hand:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "        `"neuron`": { `"command`": `"$Vpy`", `"args`": [`"-m`", `"neuron`"] }" -ForegroundColor Gray
+    Write-Host ""
 }
 
 function Set-Prop {
@@ -463,8 +539,21 @@ function Save-Json {
     param([object]$obj, [string]$path)
     $dir = Split-Path -Parent $path
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    if (Test-Path $path) { Copy-Item $path "$path.neuron-bak" -Force -ErrorAction SilentlyContinue }
-    $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $path -Encoding UTF8
+    $backup = $null
+    if (Test-Path $path) { $backup = "$path.neuron-bak"; Copy-Item $path $backup -Force -ErrorAction SilentlyContinue }
+    try {
+        $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $path -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-Host "  [X] Could not write $path : $_" -ForegroundColor Red
+        return
+    }
+    # Verify what we wrote is valid JSON; roll back from the backup if not.
+    try { Get-Content $path -Raw | ConvertFrom-Json | Out-Null }
+    catch {
+        if ($backup) { Copy-Item $backup $path -Force -ErrorAction SilentlyContinue }
+        Write-Host "  [X] Write verification failed - restored your original file. No changes made." -ForegroundColor Red
+        return
+    }
     Write-Host "  [OK] Wrote $path" -ForegroundColor Green
     Write-Host "       (previous version, if any, saved as *.neuron-bak)" -ForegroundColor DarkGray
 }
@@ -484,6 +573,7 @@ function Write-ClientConfig {
         'claude-desktop' {
             $path = "$env:APPDATA\Claude\claude_desktop_config.json"
             $cfg = Load-Json $path
+            if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Set-Prop $servers 'neuron' ([pscustomobject]@{ command = $vpy; args = $nargs })
             Save-Json $cfg $path
@@ -492,6 +582,7 @@ function Write-ClientConfig {
         'claude-code' {
             $path = "$env:USERPROFILE\.claude.json"
             $cfg = Load-Json $path
+            if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Set-Prop $servers 'neuron' ([pscustomobject]@{ command = $vpy; args = $nargs; cwd = $InstallDir })
             Save-Json $cfg $path
@@ -500,6 +591,7 @@ function Write-ClientConfig {
         'cursor' {
             $path = "$env:USERPROFILE\.cursor\mcp.json"
             $cfg = Load-Json $path
+            if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Set-Prop $servers 'neuron' ([pscustomobject]@{ command = $vpy; args = $nargs })
             Save-Json $cfg $path
@@ -508,6 +600,7 @@ function Write-ClientConfig {
         'vscode' {
             $path = "$env:APPDATA\Code\User\settings.json"
             $cfg = Load-Json $path
+            if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $mcp = Get-OrAddObject $cfg 'mcp'
             $servers = Get-OrAddObject $mcp 'servers'
             Set-Prop $servers 'neuron' ([pscustomobject]@{ type = 'stdio'; command = $vpy; args = $nargs })
@@ -517,6 +610,7 @@ function Write-ClientConfig {
         'opencode' {
             $path = "$env:USERPROFILE\.config\opencode\opencode.json"
             $cfg = Load-Json $path
+            if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $mcp = Get-OrAddObject $cfg 'mcp'
             Set-Prop $mcp 'neuron' ([pscustomobject]@{ command = @($vpy, '-m', 'neuron'); type = 'local' })
             Save-Json $cfg $path
@@ -525,6 +619,7 @@ function Write-ClientConfig {
         'zed' {
             $path = "$env:APPDATA\Zed\settings.json"
             $cfg = Load-Json $path
+            if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $cs = Get-OrAddObject $cfg 'context_servers'
             Set-Prop $cs 'neuron' ([pscustomobject]@{ command = [pscustomobject]@{ path = $vpy; args = $nargs } })
             Save-Json $cfg $path
@@ -660,6 +755,10 @@ function Remove-McpRegistrations {
     foreach ($t in (Get-RegistrationTargets)) {
         if (-not (Test-Path $t.path)) { continue }
         $cfg = Load-Json $t.path
+        if ($null -eq $cfg) {
+            Write-Host "  [!] Skipped $($t.app): its config isn't plain JSON - remove 'neuron' by hand." -ForegroundColor DarkYellow
+            continue
+        }
         $parent = $cfg
         for ($i = 0; $i -lt $t.keys.Count - 1; $i++) { $parent = Get-Child $parent $t.keys[$i]; if (-not $parent) { break } }
         $leaf = $t.keys[$t.keys.Count - 1]
@@ -686,12 +785,38 @@ function Remove-InstallDir {
         Write-Host "  (Install dir not present: $target)" -ForegroundColor DarkGray
         return
     }
+
+    Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $target)) { Write-Host "  [OK] Removed $target" -ForegroundColor Green; return }
+
+    # Still there -> files are locked, almost always by a running Neuron process
+    # (an AI app keeping its stdio server alive). Find and offer to stop them.
+    Write-Host "  [!] Some files are locked - a Neuron process is likely still running." -ForegroundColor DarkYellow
+    $procs = @()
     try {
-        Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+        $procs = Get-Process -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Path -and $_.Path.ToLower().StartsWith($target.ToLower()) }
+    } catch {}
+    if ($procs.Count -gt 0) {
+        Write-Host ("      Holding it open: " + (($procs | ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join ", ")) -ForegroundColor DarkYellow
+        if (Confirm-YesNo "Stop these Neuron processes and retry removal?") {
+            foreach ($p in $procs) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {} }
+            Start-Sleep -Milliseconds 700
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        Write-Host "      No Neuron process found under the folder - the lock may be your AI app itself." -ForegroundColor DarkYellow
+        if (Confirm-YesNo "Fully quit Claude Desktop / Cursor, then retry removal now?") {
+            Start-Sleep -Milliseconds 500
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (Test-Path $target) {
+        Write-Host "  [X] Could not fully remove it. Close every app using Neuron and delete manually:" -ForegroundColor Red
+        Write-Host "        $target" -ForegroundColor DarkYellow
+    } else {
         Write-Host "  [OK] Removed $target" -ForegroundColor Green
-    } catch {
-        Write-Host "  [X] Could not remove $target : $_" -ForegroundColor Red
-        Write-Host "      Close any app still using Neuron (Claude, Cursor, a running server) and retry." -ForegroundColor DarkYellow
     }
 }
 
@@ -774,7 +899,7 @@ function Main {
             "Write the MCP config for Claude, Cursor, VS Code, OpenCode, Zed or ChatGPT.",
             "Connect a Turso Cloud DB and/or launch the HTTP bridge for remote clients.",
             "Run the pytest suite (core-only or full).",
-            "Live view of graph databases, node/link counts and link health.",
+            "Live graph view (nodes/links/health) - refreshes only when it changes.",
             "Runs prerequisites, PyTurso and full Neuron back-to-back.",
             "Remove the install (venv, shortcut, app registrations); optionally reinstall fresh.",
             "Close the Configuration Center."

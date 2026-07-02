@@ -59,36 +59,24 @@ Check -Label "Python 3.10+" -Condition { python -c "import sys; exit(0 if sys.ve
 Check -Label ".venv" -Condition { Test-Path "$SrcDir\.venv\Scripts\python.exe" }
 $py = if (Test-Path "$SrcDir\.venv\Scripts\python.exe") { "$SrcDir\.venv\Scripts\python.exe" } else { "python" }
 
-# ---- 2. Rust ----
-Write-Host "`n2. Rust toolchain" -ForegroundColor Yellow
-Check -Label "rustc" -Condition { Get-Command rustc -ErrorAction SilentlyContinue }
-Check -Label "rustup" -Condition { Get-Command rustup -ErrorAction SilentlyContinue }
+# ---- 2. Python dependencies ----
+# Checked FIRST on purpose: if pyturso imports, the Rust/MSVC toolchain is
+# irrelevant (it's only a *compile fallback* for when no prebuilt wheel exists).
+Write-Host "`n2. Python dependencies" -ForegroundColor Yellow
 
-# ---- 3. MSVC / GNU ----
-Write-Host "`n3. C++ toolchain" -ForegroundColor Yellow
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$msvcOk = $false
-if (Test-Path $vswhere) {
-    $vi = & $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json 2>$null | ConvertFrom-Json
-    if ($vi) { $msvcOk = $true }
+# pip lives in the venv; use `-m pip` so it works even if the pip.exe launcher
+# is missing (e.g. a uv-created venv). Falls back to the base python's pip.
+$pipExe = "$SrcDir\.venv\Scripts\pip.exe"
+function Invoke-Pip { param([string[]]$PipArgs)
+    if (Test-Path $py) { & $py -m pip @PipArgs 2>$null }
+    elseif (Test-Path $pipExe) { & $pipExe @PipArgs 2>$null }
 }
-$tc = rustup default 2>$null
-Check -Label "MSVC (via vswhere) or GNU" -Condition { $msvcOk -or ($tc -match "gnu") } -RepairAction {
-    if (-not $msvcOk) {
-        Write-Host "     Activating GNU toolchain..." -ForegroundColor Yellow
-        rustup toolchain install stable-gnu 2>$null
-        rustup default stable-gnu 2>$null
-    }
-}
-
-# ---- 4. Python deps ----
-Write-Host "`n4. Python dependencies" -ForegroundColor Yellow
 
 Check -Label "mcp SDK" -Condition { & $py -c "import mcp" 2>$null; $LASTEXITCODE -eq 0 } -RepairAction {
-    & "$SrcDir\.venv\Scripts\pip.exe" install "mcp>=1.28.0" 2>$null
+    Invoke-Pip @("install", "mcp>=1.28.0")
 }
 Check -Label "fastembed" -Condition { & $py -c "from fastembed import TextEmbedding" 2>$null; $LASTEXITCODE -eq 0 } -RepairAction {
-    & "$SrcDir\.venv\Scripts\pip.exe" install "fastembed>=0.5.0" 2>$null
+    Invoke-Pip @("install", "fastembed>=0.5.0")
 }
 Check -Label "pyturso (Turso DB)" -Condition { & $py -c "import turso" 2>$null; $LASTEXITCODE -eq 0 } -RepairAction {
     # --find-links vendor: prefer the prebuilt win_amd64 wheel (no Rust/MSVC compile,
@@ -97,7 +85,47 @@ Check -Label "pyturso (Turso DB)" -Condition { & $py -c "import turso" 2>$null; 
     $vendor = Join-Path $SrcDir "vendor"
     $pipArgs = @("install", "pyturso==0.6.1")
     if (Test-Path $vendor) { $pipArgs += @("--find-links", $vendor) }
-    & "$SrcDir\.venv\Scripts\pip.exe" @pipArgs 2>$null
+    Invoke-Pip $pipArgs
+}
+# Did pyturso end up importable? Drives whether the toolchain matters below.
+& $py -c "import turso" 2>$null; $pytursoOk = ($LASTEXITCODE -eq 0)
+
+# ---- 3. Rust toolchain (ONLY needed to compile pyturso when no prebuilt wheel) ----
+Write-Host "`n3. Rust toolchain (only needed if pyturso must be compiled)" -ForegroundColor Yellow
+if ($pytursoOk) {
+    Write-Host "  [OK] Not needed - pyturso is already installed (prebuilt wheel)." -ForegroundColor Green
+} else {
+    Check -Label "rustc" -Condition { [bool](Get-Command rustc -ErrorAction SilentlyContinue) }
+    Check -Label "rustup" -Condition { [bool](Get-Command rustup -ErrorAction SilentlyContinue) }
+}
+
+# ---- 4. C++ toolchain (ONLY needed to compile pyturso when no prebuilt wheel) ----
+Write-Host "`n4. C++ toolchain (only needed if pyturso must be compiled)" -ForegroundColor Yellow
+if ($pytursoOk) {
+    Write-Host "  [OK] Not needed - pyturso is already installed (prebuilt wheel)." -ForegroundColor Green
+} else {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    $msvcOk = $false
+    if (Test-Path $vswhere) {
+        $vi = & $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json 2>$null | ConvertFrom-Json
+        if ($vi) { $msvcOk = $true }
+    }
+    # Guard rustup: a bare call when it's not installed throws CommandNotFoundException
+    # (which -ErrorAction can't catch) and aborts the whole check.
+    $hasRustup = [bool](Get-Command rustup -ErrorAction SilentlyContinue)
+    $tc = if ($hasRustup) { rustup default 2>$null } else { "" }
+    Check -Label "MSVC (via vswhere) or GNU" -Condition { $msvcOk -or ($tc -match "gnu") } -RepairAction {
+        if ($msvcOk) { return }
+        if ($hasRustup) {
+            Write-Host "     Activating GNU toolchain..." -ForegroundColor Yellow
+            rustup toolchain install stable-gnu 2>$null
+            rustup default stable-gnu 2>$null
+        } else {
+            Write-Host "     Neither MSVC nor rustup found. Easiest fix: use a prebuilt pyturso" -ForegroundColor Yellow
+            Write-Host "     wheel (Python 3.10-3.14 + the bundled vendor\ wheels), so no compiler" -ForegroundColor Yellow
+            Write-Host "     is needed. Otherwise install Rust from https://rustup.rs and re-run." -ForegroundColor Yellow
+        }
+    }
 }
 
 # ---- 5. Config ----

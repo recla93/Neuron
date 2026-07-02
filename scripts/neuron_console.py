@@ -20,9 +20,19 @@ except Exception:
 GRAPHS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "graphs"))
 SEED_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "knowledge", "base_knowledge.db"))
 
-from neuron import db as _db
-sqlite3 = _db
-ENGINE = _db.ENGINE_NAME
+# Prefer Neuron's own DB layer, but this console only ever READS local graph
+# .db files (which are SQLite on disk), so fall back to stdlib sqlite3 if the
+# neuron package can't be imported here - e.g. a half-configured cloud .env
+# (TURSO_* set but the 'cloud' extra not installed) makes `neuron.db` import
+# libsql_client and fail. The console should still work in that case.
+try:
+    from neuron import db as _db
+    sqlite3 = _db
+    ENGINE = getattr(_db, "ENGINE_NAME", "neuron.db")
+except Exception:
+    import sqlite3 as _db  # type: ignore
+    sqlite3 = _db
+    ENGINE = "sqlite3 (fallback - neuron package not importable here)"
 
 
 def _fmt(n: int) -> str:
@@ -140,12 +150,29 @@ def _print_report(dbs: list[dict]) -> None:
     print(f"{'='*70}")
 
 
+def _signature(dbs: list[dict]):
+    """A cheap fingerprint of the state that matters, so we only redraw when
+    something actually changed (no churn while the graph is idle)."""
+    return tuple(
+        (d["label"], d["ok"], d["nodes"], d["links"], d["valid_links"], d["vectors"])
+        for d in dbs
+    )
+
+
 def _watch(interval: int) -> None:
-    """Continuously refresh the report every `interval` seconds."""
+    """Poll every `interval` seconds but only re-print when the graph changes.
+    The first snapshot always prints; after that the screen stays still until a
+    node/link/vector count actually moves."""
+    last = None
+    first = True
     try:
         while True:
             dbs = _scan_graphs()
-            _print_report(dbs)
+            sig = _signature(dbs)
+            if first or sig != last:
+                _print_report(dbs)
+                last = sig
+                first = False
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\n  Exited.")
