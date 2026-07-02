@@ -145,14 +145,18 @@ wheel, so there is nothing extra to copy.
 git clone <repo> && cd neuron
 python -m venv .venv
 # activate it (see above)
-pip install -e ".[dev]"     # editable install + pytest
+pip install -e ".[dev]"                        # Linux/macOS: just works
+pip install -e ".[dev]" --find-links vendor    # Windows: use the prebuilt pyturso wheel
 python -m pytest tests/ -v
 python -m neuron
 ```
 
-On Windows this **will compile `pyturso`** unless you also pass
-`--find-links <vendor>` with prebuilt wheels, so a source install on Windows
-needs the toolchain (see Troubleshooting). On Linux/macOS it just works.
+On Windows a plain `pip install -e ".[dev]"` **will compile `pyturso`** from Rust
+source — it stalls for minutes at *"Preparing metadata (pyproject.toml)"* and looks
+frozen. Pass **`--find-links vendor`** (as above) so pip installs the prebuilt
+`win_amd64` wheel instead; without it you need the full Rust + MSVC toolchain (see
+Troubleshooting). On Windows the easiest path is `scripts\run_tests.ps1`, which does
+this for you. On Linux/macOS it just works.
 
 ---
 

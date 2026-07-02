@@ -19,7 +19,7 @@ installer) is supported via flags:
 Exit codes: 0 = connection OK (and saved, unless --check-only), 1 = failure.
 
 This is the online counterpart to scripts/check_cloud_config.py (which is
-offline and never connects). See DEVELOPER.md > Enabling Turso Cloud.
+offline and never connects). See docs/DEVELOPER.md > Enabling Turso Cloud.
 """
 from __future__ import annotations
 

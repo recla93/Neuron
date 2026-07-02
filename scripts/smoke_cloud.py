@@ -4,7 +4,7 @@ Run AFTER `scripts/connect_turso.py` has saved working credentials to .env:
 
     python scripts/smoke_cloud.py
 
-It loads .env itself (nothing else does yet — see DEVELOPER.md), confirms the
+It loads .env itself (see docs/DEVELOPER.md), confirms the
 resolved engine is the cloud, then exercises the real remote path: writes two
 different contexts to the shared tables, reloads each, and checks they stay
 isolated (no cross-context bleed, no wipe). It cleans up the smoke contexts it

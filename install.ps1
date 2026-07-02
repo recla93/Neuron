@@ -28,8 +28,22 @@ param(
     [switch]$ForceCompile   # skip the prebuilt-wheel path, go straight to compiling
 )
 
-# Self-reinvoke with ExecutionPolicy Bypass
-if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) { $env:__NEURON_BYPASS='1'; powershell -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters; exit $LASTEXITCODE }
+# Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host
+# so it works whether launched via Windows PowerShell (powershell.exe) OR
+# PowerShell 7 (pwsh.exe). Machines with only pwsh don't have `powershell` on
+# PATH, which used to crash here ("'powershell' non riconosciuto / not recognized").
+if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) {
+    $env:__NEURON_BYPASS = '1'
+    $psExe = (Get-Process -Id $PID).Path                       # the host running this script
+    if (-not $psExe) { $psExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
+    if (-not $psExe) { $psExe = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
+    if ($psExe) {
+        & $psExe -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters
+        exit $LASTEXITCODE
+    }
+    # No separate host found - continue in this process (we're already running, so
+    # the execution policy clearly allowed it).
+}
 
 
 $ErrorActionPreference = "Continue"

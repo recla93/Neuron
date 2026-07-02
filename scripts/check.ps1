@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Neuron — Dependency check and repair
+    Neuron - Dependency check and repair
 .DESCRIPTION
     Checks every required component. With -Repair, attempts to fix what's missing.
     Exit code: 0 = all good, 1 = issues (repairable with -Repair).
@@ -10,10 +10,25 @@
     powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Repair
 #>
 
-# Self-reinvoke with ExecutionPolicy Bypass
-if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) { $env:__NEURON_BYPASS='1'; powershell -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters; exit $LASTEXITCODE }
-
+# NOTE: param() MUST be the first executable statement (after comment-based help).
+# Putting the self-reinvoke if-block above it is a PowerShell parse error that
+# breaks the whole script - that is what made check.bat fail on install.
 param([switch]$Repair)
+
+# Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host so
+# it works under both Windows PowerShell (powershell.exe) AND PowerShell 7 (pwsh).
+# Machines with only pwsh don't have `powershell` on PATH, which used to crash here.
+if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) {
+    $env:__NEURON_BYPASS = '1'
+    $psExe = (Get-Process -Id $PID).Path
+    if (-not $psExe) { $psExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
+    if (-not $psExe) { $psExe = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
+    if ($psExe) {
+        & $psExe -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters
+        exit $LASTEXITCODE
+    }
+    # No separate host found - continue in this process (already allowed to run).
+}
 
 $ErrorActionPreference = "Continue"
 $issues = @()
@@ -26,16 +41,16 @@ function Check {
         if ($ok) { Write-Host "  [OK] $Label" -ForegroundColor Green }
         else {
             Write-Host "  [!!] $Label" -ForegroundColor Red
-            $issues += $Label
+            $script:issues += $Label
             if ($Repair -and $RepairAction) {
                 Write-Host "       Repair..." -ForegroundColor Yellow
                 try { & $RepairAction; Write-Host "       OK" -ForegroundColor Green } catch { Write-Host "       Failed: $_" -ForegroundColor Red }
             }
         }
-    } catch { Write-Host "  [!!] $Label - $_" -ForegroundColor Red; $issues += $Label }
+    } catch { Write-Host "  [!!] $Label - $_" -ForegroundColor Red; $script:issues += $Label }
 }
 
-Write-Host "=== Neuron — Dependency Check ===" -ForegroundColor Cyan
+Write-Host "=== Neuron - Dependency Check ===" -ForegroundColor Cyan
 Write-Host ""
 
 # ---- 1. Python ----
@@ -76,7 +91,13 @@ Check -Label "fastembed" -Condition { & $py -c "from fastembed import TextEmbedd
     & "$SrcDir\.venv\Scripts\pip.exe" install "fastembed>=0.5.0" 2>$null
 }
 Check -Label "pyturso (Turso DB)" -Condition { & $py -c "import turso" 2>$null; $LASTEXITCODE -eq 0 } -RepairAction {
-    & "$SrcDir\.venv\Scripts\pip.exe" install "pyturso>=0.6.1" 2>$null
+    # --find-links vendor: prefer the prebuilt win_amd64 wheel (no Rust/MSVC compile,
+    # which otherwise looks frozen at "Preparing metadata"). Falls back to PyPI only
+    # if this Python's ABI has no vendored wheel.
+    $vendor = Join-Path $SrcDir "vendor"
+    $pipArgs = @("install", "pyturso==0.6.1")
+    if (Test-Path $vendor) { $pipArgs += @("--find-links", $vendor) }
+    & "$SrcDir\.venv\Scripts\pip.exe" @pipArgs 2>$null
 }
 
 # ---- 5. Config ----
