@@ -955,3 +955,37 @@ class TestSemanticFlashes:
             assert "Active links:" in out
             assert "Salient nodes" in out
             assert "docker" in out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Heuristic cleanup (fix B): IT+EN stopwords + no self-links
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestHeuristicCleanup:
+    def test_italian_action_verbs_not_extracted(self):
+        # The handoff offenders must NOT survive extraction as keywords.
+        text = ("Usiamo FastAPI con Redis, riduciamo la latenza, adottiamo indici "
+                "e passiamo a Postgres.")
+        kws = [k.lower() for k in SemanticExtractor.extract(text).keywords]
+        for verb in ("usiamo", "riduciamo", "adottiamo", "passiamo"):
+            assert verb not in kws, f"verb '{verb}' leaked into keywords: {kws}"
+        # at least one real concept-noun survives
+        assert any(c in kws for c in ("fastapi", "redis", "latenza", "postgres", "indici")), kws
+
+    def test_stopwords_cover_offenders_but_not_concepts(self):
+        for w in ("usiamo", "riduciamo", "disegnare", "adottiamo", "passiamo"):
+            assert w in _srv.STOP_WORDS, w
+        for concept in ("fastapi", "redis", "latenza", "postgres"):
+            assert concept not in _srv.STOP_WORDS, concept
+
+    def test_add_link_rejects_self_link(self):
+        g = Graph()
+        g.add_link(Link(source="react", target="react", link_type="analogy",
+                        weight="medium", rationale="r", created_turn=1, last_active_turn=1))
+        assert len(g.links) == 0
+
+    def test_add_link_rejects_self_link_case_insensitive(self):
+        g = Graph()
+        g.add_link(Link(source="React", target="react", link_type="analogy",
+                        weight="medium", rationale="r", created_turn=1, last_active_turn=1))
+        assert len(g.links) == 0

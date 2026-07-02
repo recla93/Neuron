@@ -341,6 +341,11 @@ class Graph:
         # Normalize source/target to match node map keys
         link.source = self._norm(link.source)
         link.target = self._norm(link.target)
+        # Never create a self-link. Central guard so NO path (auto-link, store_turn,
+        # semantic flash, ...) can produce e.g. `react --analogy--> react`; _norm has
+        # already lowercased/trimmed, so this also catches case variants (react/React).
+        if link.source == link.target:
+            return
         # dedup: skip if an equivalent link already exists in either direction
         for existing in self.links:
             if (existing.source == link.source and existing.target == link.target

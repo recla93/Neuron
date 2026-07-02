@@ -15,11 +15,20 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
-## [Unreleased]
+## [Unreleased] — 4.1.0 (in progress)
 
-_Planned for the next minor — see the roadmap in `TASKLIST.md`:_
-- Server-side heuristic cleanup (IT+EN stopword filter + self-link removal) so
-  `auto`/`extract` produce clean graphs at zero token cost.
+### Fixed
+- **Heuristic extraction no longer promotes Italian action verbs / connectors to
+  graph nodes** (`usiamo`, `riduciamo`, `disegnare`, `adottiamo`, `passiamo`,
+  `via`, …). The IT+EN stoplist was extended with the common conjugations
+  (especially the "noi" `-iamo` form). Still 0-token and deterministic —
+  `Usiamo FastAPI con Redis, riduciamo la latenza` now extracts
+  `[fastapi, redis, latenza, …]` instead of the verbs.
+- **Self-links can no longer be created** (`react --analogy--> react`, including
+  case variants like `React`/`react`): a central guard in `Graph.add_link` rejects
+  `source == target` for *every* path (auto-link, store, semantic flash).
+
+### Planned
 - A curated-memory skill so MCP clients use Neuron correctly (quality up, tokens down).
 - `status` points to `/help`; a `help` tool documents every command in one line each.
 - Optional local-LLM (Ollama) validator layer, configurable from `Configuration.bat`.
