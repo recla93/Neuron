@@ -625,13 +625,21 @@ Two workflows:
 ### Releasing
 
 1. Bump `__version__` in `src/neuron/__init__.py` (the single source of truth;
-   `pyproject.toml` reads it dynamically).
-2. Ensure `src/neuron/data/base_knowledge.db` is the real seed (not the
-   placeholder). Build a local seed with `python scripts/import_vault.py`
-   (set `NEURON_VAULT` or pass `--vault`), then copy the resulting DB into
-   `src/neuron/data/base_knowledge.db` when you deliberately want to ship it.
-3. Tag and push: `git tag v3.3.0 && git push --tags`. `release.yml` does the rest.
-4. To bump `pyturso`, change the pin in `pyproject.toml` **and** the version in
+   `pyproject.toml` reads it dynamically and the MCP server reports it). Follow
+   semver: PATCH for fixes, MINOR for features, MAJOR for breaking/behavior changes.
+2. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new
+   `## [X.Y.Z] - <date>` heading and fill in Added/Changed/Fixed/Removed.
+3. Run the full test suite (`scripts/run_tests.ps1`) and do a clean-machine install
+   smoke test via `Configuration.bat` → Install / Update → FULL. If you build a
+   wheel locally to test, delete `build/` and `dist/` first — a stale `build/`
+   staging dir can bundle old data (CI builds from a fresh checkout, so the tagged
+   Release is unaffected).
+4. (Optional) Ship a seed: build one with `python scripts/import_vault.py` (set
+   `NEURON_VAULT` or pass `--vault`), then copy the resulting DB into
+   `src/neuron/data/base_knowledge.db` — only a real, populated SQLite file.
+5. Tag and push: `git tag vX.Y.Z && git push --tags`. `release.yml` builds the
+   prebuilt PyTurso wheels and publishes the GitHub Release.
+6. To bump `pyturso`, change the pin in `pyproject.toml` **and** the version in
    `release.yml`'s `build-pyturso-win` job together.
 
 ### Deploy / sync to the active install

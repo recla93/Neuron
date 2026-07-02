@@ -1,6 +1,7 @@
-# Ensure the seed knowledge DB is included in the source distribution (sdist).
-# The wheel picks it up via [tool.setuptools.package-data] in pyproject.toml;
-# the sdist needs it declared here as well.
+# Neuron ships WITHOUT a seed by default (see README "Seed knowledge"). IF you
+# deliberately drop a real base_knowledge.db into src/neuron/data/, this line
+# includes it in the sdist (the wheel picks it up via package-data in
+# pyproject.toml). With no .db present it matches nothing — which is intended.
 recursive-include src/neuron/data *.db
 
 # Useful top-level docs/config for the sdist.

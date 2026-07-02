@@ -7,4 +7,4 @@ from neuron._env import load_dotenv_once as _load_dotenv_once
 
 _load_dotenv_once()
 
-__version__ = "3.3.1"
+__version__ = "4.0.0"

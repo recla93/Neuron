@@ -1,0 +1,75 @@
+# Changelog
+
+All notable changes to Neuron are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/), and Neuron
+follows [Semantic Versioning](https://semver.org/):
+
+- **MAJOR** — breaking or behavior-changing releases (e.g. default data locations move).
+- **MINOR** — backward-compatible features.
+- **PATCH** — backward-compatible bug fixes.
+
+The single source of truth for the version is `src/neuron/__init__.py`
+(`__version__`); `pyproject.toml` reads it dynamically and the MCP server reports
+it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` triggers
+`release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
+Release.
+
+## [Unreleased]
+
+_Planned for the next minor — see the roadmap in `TASKLIST.md`:_
+- Server-side heuristic cleanup (IT+EN stopword filter + self-link removal) so
+  `auto`/`extract` produce clean graphs at zero token cost.
+- A curated-memory skill so MCP clients use Neuron correctly (quality up, tokens down).
+- `status` points to `/help`; a `help` tool documents every command in one line each.
+- Optional local-LLM (Ollama) validator layer, configurable from `Configuration.bat`.
+
+## [4.0.0] — unreleased (release target after a full fix + test pass)
+
+The first 4.x release: a stabilization and installer overhaul built on the 3.3.x
+codebase. MAJOR because default data locations and shipped behavior changed
+(see **Changed** / **Removed**).
+
+### Added
+- **`Configuration.bat`** — one interactive hub for everything: install/update,
+  "Add Neuron to your AI" (with a copy-paste tutorial per client — Claude
+  Desktop/Code, Cursor, VS Code, OpenCode, Zed, ChatGPT/bridge), Bridge & Cloud
+  Turso, tests, the live graph console, a clean uninstall, and a seed-DB guide.
+- **Complete prebuilt PyTurso wheel matrix (CPython 3.10–3.14)** in `vendor/` — every
+  supported Python installs fully offline, no Rust/MSVC compiler needed.
+- **Embedding-model pre-warm** at the end of install (skippable, offline-safe) so the
+  first real use is instant.
+- **Install logging** — every install run is captured to
+  `%LOCALAPPDATA%\Programs\neuron\logs\`, so errors that scroll off are recoverable.
+
+### Changed
+- **Graphs persist to a stable per-user location by default** —
+  `%LOCALAPPDATA%\neuron\graphs` on Windows, `$XDG_DATA_HOME/neuron/graphs`
+  elsewhere — surviving restarts **and** reinstalls. Override with `NS_GRAPHS_DIR`.
+  (The old default was package-relative and could resolve inside the venv.)
+- Install consolidated into a single menu: **FULL / Dependencies / PyTurso**; FULL
+  doubles as the update path (`pip --upgrade`, and an older bundled wheel never
+  shadows newer source).
+- The MCP server now reports `neuron.__version__` instead of a hardcoded string.
+
+### Fixed
+- **Vector tools crashed** (`vector_search` / `find_candidates` / `auto` / `pre_turn`)
+  with `I/O error: short read on page 1` when the shipped seed was a truncated stub.
+  The seed is now validated (real SQLite, ≥ 512 bytes) and any DB/engine error falls
+  back to the Python path instead of crashing.
+- **`_refine_domain` always raised `NameError`** (`_pack_vector` → `pack_vector`) —
+  domain refinement was silently dead.
+- **New contexts crashed on first save** with `open: NotFound` — `turso.connect()`
+  needs the parent directory to exist; it is now created for both engines.
+- **`check.ps1` crashed** when `rustup` wasn't installed, and wrongly flagged
+  Rust/MSVC as failures when PyTurso already worked from a wheel — the toolchain is
+  now reported as "not needed" and every external-tool call is guarded.
+- **`UnicodeEncodeError`** on default Windows consoles (cp1252) in several helper
+  scripts — output is UTF-8 both in the hub and at the source.
+- **Menu flicker** in `Configuration.bat` — the arrow menu redraws in place instead
+  of clearing the screen on every keypress.
+
+### Removed
+- The shipped 26-byte `base_knowledge.db` seed stub. Neuron now ships **without** a
+  seed (it works empty); build your own via the "Seed knowledge DB" guide or
+  `scripts/import_vault.py`.

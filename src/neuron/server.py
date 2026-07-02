@@ -19,7 +19,7 @@ import sqlite3
 
 from fastembed import TextEmbedding
 
-from neuron import db as _db
+from neuron import __version__, db as _db
 TURSO_ENGINE = _db.LOCAL_TURSO_ENGINE
 
 from mcp.server import Server
@@ -969,7 +969,7 @@ _domain_signal: dict = {
     "count": 0,       # consecutive turns signaling that domain
 }
 
-app = Server("neuron", version="3.2")
+app = Server("neuron", version=__version__)   # single source of truth: neuron/__init__.py
 
 
 # ---------------------------------------------------------------------------
