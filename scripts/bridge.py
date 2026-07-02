@@ -35,6 +35,15 @@ import subprocess
 import sys
 import time
 
+# Make Unicode output safe on legacy Windows consoles (cp1252): reconfigure
+# stdout/stderr to UTF-8 so the glyphs printed below never raise
+# UnicodeEncodeError. Best-effort and never fatal.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 WIN = os.name == "nt"
 
 

@@ -8,7 +8,8 @@ REM    3. run the installer (install.ps1)
 REM  No PowerShell typing required.
 REM ===================================================================
 setlocal
-cd /d "%~dp0"
+REM This script lives in scripts\ ; build + install operate from the repo root.
+cd /d "%~dp0.."
 
 echo.
 echo [1/4] Ensuring build tooling is present...
@@ -30,7 +31,7 @@ if errorlevel 1 goto :err
 
 echo.
 echo [4/4] Running the installer...
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -NoProfile -Command "Get-Item '%~dp0install.ps1' | Unblock-File -ErrorAction SilentlyContinue; & '%~dp0install.ps1'"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -NoProfile -Command "Get-Item '%~dp0..\install.ps1' | Unblock-File -ErrorAction SilentlyContinue; & '%~dp0..\install.ps1'"
 if errorlevel 1 goto :err
 
 echo.

@@ -8,6 +8,15 @@ Usage:
 import os, sys, time, json, struct
 from datetime import datetime
 
+# Make Unicode output safe on legacy Windows consoles (cp1252): reconfigure
+# stdout/stderr to UTF-8 so the box-drawing glyphs printed below never raise
+# UnicodeEncodeError. Best-effort and never fatal.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 GRAPHS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "graphs"))
 SEED_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "knowledge", "base_knowledge.db"))
 

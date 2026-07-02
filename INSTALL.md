@@ -27,20 +27,22 @@ the launch command with your MCP client.
 
 ## 1. Automated install (Windows)
 
-**One-click (no terminal):** double-click one of these `.bat` files in the
-project folder — they handle Windows' ExecutionPolicy for you and pause at the
-end so you can read the output:
+**One-click (no terminal):** double-click **`Configuration.bat`** in the project
+root. It opens an interactive menu (handles Windows' ExecutionPolicy for you)
+that walks you through everything in order — install prerequisites → PyTurso →
+full Neuron, add Neuron to your AI app, connect Turso Cloud / launch the bridge,
+run tests, the Live Log Console, and a clean uninstall. This is the recommended
+front door for most users.
 
-- **`install.bat`** — runs the installer only. Use this from a **release
-  download**, where the Neuron wheel and the `vendor\` pyturso wheels are
-  already present.
-- **`build-and-install.bat`** — the full local chain: builds the `vendor\`
-  pyturso wheel, builds the Neuron wheel, then runs the installer. Use this from
-  a **source checkout** when nothing is built yet. (Builds pyturso for *your*
-  Python only — it's a dev convenience, not a release builder; the full
+For maintainers / source checkouts there is also:
+
+- **`scripts\build-and-install.bat`** — the full local build chain: builds the
+  `vendor\` pyturso wheel, builds the Neuron wheel, then runs the installer. Use
+  this from a **source checkout** when nothing is built yet. (Builds pyturso for
+  *your* Python only — it's a dev convenience, not a release builder; the full
   3.10–3.14 wheel set comes from `release.yml`.)
 
-Or run the installer directly from a terminal (equivalent to `install.bat`):
+Or run the underlying installer directly from a terminal:
 
 ```powershell
 .\install.ps1

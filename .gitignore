@@ -54,6 +54,7 @@ config.json
 /CLAUDE.md
 /TASKLIST.md
 /HANDOFF-*.md
+/handoff/
 
 # Garbage
 .fuse_hidden*
