@@ -45,10 +45,22 @@ from neuron.models import (
 # ---------------------------------------------------------------------------
 
 INTENT_SALIENCE = {"exploration": 3, "task": 3, "clarification": 2, "question": 1, "feedback": 0}
-GRAPHS_DIR = os.environ.get(
-    "NS_GRAPHS_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "graphs"),
-)
+def _default_graphs_dir() -> str:
+    """A STABLE per-user location for the memory graphs.
+
+    The old default was package-relative (``<pkg>/../../graphs``), which when
+    installed resolves *inside* the venv (wiped on reinstall) or, in some
+    launch setups, somewhere throwaway — so memory didn't reliably persist
+    across restarts. Use a real user-data dir instead. Override with
+    ``NS_GRAPHS_DIR`` (e.g. to keep an existing ``./graphs``)."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "neuron", "graphs")
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "neuron", "graphs")
+
+
+GRAPHS_DIR = os.path.normpath(os.environ.get("NS_GRAPHS_DIR") or _default_graphs_dir())
 
 _g: "GraphRegistry" = None  # initialized after GraphRegistry import
 

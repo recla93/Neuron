@@ -114,10 +114,29 @@ class RemoteTursoConnection:
         self._client.close()
 
 
+def _ensure_parent_dir(path: str) -> None:
+    """Make sure the file's parent directory exists before we open it.
+
+    turso.connect() raises ``IoError: open: NotFound`` when the directory of the
+    target file does not exist yet (unlike sqlite3.connect, which still needs the
+    dir but fails with a different message). This bit brand-new contexts: the
+    first save of a never-before-written context wrote graph_<ctx>.db into a dir
+    that hadn't been created, so store_turn/auto crashed. Creating the parent dir
+    here fixes it for BOTH engines. Skips special paths like ':memory:'.
+    """
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+
+
 def connect(path: str):
     """Open a connection to the main graph store, preferring real Turso cloud."""
     if REMOTE_TURSO:
         return RemoteTursoConnection(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
+    _ensure_parent_dir(path)
     if LOCAL_TURSO_ENGINE:
         return _local_turso.connect(path)
     return _sqlite3.connect(path)
@@ -131,6 +150,7 @@ def connect_local(path: str):
     file-scoped and stay local even when a remote Turso cloud database is
     configured for the main graph store via ``connect()``.
     """
+    _ensure_parent_dir(path)
     if LOCAL_TURSO_ENGINE:
         return _local_turso.connect(path)
     return _sqlite3.connect(path)
