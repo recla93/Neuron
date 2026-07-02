@@ -17,6 +17,11 @@ Release.
 
 ## [Unreleased] — 4.1.0 (in progress)
 
+### Added
+- **`help` tool** — lists every Neuron command with a one-line explanation, grouped
+  (per-turn loop / search / contexts / upkeep / data). `status` now ends with a
+  pointer to it, so the human (not just the model) can see what each feature does.
+
 ### Fixed
 - **Heuristic extraction no longer promotes Italian action verbs / connectors to
   graph nodes** (`usiamo`, `riduciamo`, `disegnare`, `adottiamo`, `passiamo`,

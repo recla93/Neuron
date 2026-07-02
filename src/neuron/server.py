@@ -1339,6 +1339,11 @@ async def list_tools() -> list[Tool]:
                 "required": ["topic"],
             },
         ),
+        Tool(
+            name="help",
+            description="Show every Neuron command with a one-line explanation of what it does.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -1444,9 +1449,49 @@ def _resolve_context(
     return related_links_sorted, top_nodes, used_fallback, inherited_ctx, g
 
 
+HELP_TEXT = (
+    "NEURON — command reference\n"
+    "Persistent semantic memory built FOR you: it helps you spend fewer tokens by\n"
+    "raising quality, helps the model process data better, and keeps memory across\n"
+    "sessions. Prefer clean input: concept nouns (not verbs) and typed links.\n"
+    "\n"
+    "Per-turn loop\n"
+    "  auto            One shot: extract + topic-shift + auto-link + save. No params. (0-token)\n"
+    "  pre_turn        Load context at the start of a turn (status + compact get_context).\n"
+    "  store_turn      Save a turn with YOUR curated keywords/topic/links. Cleanest graphs.\n"
+    "  get_context     Pull related nodes + links for a topic or keyword.\n"
+    "\n"
+    "Search & discovery\n"
+    "  find_candidates Find existing similar keywords BEFORE store_turn (avoid duplicates).\n"
+    "  vector_search   Semantic similarity search over keywords.\n"
+    "  forgotten       Surface concepts untouched for N turns (rediscover lost memory).\n"
+    "\n"
+    "Contexts (separate memory spaces)\n"
+    "  switch_context  Switch/create a context, e.g. 'python/django'.\n"
+    "  list_contexts   List contexts with node/link/turn counts.\n"
+    "\n"
+    "Insight & upkeep\n"
+    "  status          Graph state: nodes, links, health, engine, toggles.\n"
+    "  summary         Textual summary: top keywords, recent links, forgotten concepts.\n"
+    "  confirm         Boost a keyword's salience (mark it important).\n"
+    "  prune           Drop inactive tangential links now.\n"
+    "  dedup           Toggle keyword de-duplication.\n"
+    "  flash           Toggle semantic flashbacks (dormant / cross-domain sparks).\n"
+    "\n"
+    "Data & danger zone\n"
+    "  extract         Analyze text -> keyword/topic/domain/intent (no save). use_llm optional.\n"
+    "  export          Dump the whole graph as JSON.\n"
+    "  merge           Merge two keywords into one.\n"
+    "  reset           Wipe the graph and start over. (destructive)\n"
+)
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     global dedup_enabled, flash_enabled, CONTEXT_SWITCH_THRESHOLD
+
+    if name == "help":
+        return [TextContent(type="text", text=HELP_TEXT)]
 
     ctx = arguments.get("context", "")
     g = _g.get(ctx) if ctx else _g.get()
@@ -1470,7 +1515,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             f"SwitchThreshold: {CONTEXT_SWITCH_THRESHOLD} turns"
             + (f" | Pending→{_domain_signal['domain']} ({_domain_signal['count']}/{CONTEXT_SWITCH_THRESHOLD})"
                if _domain_signal.get("domain") else "") + "\n"
-            f"Engine: {engine} | Embedding: {VECTOR_DIM}dim"
+            f"Engine: {engine} | Embedding: {VECTOR_DIM}dim\n"
+            "Tip: run the 'help' tool (or ask \"/help\") to see all commands & features."
         ))]
 
     if name == "store_turn":
