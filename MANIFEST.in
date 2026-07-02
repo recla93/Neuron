@@ -5,11 +5,12 @@
 recursive-include src/neuron/data *.db
 
 # Useful top-level docs/config for the sdist.
+# NOT CLAUDE.md — that's internal project/AI instructions, not a shipped doc.
 include README.md
+include CHANGELOG.md
 include docs/DEVELOPER.md
 include INSTALL.md
 include LICENSE
-include CLAUDE.md
 
 # Keep junk out of the sdist.
 global-exclude *.py[cod]

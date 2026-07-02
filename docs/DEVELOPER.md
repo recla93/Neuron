@@ -630,10 +630,12 @@ Two workflows:
 2. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new
    `## [X.Y.Z] - <date>` heading and fill in Added/Changed/Fixed/Removed.
 3. Run the full test suite (`scripts/run_tests.ps1`) and do a clean-machine install
-   smoke test via `Configuration.bat` → Install / Update → FULL. If you build a
-   wheel locally to test, delete `build/` and `dist/` first — a stale `build/`
-   staging dir can bundle old data (CI builds from a fresh checkout, so the tagged
-   Release is unaffected).
+   smoke test via `Configuration.bat` → Install / Update → FULL. If you build the
+   wheel/sdist locally to test, delete `build/`, `dist/`, and `src/*.egg-info`
+   first — a stale `build/` staging dir or a cached `egg-info/SOURCES.txt` can
+   bundle old files (CI builds from a fresh checkout, so the tagged Release is
+   unaffected). Sanity-check the artifacts: the wheel should contain only the
+   `neuron` package, and the sdist should not ship `CLAUDE.md` or any `.db` seed.
 4. (Optional) Ship a seed: build one with `python scripts/import_vault.py` (set
    `NEURON_VAULT` or pass `--vault`), then copy the resulting DB into
    `src/neuron/data/base_knowledge.db` — only a real, populated SQLite file.
