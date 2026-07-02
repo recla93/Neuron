@@ -30,6 +30,11 @@ Release.
 - **Live Graph Console can be stopped with `q`/`Esc`** instead of `Ctrl+C` (which
   tore down the whole `Configuration.bat`). It polls for the key during the refresh
   interval, so quitting is instant.
+- **Bridge has Plan-B pre-flight checks.** It needs a runner for `mcp-proxy`
+  (uv/uvx/pipx) — if none is found it offers to install `uv`. And if Turso cloud
+  creds are set but `libsql-client` isn't installed, it offers to install it,
+  otherwise serves the local engine. (libsql is only for the cloud tier — the
+  bridge itself never needs it.)
 - **Add-to-AI now leads with a clear "[DONE] added automatically" banner** so it's
   obvious the config was written for you; the by-hand steps are marked reference-only.
 - **Heuristic extraction no longer promotes Italian action verbs / connectors to

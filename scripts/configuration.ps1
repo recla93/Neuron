@@ -542,13 +542,70 @@ function Invoke-CloudCheck {
     Pause-Any
 }
 
+# A runner able to launch mcp-proxy (the bridge's ONLY hard dependency).
+function Get-McpProxyRunner {
+    foreach ($c in @('mcp-proxy', 'uvx', 'uv', 'pipx')) {
+        if (Get-Command $c -ErrorAction SilentlyContinue) { return $c }
+    }
+    return $null
+}
+
+# Are Turso CLOUD credentials configured (env or repo .env)? Cloud is the ONLY
+# thing that needs libsql-client; the bridge itself does not.
+function Test-CloudCredsConfigured {
+    if ($env:TURSO_DATABASE_URL -and $env:TURSO_AUTH_TOKEN) { return $true }
+    $envFile = Join-Path $Repo ".env"
+    if (Test-Path $envFile) {
+        $txt = Get-Content $envFile -Raw -ErrorAction SilentlyContinue
+        $u = [regex]::Match($txt, '(?m)^\s*TURSO_DATABASE_URL\s*=\s*(\S.*)$')
+        $t = [regex]::Match($txt, '(?m)^\s*TURSO_AUTH_TOKEN\s*=\s*(\S.*)$')
+        return ($u.Success -and $t.Success)
+    }
+    return $false
+}
+
 function Invoke-Bridge {
     Clear-Host; Show-Banner
     Write-Host "`n  Launch the Neuron -> HTTP bridge (for ChatGPT & remote connectors)`n" -ForegroundColor Yellow
     $py = Get-RunnerPython
     if (-not $py) { Write-Host "  [X] No Python available." -ForegroundColor Red; Pause-Any; return }
     if (-not (Test-NeuronReady $py)) { Show-NotInstalled "The HTTP bridge"; Pause-Any; return }
-    Write-Host "  This serves Neuron over http://127.0.0.1:8000/sse ." -ForegroundColor Gray
+
+    # --- Plan B #1: the bridge needs a runner for mcp-proxy (uv/uvx/pipx) ---
+    if (-not (Get-McpProxyRunner)) {
+        Write-Host "  [!] The bridge runs 'mcp-proxy', which needs 'uv' (or pipx) - none found." -ForegroundColor DarkYellow
+        if (Confirm-YesNo "Install uv now? (recommended - fetches mcp-proxy on demand)") {
+            Write-Host "  Installing uv..." -ForegroundColor Yellow
+            try { Invoke-Expression (Invoke-RestMethod -Uri 'https://astral.sh/uv/install.ps1') } catch { Write-Host "  [X] uv install failed: $_" -ForegroundColor Red }
+            # Make uv visible to THIS session.
+            $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;" +
+                        [Environment]::GetEnvironmentVariable('Path','User') + ";" +
+                        [Environment]::GetEnvironmentVariable('Path','Machine')
+        }
+        if (-not (Get-McpProxyRunner)) {
+            Write-Host "  [X] Still no mcp-proxy runner - can't start the bridge." -ForegroundColor Red
+            Write-Host "      Install uv (irm https://astral.sh/uv/install.ps1 | iex) or pipx, then retry." -ForegroundColor DarkYellow
+            Pause-Any; return
+        }
+        Write-Host "  [OK] mcp-proxy runner available." -ForegroundColor Green
+    }
+
+    # --- Plan B #2: libsql is ONLY for the cloud tier, not for the bridge ---
+    if (Test-CloudCredsConfigured) {
+        & $py -c "import libsql_client" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [!] Cloud credentials are set but 'libsql-client' isn't installed." -ForegroundColor DarkYellow
+            Write-Host "      libsql is needed ONLY for the CLOUD tier - the bridge works locally without it." -ForegroundColor Gray
+            if (Confirm-YesNo "Install libsql-client to serve the CLOUD tier over the bridge?") {
+                & $py -m pip install "libsql-client>=0.3.1"
+                & $py -c "import libsql_client" 2>$null
+                if ($LASTEXITCODE -eq 0) { Write-Host "  [OK] Cloud tier enabled." -ForegroundColor Green }
+                else { Write-Host "  [!] Install failed - Plan B: serving the LOCAL engine." -ForegroundColor DarkYellow }
+            } else { Write-Host "  Serving the LOCAL engine (Plan B)." -ForegroundColor DarkGray }
+        }
+    }
+
+    Write-Host "`n  This serves Neuron over http://127.0.0.1:8000/sse ." -ForegroundColor Gray
     Write-Host "  To reach it from ChatGPT you still need a public HTTPS tunnel, e.g.:" -ForegroundColor Gray
     Write-Host "     cloudflared tunnel --url http://127.0.0.1:8000" -ForegroundColor Gray
     Write-Host "  Then add the https://.../sse URL as a connector. Press Ctrl+C to stop.`n" -ForegroundColor Gray
