@@ -45,7 +45,7 @@ Analyze the current message and extract internally:
   "entities": ["people", "technologies", "frameworks", "concepts"],
   "intent": "question|task|exploration|clarification|feedback",
   "sentiment": "neutral|positive|critical|urgent",
-  "domain": "AI|backend|frontend|gaming|architecture|general",
+  "domain": "free-form label, e.g. AI, backend, frontend, gaming, architecture, general — any works",
   "keywords": ["kw1", "kw2", "kw3", "kw4"],
   "tags": ["optional free labels"],
   "references": [{"type": "file|url|commit", "path": "...", "description": "..."}]
@@ -94,7 +94,7 @@ a connection worth remembering. Skip for pure acknowledgements.
 ```
 neuron_store_turn(
   topic="...",
-  domain="AI|backend|frontend|gaming|architecture|general",
+  domain="<free-form label, e.g. backend, gaming, general>",
   intent="question|task|exploration|clarification|feedback",
   sentiment="neutral|positive|critical|urgent",
   keywords=["kw1", "kw2", "kw3", "kw4"],

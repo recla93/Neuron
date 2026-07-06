@@ -49,7 +49,10 @@ from neuron import db as _db
 
 Intent = Literal["question", "task", "exploration", "clarification", "feedback"]
 Sentiment = Literal["neutral", "positive", "critical", "urgent"]
-Domain = Literal["AI", "backend", "frontend", "gaming", "architecture", "general"]
+# Free-form label: the values below are common examples, not an exclusive set.
+# The heuristic classifier (DOMAIN_KEYWORDS in server.py) emits these, but a
+# curating model may store any domain (e.g. "biology", "finance").
+Domain = str  # common: AI | backend | frontend | gaming | architecture | general
 LinkType = Literal["cause-effect", "analogy", "evolution", "contrast", "deepening", "instance-of"]
 Weight = Literal["strong", "medium", "tangential"]
 

@@ -101,7 +101,7 @@ Extract internally before calling store_turn:
 ```json
 {
   "topic": "main topic in 3-5 words",
-  "domain": "AI|backend|frontend|architecture|general",
+  "domain": "free-form label, e.g. AI, backend, frontend, gaming, architecture, general — any works",
   "intent": "question|task|exploration|clarification|feedback",
   "sentiment": "neutral|positive|critical|urgent",
   "keywords": ["kw1", "kw2", "kw3", "kw4"],

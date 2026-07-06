@@ -1137,7 +1137,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "topic": {"type": "string", "description": "Topic of the turn (3-5 words)"},
                     "keywords": {"type": "array", "items": {"type": "string"}, "description": "Abstract keywords (3-5)"},
-                    "domain": {"type": "string", "enum": ["AI", "backend", "frontend", "gaming", "architecture", "general"]},
+                    "domain": {"type": "string", "description": "Free-form topic label. Common values: AI, backend, frontend, gaming, architecture, general — but ANY label works (e.g. biology, finance, music, devops). Use 'general' if unsure."},
                     "intent": {"type": "string", "enum": ["question", "task", "exploration", "clarification", "feedback"]},
                     "sentiment": {"type": "string", "enum": ["neutral", "positive", "critical", "urgent"]},
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
