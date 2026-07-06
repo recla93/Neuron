@@ -1,4 +1,4 @@
-# Neuron v3.3 — Base Skill
+# Neuron v4.0 — Base Skill
 
 Persistent semantic memory across conversations.
 Each exchange leaves traces in a concept graph; connections accumulate over
@@ -37,7 +37,7 @@ Analyze the current message and extract internally:
   "entities": ["people", "technologies", "concepts"],
   "intent": "question|task|exploration|clarification|feedback",
   "sentiment": "neutral|positive|critical|urgent",
-  "domain": "AI|backend|frontend|architecture|general",
+  "domain": "AI|backend|frontend|gaming|architecture|general",
   "keywords": ["kw1", "kw2", "kw3", "kw4"],
   "tags": ["optional free labels"]
 }
@@ -109,6 +109,8 @@ At the end of the response, optionally add the link summary (strong and medium o
 
 | Command | Action |
 |---|---|
+| `neuron_help` | List every command, one line each |
+| `neuron_skill(name)` | Fetch a full playbook on demand (`auto-context`, `curated`, `base`, `full`) |
 | `neuron_pre_turn(topic, keywords)` | PRE shortcut: status + compact context |
 | `neuron_status` | Graph state (nodes, links, active context) |
 | `neuron_get_context(topic)` | Retrieve context for a specific topic |

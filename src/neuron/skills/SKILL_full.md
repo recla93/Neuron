@@ -1,4 +1,4 @@
-# Neuron v3.3 — Full Skill
+# Neuron v4.0 — Full Skill
 
 Persistent semantic memory across conversations.
 Each exchange leaves traces in a concept graph; connections accumulate over
@@ -45,7 +45,7 @@ Analyze the current message and extract internally:
   "entities": ["people", "technologies", "frameworks", "concepts"],
   "intent": "question|task|exploration|clarification|feedback",
   "sentiment": "neutral|positive|critical|urgent",
-  "domain": "AI|backend|frontend|architecture|general",
+  "domain": "AI|backend|frontend|gaming|architecture|general",
   "keywords": ["kw1", "kw2", "kw3", "kw4"],
   "tags": ["optional free labels"],
   "references": [{"type": "file|url|commit", "path": "...", "description": "..."}]
@@ -94,7 +94,7 @@ a connection worth remembering. Skip for pure acknowledgements.
 ```
 neuron_store_turn(
   topic="...",
-  domain="AI|backend|frontend|architecture|general",
+  domain="AI|backend|frontend|gaming|architecture|general",
   intent="question|task|exploration|clarification|feedback",
   sentiment="neutral|positive|critical|urgent",
   keywords=["kw1", "kw2", "kw3", "kw4"],
@@ -177,6 +177,8 @@ Optionally show the link summary at end of response (strong + medium only):
 
 | Tool | Phase | When to use |
 |---|---|---|
+| `neuron_help` | Discovery | List every command, one line each |
+| `neuron_skill(name)` | Discovery | Fetch a full playbook on demand (`auto-context`, `curated`, `base`, `full`) |
 | `neuron_pre_turn(topic, keywords)` | PRE | **Recommended**: status + compact context in one call |
 | `neuron_status` | PRE | Check graph state (if not using pre_turn) |
 | `neuron_get_context(topic, ...)` | PRE | Fine-grained context with depth/format control |
