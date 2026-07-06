@@ -1112,12 +1112,26 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="status",
-            description="Current graph state: nodes, links, health, configuration",
+            description=(
+                "Current graph state: nodes, links, health, configuration. Safe first "
+                "call to see if the memory holds anything. New to Neuron? The core "
+                "workflow is a 2-step loop each substantive turn: pre_turn (before) then "
+                "store_turn (after); call `help` or skill(name='auto-context') for the "
+                "full playbook."
+            ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="store_turn",
-            description="Save a conversation turn: keyword, topic, domain, intent, sentiment, entities, tags, references, and links",
+            description=(
+                "MEMORY LOOP — STEP 2 (after replying). Call this AFTER you answer a "
+                "substantive turn, to persist what is new into long-term memory. "
+                "Curate for a clean graph: topic = 3-5 words; keywords = 3-5 CONCEPT "
+                "nouns / entities / tech (never verbs or filler like 'use', 'make'); "
+                "links = typed edges between keywords (never link a keyword to itself). "
+                "This is the preferred way to save — cleaner than auto(). Skip on trivial "
+                "turns (greetings, acknowledgements, yes/no)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1167,7 +1181,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_context",
-            description="Given a topic or keyword, returns related links and nodes from the graph",
+            description=(
+                "Retrieve related nodes and links for a topic/keyword — what the memory "
+                "already knows. Call BEFORE answering when a question may have prior "
+                "context worth recalling. For the normal start-of-turn load, prefer "
+                "pre_turn (one shot: status + compact context)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1413,10 +1432,12 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="pre_turn",
             description=(
-                "Call at the START of each turn to load context in one shot. "
-                "Equivalent to status + get_context(format='compact'). Returns active "
-                "context summary and knowledge for the given topic. Ideal for providers "
-                "without automatic injection hooks."
+                "MEMORY LOOP — STEP 1 (before replying). Call this FIRST on any "
+                "substantive turn to load relevant past context in one shot "
+                "(status + get_context in compact form). Fold what it returns silently "
+                "into your answer; do not announce it. Then reply, then call store_turn "
+                "(step 2). Skip only on trivial turns or when the graph is empty. Ideal "
+                "for clients without automatic context-injection hooks."
             ),
             inputSchema={
                 "type": "object",
