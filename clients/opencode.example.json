@@ -1,5 +1,5 @@
 {
-  "_comment": "OpenCode — merge into ~/.config/opencode/opencode.json",
+  "_comment": "OpenCode — merge into ~/.config/opencode/opencode.json. The `instructions` entry is what actually makes OpenCode load Neuron's guidance every session (it does NOT surface the MCP server's own instructions). Run `neuron init --client opencode` to copy the opener and add this automatically.",
   "_path_windows": "%USERPROFILE%\\.config\\opencode\\opencode.json",
   "_path_macos": "~/.config/opencode/opencode.json",
   "mcp": {
@@ -9,6 +9,6 @@
     }
   },
   "instructions": [
-    "%LOCALAPPDATA%\\Programs\\neuron\\skills\\auto-context.md"
+    "~/.config/opencode/skills/neuron/neuron-opener.md"
   ]
 }

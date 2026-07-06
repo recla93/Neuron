@@ -35,6 +35,7 @@ SKILL_FILES = [
     ("auto-context.md",),
     ("SKILL_base.md",),
     ("SKILL_full.md",),
+    ("neuron-opener.md",),
     ("neuron-curated-memory", "SKILL.md"),
 ]
 
@@ -116,3 +117,34 @@ def test_read_resource_unknown_uri_raises():
     from neuron.server import read_resource
     with pytest.raises(ValueError):
         asyncio.run(read_resource("neuron://skill/does-not-exist"))
+
+
+# ---------------------------------------------------------------------------
+# The `skill` tool — the model-followable path to the full playbook
+# ---------------------------------------------------------------------------
+
+def test_skill_tool_listed_and_enum_matches_resources():
+    """The `skill` tool exists and every enum value maps to a known skill, so the
+    opener's `skill(name=...)` pointer is always valid."""
+    pytest.importorskip("mcp")
+    from neuron.server import list_tools, _SKILLS
+    tools = asyncio.run(list_tools())
+    skill = next((t for t in tools if t.name == "skill"), None)
+    assert skill is not None, "skill tool not registered"
+    enum = skill.inputSchema["properties"]["name"]["enum"]
+    assert set(enum) == {k.rsplit("/", 1)[1] for k in _SKILLS}
+
+
+def test_skill_tool_returns_full_text():
+    pytest.importorskip("mcp")
+    from neuron.server import call_tool
+    out = asyncio.run(call_tool("skill", {"name": "auto-context"}))
+    assert out and "Auto-Context" in out[0].text
+
+
+def test_skill_tool_unknown_name_is_graceful():
+    """Unknown skill name must not crash the tool — it returns a helpful message."""
+    pytest.importorskip("mcp")
+    from neuron.server import call_tool
+    out = asyncio.run(call_tool("skill", {"name": "nope"}))
+    assert "Unknown skill" in out[0].text

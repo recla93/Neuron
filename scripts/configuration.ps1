@@ -575,6 +575,11 @@ $script:BridgeProc = $null
 $script:BridgeUrl  = $null
 $script:BridgeLog  = $null
 $script:BridgeErr  = $null
+$script:BridgePort = 8000
+# Cloudflare quick-tunnel that exposes the bridge over public HTTPS (for ChatGPT).
+$script:TunnelProc = $null
+$script:TunnelUrl  = $null
+$script:TunnelLog  = $null
 
 function Test-BridgeAlive {
     return ($null -ne $script:BridgeProc -and -not $script:BridgeProc.HasExited)
@@ -583,6 +588,7 @@ function Test-BridgeAlive {
 # Stop the background bridge AND its mcp-proxy child. taskkill /T kills the whole
 # tree; killing only the python parent would orphan the proxy holding the port.
 function Stop-Bridge {
+    Stop-Tunnel                       # never leave a tunnel pointing at a dead bridge
     if ($null -eq $script:BridgeProc) { return }
     $procId = $script:BridgeProc.Id
     try {
@@ -591,6 +597,83 @@ function Stop-Bridge {
     try { $script:BridgeProc.Dispose() } catch {}
     $script:BridgeProc = $null
     $script:BridgeUrl  = $null
+}
+
+# --- Cloudflare quick-tunnel -------------------------------------------------
+# Exposes the local bridge over a public https://<random>.trycloudflare.com URL
+# so ChatGPT (which can't reach localhost) can use it. No account/login needed.
+function Test-TunnelAlive {
+    return ($null -ne $script:TunnelProc -and -not $script:TunnelProc.HasExited)
+}
+
+function Get-Cloudflared {
+    $c = Get-Command cloudflared -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    return $null
+}
+
+# Start the tunnel in the BACKGROUND and capture the public URL it prints. Sets
+# $script:TunnelUrl to the ready-to-paste .../sse endpoint. Returns $true on success.
+function Start-Tunnel {
+    if (Test-TunnelAlive) { return $true }
+    $cf = Get-Cloudflared
+    if (-not $cf) {
+        Write-Host "  [!] 'cloudflared' not found - can't open a public tunnel." -ForegroundColor DarkYellow
+        if ((Get-Command winget -ErrorAction SilentlyContinue) -and (Confirm-YesNo "Install cloudflared now via winget?")) {
+            & winget install --id Cloudflare.cloudflared -e --accept-source-agreements --accept-package-agreements
+            $env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ";" + [Environment]::GetEnvironmentVariable('Path','Machine')
+            $cf = Get-Cloudflared
+        }
+        if (-not $cf) {
+            Write-Host "      Install it (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)" -ForegroundColor DarkYellow
+            Write-Host "      or run by hand:  cloudflared tunnel --url http://127.0.0.1:$script:BridgePort" -ForegroundColor DarkYellow
+            Start-Sleep -Milliseconds 1200
+            return $false
+        }
+    }
+    $logDir = Join-Path $InstallDir "logs"
+    try { New-Item -ItemType Directory -Path $logDir -Force | Out-Null } catch {}
+    $script:TunnelLog = Join-Path $logDir ("tunnel-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
+    $target = "http://127.0.0.1:$script:BridgePort"
+    try {
+        $script:TunnelProc = Start-Process -FilePath $cf `
+            -ArgumentList @("tunnel", "--no-autoupdate", "--url", $target) `
+            -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $script:TunnelLog `
+            -RedirectStandardError  "$($script:TunnelLog).err"
+    } catch {
+        Write-Host "  [X] Could not start cloudflared: $_" -ForegroundColor Red
+        $script:TunnelProc = $null
+        return $false
+    }
+    # cloudflared prints the URL (to stderr) within a few seconds - poll for it.
+    Write-Host "  Opening Cloudflare tunnel (a few seconds)..." -ForegroundColor DarkGray
+    $rx = 'https://[a-z0-9-]+\.trycloudflare\.com'
+    for ($i = 0; $i -lt 40; $i++) {
+        if ($script:TunnelProc.HasExited) { break }
+        foreach ($f in @($script:TunnelLog, "$($script:TunnelLog).err")) {
+            if (Test-Path $f) {
+                $m = Select-String -Path $f -Pattern $rx -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($m) { $script:TunnelUrl = $m.Matches[0].Value.TrimEnd('/') + "/sse"; break }
+            }
+        }
+        if ($script:TunnelUrl) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $script:TunnelUrl) {
+        Write-Host "  [!] Tunnel started but no public URL yet - see $script:TunnelLog" -ForegroundColor DarkYellow
+        Start-Sleep -Milliseconds 800
+    }
+    return (Test-TunnelAlive)
+}
+
+function Stop-Tunnel {
+    if ($null -eq $script:TunnelProc) { return }
+    $tid = $script:TunnelProc.Id
+    try { if (-not $script:TunnelProc.HasExited) { & taskkill /PID $tid /T /F *> $null } } catch {}
+    try { $script:TunnelProc.Dispose() } catch {}
+    $script:TunnelProc = $null
+    $script:TunnelUrl  = $null
 }
 
 # Interactive "bridge is running" screen. Non-blocking: it watches for a key AND
@@ -615,12 +698,19 @@ function Watch-Bridge {
         Write-Host "     local endpoint : $script:BridgeUrl" -ForegroundColor Gray
         Write-Host "     PID            : $($script:BridgeProc.Id)" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  To reach it from ChatGPT, expose it over public HTTPS, e.g.:" -ForegroundColor Gray
-        Write-Host "     cloudflared tunnel --url http://127.0.0.1:8000" -ForegroundColor Gray
-        Write-Host "  Then add the https://.../sse URL as a connector." -ForegroundColor Gray
+        if ((Test-TunnelAlive) -and $script:TunnelUrl) {
+            Write-Host "  PUBLIC URL (Cloudflare): $script:TunnelUrl" -ForegroundColor Green
+            Write-Host "     Paste THIS as the MCP connector URL in ChatGPT (Developer mode)." -ForegroundColor Gray
+        } elseif (Test-TunnelAlive) {
+            Write-Host "  Cloudflare tunnel: starting - URL not ready yet, press a key to refresh." -ForegroundColor DarkYellow
+        } else {
+            Write-Host "  Not exposed publicly yet. Press [T] to open a Cloudflare tunnel" -ForegroundColor Gray
+            Write-Host "  (or by hand:  cloudflared tunnel --url http://127.0.0.1:$script:BridgePort )." -ForegroundColor DarkGray
+        }
         Write-Host ""
         Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
-        Write-Host "   [Ctrl+D] stop the bridge      [Esc] back to menu (keep it running)" -ForegroundColor Cyan
+        $tkey = if (Test-TunnelAlive) { "[T] stop tunnel" } else { "[T] expose via Cloudflare" }
+        Write-Host "   [Ctrl+D] stop bridge    [Esc] back to menu    $tkey" -ForegroundColor Cyan
         Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
 
         # Wait for a key OR the process exiting, without blocking forever on ReadKey.
@@ -642,9 +732,53 @@ function Watch-Bridge {
             Pause-Any
             return
         }
+        # T -> toggle the public Cloudflare tunnel.
+        if ($key.Key -eq 'T') {
+            if (Test-TunnelAlive) {
+                Write-Host "`n  Closing the Cloudflare tunnel..." -ForegroundColor Yellow
+                Stop-Tunnel
+            } else {
+                Start-Tunnel | Out-Null
+            }
+            continue
+        }
         if ($key.Key -eq 'Escape') { return }
         # any other key just redraws the screen
     }
+}
+
+# --- Port-conflict helpers ---------------------------------------------------
+# A bridge left running from a previous session (Esc), or any other app, can hold
+# port 8000 — mcp-proxy would then die with a cryptic uvicorn STARTUP_FAILURE.
+# These let Invoke-Bridge detect it and offer to reclaim the port or move on.
+function Get-PortOwners([int]$Port) {
+    $owners = @()
+    try {
+        $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+                    Select-Object -Expand OwningProcess -Unique)
+    } catch {
+        # Older hosts without Get-NetTCPConnection: parse netstat.
+        try {
+            foreach ($ln in (netstat -ano | Select-String ":$Port\s" | Select-String "LISTENING")) {
+                $parts = ($ln.ToString() -split '\s+') | Where-Object { $_ }
+                if ($parts.Count -ge 5) { $owners += [int]$parts[-1] }
+            }
+            $owners = @($owners | Select-Object -Unique)
+        } catch {}
+    }
+    return @($owners)
+}
+
+function Test-PortFree([int]$Port) {
+    return ((Get-PortOwners $Port).Count -eq 0)
+}
+
+# First free port at/after $Start (bounded scan); returns 0 if none found.
+function Get-FreePort([int]$Start) {
+    for ($p = $Start; $p -lt ($Start + 20); $p++) {
+        if (Test-PortFree $p) { return $p }
+    }
+    return 0
 }
 
 function Invoke-Bridge {
@@ -692,6 +826,51 @@ function Invoke-Bridge {
     }
 
     $port = 8000; $bhost = "127.0.0.1"
+
+    # Port-conflict guard: if 8000 is already taken (often a bridge orphaned by a
+    # previous session), don't let mcp-proxy fail with a cryptic uvicorn error —
+    # let the user reclaim the port or move to a free one.
+    if (-not (Test-PortFree $port)) {
+        $owners = Get-PortOwners $port
+        $desc = (($owners | ForEach-Object {
+            $pn = (Get-Process -Id $_ -ErrorAction SilentlyContinue).ProcessName
+            if ($pn) { "$pn($_)" } else { "PID $_" }
+        }) -join ", ")
+        Clear-Host; Show-Banner
+        Write-Host "`n  [!] Port $port is already in use by: $desc" -ForegroundColor DarkYellow
+        Write-Host "      Most likely a bridge left running from a previous session." -ForegroundColor Gray
+        $pick = Show-Menu -Title "Port $port is busy - what do you want to do?" -Options @(
+            "Stop what's using it and start fresh on $port",
+            "Start on the next free port instead",
+            "Cancel"
+        ) -Descriptions @(
+            "Kills the process(es) holding port $port, then launches the bridge there.",
+            "Leaves the other process alone and serves on the next free port (e.g. 8001).",
+            "Do nothing and go back."
+        )
+        switch ($pick) {
+            0 {
+                foreach ($op in $owners) { try { & taskkill /PID $op /T /F *> $null } catch {} }
+                Start-Sleep -Milliseconds 800
+                if (-not (Test-PortFree $port)) {
+                    Write-Host "  [X] Port $port is still busy after stopping those processes." -ForegroundColor Red
+                    Pause-Any; return
+                }
+                Write-Host "  [OK] Port $port freed." -ForegroundColor Green
+            }
+            1 {
+                $port = Get-FreePort ($port + 1)
+                if ($port -eq 0) {
+                    Write-Host "  [X] No free port found near 8000." -ForegroundColor Red
+                    Pause-Any; return
+                }
+                Write-Host "  [OK] Using free port $port." -ForegroundColor Green
+            }
+            default { return }
+        }
+    }
+
+    $script:BridgePort = $port
     $script:BridgeUrl = "http://${bhost}:${port}/sse"
     Write-Host "`n  Starting the bridge in the BACKGROUND so this menu stays usable." -ForegroundColor Gray
     Write-Host "  It serves Neuron over $script:BridgeUrl ." -ForegroundColor Gray

@@ -1024,8 +1024,8 @@ SIGNPOST = (
     "auto(text) only as a cheap fallback.\n"
     "Skip both on procedural turns (ack/thanks/yes-no); skip pre_turn when the "
     "graph is empty.\n"
-    "Full playbook on demand: call the `help` tool, or read resource "
-    "neuron://skill/auto-context (curation patterns: neuron://skill/curated)."
+    "Full playbook on demand: call skill(name='auto-context') (also 'curated', "
+    "'base', 'full'); `help` lists every command."
 )
 
 # Skill files shipped inside the wheel (see pyproject package-data). Each is
@@ -1437,8 +1437,23 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="help",
-            description="Show every Neuron command (one line each) plus how to use Neuron well. Call once at the start if unsure; full playbook: resource neuron://skill/auto-context.",
+            description="Show every Neuron command (one line each) plus how to use Neuron well. Call once at the start if unsure; full playbook: call skill(name='auto-context').",
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="skill",
+            description="Return the FULL text of a Neuron skill/playbook on demand — token-cheap, fetch it only when you need the details. Use after the compact opener to load the complete workflow or curation rules.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "enum": ["auto-context", "curated", "base", "full"],
+                        "description": "Which skill: auto-context (PRE/POST workflow, recommended), curated (clean-graph patterns), base/full (references).",
+                        "default": "auto-context",
+                    },
+                },
+            },
         ),
     ]
 
@@ -1588,6 +1603,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "help":
         return [TextContent(type="text", text=HELP_TEXT)]
+
+    if name == "skill":
+        which = arguments.get("name", "auto-context")
+        meta = _SKILLS.get(f"neuron://skill/{which}")
+        if meta is None:
+            valid = ", ".join(k.rsplit("/", 1)[1] for k in _SKILLS)
+            return [TextContent(type="text", text=f"Unknown skill '{which}'. Available: {valid}.")]
+        return [TextContent(type="text", text=_read_skill(meta["parts"]))]
 
     ctx = arguments.get("context", "")
     g = _g.get(ctx) if ctx else _g.get()

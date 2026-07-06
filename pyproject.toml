@@ -41,6 +41,8 @@ cloud = [
 
 [project.scripts]
 neuron-mcp = "neuron.server:cli"
+# `neuron` dispatches: no args -> MCP server; `neuron init` -> client wiring.
+neuron = "neuron.__main__:cli"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
