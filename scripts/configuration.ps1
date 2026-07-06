@@ -1424,6 +1424,74 @@ function Invoke-CleanUninstall {
 }
 
 # ---------------------------------------------------------------------------
+# Kill running Neuron MCP server processes
+# ---------------------------------------------------------------------------
+# AI apps (Claude Desktop, Cursor, ...) spawn Neuron as `python -m neuron` and keep
+# it alive. Sometimes those linger — locking files, or after an app crash. Find
+# them by command line and offer to stop them; the app relaunches Neuron when it
+# next needs it, so stopping them is safe.
+function Get-NeuronServerProcs {
+    $me = $PID
+    $procs = @()
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.ProcessId -ne $me -and $_.CommandLine -and
+            ($_.CommandLine -match '(?i)(-m\s+neuron|\\run_mcp\.bat|Programs\\neuron\\\.venv)')
+        })
+    } catch {
+        # No CIM available (rare) -> fall back to processes whose exe is in the install venv.
+        try {
+            $root = $InstallDir.ToLower()
+            $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.Id -ne $me -and $_.Path -and $_.Path.ToLower().StartsWith($root)
+            } | ForEach-Object { [pscustomobject]@{ ProcessId = $_.Id; CommandLine = $_.Path } })
+        } catch {}
+    }
+    return @($procs)
+}
+
+function Invoke-KillMcp {
+    Clear-Host; Show-Banner
+    Write-Host "`n  Stop running Neuron MCP server processes`n" -ForegroundColor Yellow
+    Write-Host "  Your AI apps launch Neuron as 'python -m neuron' and keep it running." -ForegroundColor Gray
+    Write-Host "  Stopping these is safe - the app relaunches Neuron when it next needs it." -ForegroundColor DarkGray
+
+    $procs = Get-NeuronServerProcs
+    if ($procs.Count -eq 0) {
+        Write-Host "`n  No running Neuron server process found." -ForegroundColor Green
+        Pause-Any; return
+    }
+    Write-Host "`n  Found $($procs.Count) process(es):" -ForegroundColor Cyan
+    foreach ($p in $procs) {
+        $pn = (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue).ProcessName
+        $cl = [string]$p.CommandLine
+        if ($cl.Length -gt 100) { $cl = $cl.Substring(0, 100) + "..." }
+        Write-Host ("    {0}({1})  {2}" -f $pn, $p.ProcessId, $cl) -ForegroundColor Gray
+    }
+    if (Test-BridgeAlive) {
+        Write-Host "  Note: the HTTP bridge is running; its Neuron backend may be in this list." -ForegroundColor DarkYellow
+    }
+    Write-Host ""
+    if (-not (Confirm-YesNo "Stop these $($procs.Count) process(es) now?")) {
+        Write-Host "  Cancelled - nothing was stopped." -ForegroundColor DarkYellow
+        Pause-Any; return
+    }
+    $killed = 0
+    foreach ($p in $procs) {
+        try { & taskkill /PID $p.ProcessId /T /F *> $null; if ($LASTEXITCODE -eq 0) { $killed++ } } catch {}
+    }
+    Start-Sleep -Milliseconds 600
+    $left = Get-NeuronServerProcs
+    if ($left.Count -eq 0) {
+        Write-Host "  [OK] Stopped $killed Neuron process(es)." -ForegroundColor Green
+    } else {
+        Write-Host "  [!] $($left.Count) still running - an AI app is probably relaunching them." -ForegroundColor DarkYellow
+        Write-Host "      Fully quit the app (Claude Desktop / Cursor) first, then retry." -ForegroundColor DarkYellow
+    }
+    Pause-Any
+}
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 function Main {
@@ -1449,6 +1517,7 @@ function Main {
             "5) Seed knowledge DB (what & how)",
             "6) Run the test suite",
             "7) Live Graph Console",
+            "-  Stop Neuron MCP processes (kill server)",
             "-  Clean install / Uninstall Neuron",
             "Exit"
         )
@@ -1460,6 +1529,7 @@ function Main {
             "What the optional seed knowledge base is and how to build/import your own.",
             "Run the pytest suite (core-only or full).",
             "Live graph view (nodes/links/health) - refreshes only when it changes.",
+            "Find and stop lingering 'python -m neuron' servers your AI apps left running.",
             "Remove the install (venv, shortcut, app registrations); optionally reinstall fresh.",
             "Close the Configuration Center."
         )
@@ -1479,11 +1549,12 @@ function Main {
             4 { Invoke-SeedGuide }
             5 { Invoke-Tests }
             6 { Invoke-Console }
-            7 { Invoke-CleanUninstall }
-            8       { break }
+            7 { Invoke-KillMcp }
+            8 { Invoke-CleanUninstall }
+            9       { break }
             default { break }
         }
-        if ($real -eq 8) { break }
+        if ($real -eq 9) { break }
     }
     # Housekeeping: don't silently orphan a background bridge on exit.
     if (Test-BridgeAlive) {

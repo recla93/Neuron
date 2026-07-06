@@ -1054,6 +1054,10 @@ _SKILLS: dict[str, dict] = {
     },
 }
 
+# Short names (e.g. "auto-context") for the `skill` tool's enum — derived from
+# _SKILLS so the tool's declared options can never drift from what it can serve.
+_SKILL_NAMES = [uri.rsplit("/", 1)[1] for uri in _SKILLS]
+
 
 def _read_skill(parts: tuple[str, ...]) -> str:
     """Read a packaged skill file via importlib.resources (works from the wheel).
@@ -1448,7 +1452,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "name": {
                         "type": "string",
-                        "enum": ["auto-context", "curated", "base", "full"],
+                        "enum": _SKILL_NAMES,
                         "description": "Which skill: auto-context (PRE/POST workflow, recommended), curated (clean-graph patterns), base/full (references).",
                         "default": "auto-context",
                     },

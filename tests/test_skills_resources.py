@@ -66,9 +66,10 @@ def test_signpost_present_and_compact():
     assert SIGNPOST and SIGNPOST.strip()
     # Token economy: the always-on signpost must stay small (~150 tokens ~= 900 chars).
     assert len(SIGNPOST) < 1000, f"signpost too long: {len(SIGNPOST)} chars"
-    # It must state the loop and point at the door.
+    # It must state the loop and point at the door (the `skill` tool, which the
+    # model can actually call — resources aren't reliably model-followable).
     assert "pre_turn" in SIGNPOST and "store_turn" in SIGNPOST
-    assert "neuron://skill/auto-context" in SIGNPOST
+    assert "skill(name='auto-context')" in SIGNPOST
 
 
 def test_signpost_wired_into_init_options():
@@ -123,16 +124,23 @@ def test_read_resource_unknown_uri_raises():
 # The `skill` tool — the model-followable path to the full playbook
 # ---------------------------------------------------------------------------
 
-def test_skill_tool_listed_and_enum_matches_resources():
-    """The `skill` tool exists and every enum value maps to a known skill, so the
-    opener's `skill(name=...)` pointer is always valid."""
+def test_skill_tool_enum_matches_resources():
+    """The `skill` tool advertises exactly the skills it can serve. The enum is
+    derived from _SKILLS in server.py, so this just guards that derivation."""
     pytest.importorskip("mcp")
-    from neuron.server import list_tools, _SKILLS
-    tools = asyncio.run(list_tools())
-    skill = next((t for t in tools if t.name == "skill"), None)
-    assert skill is not None, "skill tool not registered"
-    enum = skill.inputSchema["properties"]["name"]["enum"]
-    assert set(enum) == {k.rsplit("/", 1)[1] for k in _SKILLS}
+    from neuron.server import _SKILL_NAMES, _SKILLS
+    assert set(_SKILL_NAMES) == {k.rsplit("/", 1)[1] for k in _SKILLS}
+
+
+def test_skill_tool_serves_every_declared_name():
+    """Every advertised skill name resolves to real content via call_tool — the
+    stable, model-facing path (avoids introspecting Tool objects, which vary by
+    mcp version). This is what makes the opener's skill(name=...) pointer valid."""
+    pytest.importorskip("mcp")
+    from neuron.server import call_tool, _SKILL_NAMES
+    for name in _SKILL_NAMES:
+        out = asyncio.run(call_tool("skill", {"name": name}))
+        assert out and out[0].text.strip(), f"skill '{name}' returned nothing"
 
 
 def test_skill_tool_returns_full_text():

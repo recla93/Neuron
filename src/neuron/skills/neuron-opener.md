@@ -33,4 +33,5 @@ is empty. Cheap fallback when you won't curate yourself:
 - `help` — full command list, one line each.
 - `status` / `summary` — graph state; `switch_context("domain")` on a sharp topic shift.
 
-Neuron degrades gracefully — if a tool returns no
+Neuron degrades gracefully — if a tool returns nothing, just proceed; never block the
+conversation on it.
