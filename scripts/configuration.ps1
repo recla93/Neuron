@@ -564,9 +564,94 @@ function Test-CloudCredsConfigured {
     return $false
 }
 
+# ---------------------------------------------------------------------------
+# Background bridge state
+# ---------------------------------------------------------------------------
+# The bridge is launched in the BACKGROUND (a tracked child process) so the menu
+# stays usable: the user can press Esc to return to the menu while it keeps
+# serving, stop it with Ctrl+D on the bridge screen, or reopen/stop it later from
+# the "HTTP bridge RUNNING" item that appears in the main menu only while alive.
+$script:BridgeProc = $null
+$script:BridgeUrl  = $null
+$script:BridgeLog  = $null
+$script:BridgeErr  = $null
+
+function Test-BridgeAlive {
+    return ($null -ne $script:BridgeProc -and -not $script:BridgeProc.HasExited)
+}
+
+# Stop the background bridge AND its mcp-proxy child. taskkill /T kills the whole
+# tree; killing only the python parent would orphan the proxy holding the port.
+function Stop-Bridge {
+    if ($null -eq $script:BridgeProc) { return }
+    $procId = $script:BridgeProc.Id
+    try {
+        if (-not $script:BridgeProc.HasExited) { & taskkill /PID $procId /T /F *> $null }
+    } catch {}
+    try { $script:BridgeProc.Dispose() } catch {}
+    $script:BridgeProc = $null
+    $script:BridgeUrl  = $null
+}
+
+# Interactive "bridge is running" screen. Non-blocking: it watches for a key AND
+# for the bridge dying on its own. Ctrl+D stops it; Esc leaves it running.
+function Watch-Bridge {
+    try { [Console]::CursorVisible = $true } catch {}
+    while ($true) {
+        Clear-Host; Show-Banner
+        if (-not (Test-BridgeAlive)) {
+            Write-Host "`n  The bridge process has stopped." -ForegroundColor DarkYellow
+            foreach ($f in @($script:BridgeLog, $script:BridgeErr)) {
+                if ($f -and (Test-Path $f)) {
+                    Get-Content $f -Tail 12 -ErrorAction SilentlyContinue |
+                        ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+                }
+            }
+            Stop-Bridge
+            Pause-Any
+            return
+        }
+        Write-Host "`n  HTTP bridge is RUNNING (in the background)" -ForegroundColor Green
+        Write-Host "     local endpoint : $script:BridgeUrl" -ForegroundColor Gray
+        Write-Host "     PID            : $($script:BridgeProc.Id)" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  To reach it from ChatGPT, expose it over public HTTPS, e.g.:" -ForegroundColor Gray
+        Write-Host "     cloudflared tunnel --url http://127.0.0.1:8000" -ForegroundColor Gray
+        Write-Host "  Then add the https://.../sse URL as a connector." -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host "   [Ctrl+D] stop the bridge      [Esc] back to menu (keep it running)" -ForegroundColor Cyan
+        Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
+
+        # Wait for a key OR the process exiting, without blocking forever on ReadKey.
+        $key = $null
+        while ($true) {
+            $avail = $false
+            try { $avail = [Console]::KeyAvailable } catch { $avail = $true }
+            if ($avail) { try { $key = [Console]::ReadKey($true) } catch { $key = $null }; break }
+            if (-not (Test-BridgeAlive)) { break }   # died on its own -> outer loop redraws "stopped"
+            Start-Sleep -Milliseconds 250
+        }
+        if ($null -eq $key) { Start-Sleep -Milliseconds 150; continue }
+
+        # Ctrl+D -> stop.  Esc -> leave it running and return to the menu.
+        if ($key.Key -eq 'D' -and ($key.Modifiers -band [ConsoleModifiers]::Control)) {
+            Write-Host "`n  Stopping the bridge..." -ForegroundColor Yellow
+            Stop-Bridge
+            Write-Host "  [OK] Bridge stopped." -ForegroundColor Green
+            Pause-Any
+            return
+        }
+        if ($key.Key -eq 'Escape') { return }
+        # any other key just redraws the screen
+    }
+}
+
 function Invoke-Bridge {
     Clear-Host; Show-Banner
     Write-Host "`n  Launch the Neuron -> HTTP bridge (for ChatGPT & remote connectors)`n" -ForegroundColor Yellow
+    # Already running? Just bring its status screen back to the front.
+    if (Test-BridgeAlive) { Watch-Bridge; return }
     $py = Get-RunnerPython
     if (-not $py) { Write-Host "  [X] No Python available." -ForegroundColor Red; Pause-Any; return }
     if (-not (Test-NeuronReady $py)) { Show-NotInstalled "The HTTP bridge"; Pause-Any; return }
@@ -606,33 +691,74 @@ function Invoke-Bridge {
         }
     }
 
-    Write-Host "`n  This serves Neuron over http://127.0.0.1:8000/sse ." -ForegroundColor Gray
-    Write-Host "  To reach it from ChatGPT you still need a public HTTPS tunnel, e.g.:" -ForegroundColor Gray
-    Write-Host "     cloudflared tunnel --url http://127.0.0.1:8000" -ForegroundColor Gray
-    Write-Host "  Then add the https://.../sse URL as a connector. Press Ctrl+C to stop.`n" -ForegroundColor Gray
+    $port = 8000; $bhost = "127.0.0.1"
+    $script:BridgeUrl = "http://${bhost}:${port}/sse"
+    Write-Host "`n  Starting the bridge in the BACKGROUND so this menu stays usable." -ForegroundColor Gray
+    Write-Host "  It serves Neuron over $script:BridgeUrl ." -ForegroundColor Gray
+
+    $logDir = Join-Path $InstallDir "logs"
+    try { New-Item -ItemType Directory -Path $logDir -Force | Out-Null } catch {}
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $script:BridgeLog = Join-Path $logDir "bridge-$stamp.log"
+    $script:BridgeErr = Join-Path $logDir "bridge-$stamp.err.log"
 
     # When serving local, SUPPRESS cloud creds for the Neuron child so it never
     # tries the cloud tier — this makes the bridge work even with an OLDER installed
     # db.py that imports libsql_client whenever TURSO_* are present. NEURON_NO_DOTENV
     # stops the .env load; clearing the env vars covers real process-level creds too.
+    # Env is inherited by the child at spawn time, so set it, launch, then restore.
     $savedUrl = $env:TURSO_DATABASE_URL; $savedTok = $env:TURSO_AUTH_TOKEN; $savedNoDot = $env:NEURON_NO_DOTENV
     if ($serveLocal) {
         $env:NEURON_NO_DOTENV = "1"
         Remove-Item Env:TURSO_DATABASE_URL -ErrorAction SilentlyContinue
         Remove-Item Env:TURSO_AUTH_TOKEN  -ErrorAction SilentlyContinue
     }
-    Push-Location $Repo
-    try { & $py "$ScriptDir\bridge.py" }
-    catch {}
-    finally {
-        Pop-Location
+    try {
+        $bridgeArgs = "`"$ScriptDir\bridge.py`" --port $port --host $bhost"
+        $script:BridgeProc = Start-Process -FilePath $py -ArgumentList $bridgeArgs `
+            -WorkingDirectory $Repo -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $script:BridgeLog `
+            -RedirectStandardError  $script:BridgeErr
+    } catch {
+        Write-Host "  [X] Could not start the bridge: $_" -ForegroundColor Red
+        $script:BridgeProc = $null
+    } finally {
         if ($serveLocal) {
             if ($null -ne $savedUrl) { $env:TURSO_DATABASE_URL = $savedUrl }
             if ($null -ne $savedTok) { $env:TURSO_AUTH_TOKEN = $savedTok }
             if ($null -ne $savedNoDot) { $env:NEURON_NO_DOTENV = $savedNoDot } else { Remove-Item Env:NEURON_NO_DOTENV -ErrorAction SilentlyContinue }
         }
     }
-    Pause-Any
+
+    if (-not (Test-BridgeAlive)) {
+        if ($script:BridgeProc) {
+            # It started but exited fast — surface bridge.py's preflight error.
+            Write-Host "`n  [X] The bridge exited during startup. Its output:" -ForegroundColor Red
+            foreach ($f in @($script:BridgeLog, $script:BridgeErr)) {
+                if ($f -and (Test-Path $f)) { Get-Content $f -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } }
+            }
+            Stop-Bridge
+        }
+        Pause-Any; return
+    }
+
+    # bridge.py runs a ~3s preflight before mcp-proxy takes over; wait it out so a
+    # fast failure is caught here instead of flashing the "running" screen.
+    Write-Host "  Launching (running preflight)..." -ForegroundColor DarkGray
+    for ($i = 0; $i -lt 20; $i++) {
+        if ($script:BridgeProc.HasExited) { break }
+        Start-Sleep -Milliseconds 300
+    }
+    if ($script:BridgeProc.HasExited) {
+        Write-Host "`n  [X] The bridge exited during startup. Its output:" -ForegroundColor Red
+        foreach ($f in @($script:BridgeLog, $script:BridgeErr)) {
+            if ($f -and (Test-Path $f)) { Get-Content $f -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } }
+        }
+        Stop-Bridge
+        Pause-Any; return
+    }
+
+    Watch-Bridge
 }
 
 function Show-BridgeCloudMenu {
@@ -1125,7 +1251,18 @@ function Main {
     while ($true) {
         # Recompute install status once per menu entry (cheap: a single import probe).
         $status = if (Test-NeuronReady $InstallVenvPy) { "Neuron: INSTALLED" } else { "Neuron: not installed yet" }
-        $idx = Show-Menu -Title "What would you like to do?    [$status]" -Options @(
+        $bridgeActive = Test-BridgeAlive
+        $bridgeTag = if ($bridgeActive) { "   |   Bridge: RUNNING" } else { "" }
+
+        # The STOP/open-bridge item exists ONLY while the bridge is alive. It sits
+        # at index 0 and pushes every numbered item down by one (handled by $offset).
+        $options = @()
+        $descs   = @()
+        if ($bridgeActive) {
+            $options += "[#] HTTP bridge RUNNING  ->  open / stop  (Ctrl+D)"
+            $descs   += "The bridge is running in the background. Open its screen to stop it (Ctrl+D) or go back (Esc)."
+        }
+        $options += @(
             "1) Check my system",
             "2) Install / Update Neuron...",
             "3) Add Neuron to your AI",
@@ -1135,7 +1272,8 @@ function Main {
             "7) Live Graph Console",
             "-  Clean install / Uninstall Neuron",
             "Exit"
-        ) -Descriptions @(
+        )
+        $descs += @(
             "Diagnose Python, deps and (only if needed) the Rust/MSVC toolchain; auto-repair.",
             "FULL install / update, or just Dependencies / PyTurso. All runs are logged.",
             "Wire Neuron into Claude, Cursor, VS Code, OpenCode, Zed or ChatGPT (with a paste-by-hand tutorial).",
@@ -1147,7 +1285,14 @@ function Main {
             "Close the Configuration Center."
         )
 
-        switch ($idx) {
+        $idx = Show-Menu -Title "What would you like to do?    [$status]$bridgeTag" -Options $options -Descriptions $descs
+
+        if ($idx -eq -1) { break }                                   # Esc
+        if ($bridgeActive -and $idx -eq 0) { Watch-Bridge; continue } # the STOP/open-bridge item
+        $offset = if ($bridgeActive) { 1 } else { 0 }
+        $real = $idx - $offset
+
+        switch ($real) {
             0 { Invoke-Check }
             1 { Show-InstallMenu }
             2 { Invoke-AddToAI }
@@ -1157,9 +1302,19 @@ function Main {
             6 { Invoke-Console }
             7 { Invoke-CleanUninstall }
             8       { break }
-            default { break }   # Esc
+            default { break }
         }
-        if ($idx -eq 8 -or $idx -eq -1) { break }
+        if ($real -eq 8) { break }
+    }
+    # Housekeeping: don't silently orphan a background bridge on exit.
+    if (Test-BridgeAlive) {
+        if (Confirm-YesNo "The HTTP bridge is still running in the background. Stop it before exiting?") {
+            Stop-Bridge
+            Write-Host "  [OK] Bridge stopped." -ForegroundColor Green
+        } else {
+            Write-Host "  Leaving the bridge running (PID $($script:BridgeProc.Id))." -ForegroundColor DarkYellow
+            Start-Sleep -Milliseconds 900
+        }
     }
     Clear-Host
     Write-Host "`n  Thanks for using Neuron. Bye!`n" -ForegroundColor Cyan
