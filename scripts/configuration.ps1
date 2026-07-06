@@ -613,7 +613,9 @@ function Get-Cloudflared {
 }
 
 # Start the tunnel in the BACKGROUND and capture the public URL it prints. Sets
-# $script:TunnelUrl to the ready-to-paste .../sse endpoint. Returns $true on success.
+# $script:TunnelUrl to the ready-to-paste .../mcp endpoint (Streamable HTTP — the
+# transport remote connectors expect; the legacy /sse handshake gets buffered by
+# Cloudflare and times out). Returns $true on success.
 function Start-Tunnel {
     if (Test-TunnelAlive) { return $true }
     $cf = Get-Cloudflared
@@ -654,7 +656,7 @@ function Start-Tunnel {
         foreach ($f in @($script:TunnelLog, "$($script:TunnelLog).err")) {
             if (Test-Path $f) {
                 $m = Select-String -Path $f -Pattern $rx -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($m) { $script:TunnelUrl = $m.Matches[0].Value.TrimEnd('/') + "/sse"; break }
+                if ($m) { $script:TunnelUrl = $m.Matches[0].Value.TrimEnd('/') + "/mcp"; break }
             }
         }
         if ($script:TunnelUrl) { break }
@@ -700,7 +702,8 @@ function Watch-Bridge {
         Write-Host ""
         if ((Test-TunnelAlive) -and $script:TunnelUrl) {
             Write-Host "  PUBLIC URL (Cloudflare): $script:TunnelUrl" -ForegroundColor Green
-            Write-Host "     Paste THIS as the MCP connector URL in ChatGPT (Developer mode)." -ForegroundColor Gray
+            Write-Host "     Paste THIS as the MCP connector URL (Perplexity, ChatGPT dev mode, Claude)." -ForegroundColor Gray
+            Write-Host "     It's the Streamable HTTP endpoint (/mcp) — use it, not /sse." -ForegroundColor DarkGray
         } elseif (Test-TunnelAlive) {
             Write-Host "  Cloudflare tunnel: starting - URL not ready yet, press a key to refresh." -ForegroundColor DarkYellow
         } else {
@@ -871,7 +874,7 @@ function Invoke-Bridge {
     }
 
     $script:BridgePort = $port
-    $script:BridgeUrl = "http://${bhost}:${port}/sse"
+    $script:BridgeUrl = "http://${bhost}:${port}/mcp"
     Write-Host "`n  Starting the bridge in the BACKGROUND so this menu stays usable." -ForegroundColor Gray
     Write-Host "  It serves Neuron over $script:BridgeUrl ." -ForegroundColor Gray
 
@@ -1226,8 +1229,10 @@ function Show-RemoteHelp {
     Write-Host ""
     Write-Host "    1. Menu > 'Bridge & Cloud Turso' > 'Launch the HTTP bridge'" -ForegroundColor Cyan
     Write-Host "    2. In another terminal:  cloudflared tunnel --url http://127.0.0.1:8000" -ForegroundColor Cyan
-    Write-Host "    3. Add the resulting  https://.../sse  URL as a connector" -ForegroundColor Cyan
-    Write-Host "       (ChatGPT: Settings > Connectors / Developer mode)." -ForegroundColor Cyan
+    Write-Host "    3. Add the resulting  https://.../mcp  URL as a connector" -ForegroundColor Cyan
+    Write-Host "       (Perplexity, or ChatGPT: Settings > Connectors / Developer mode)." -ForegroundColor Cyan
+    Write-Host "       Use /mcp (Streamable HTTP), NOT /sse — Cloudflare buffers the" -ForegroundColor DarkGray
+    Write-Host "       legacy SSE handshake, so /sse times out behind the tunnel." -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  The connector uses that URL (and ChatGPT's own login) - you do NOT paste"
     Write-Host "  a raw API key into Neuron. See docs\BRIDGE.md for the full walkthrough."

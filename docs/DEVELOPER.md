@@ -482,15 +482,17 @@ server, which is the opposite of what we need.)
 # 1. Wrap Neuron's stdio server and serve it over HTTP/SSE on localhost.
 #    (exact flag names vary by mcp-proxy version — see its README)
 uvx mcp-proxy --port 8000 -- python3 -m neuron
-#    → local endpoint, e.g. http://127.0.0.1:8000/sse
+#    → local endpoints: http://127.0.0.1:8000/mcp (Streamable HTTP) and /sse (legacy)
 
 # 2. Expose that local port over PUBLIC HTTPS — ChatGPT connectors are remote and
 #    can't reach localhost. A quick tunnel:
 cloudflared tunnel --url http://127.0.0.1:8000
 #    → gives a https://<random>.trycloudflare.com URL
 
-# 3. In ChatGPT → Settings → Connectors (Developer Mode) → add the public HTTPS URL
-#    (append the SSE path, e.g. https://<random>.trycloudflare.com/sse).
+# 3. In your client (Perplexity, or ChatGPT → Settings → Connectors (Developer Mode))
+#    add the public HTTPS URL with the /mcp path, e.g.
+#    https://<random>.trycloudflare.com/mcp   (NOT /sse — Cloudflare buffers the SSE
+#    handshake so the legacy endpoint times out behind a tunnel).
 ```
 
 Notes:

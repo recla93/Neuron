@@ -16,14 +16,16 @@ The hard parts of "run the bridge" are (1) launching the *right* Neuron, and
 Usage:
 
     # run with the SAME python where Neuron is installed (e.g. the install venv)
-    python scripts/bridge.py                      # serves http://127.0.0.1:8000/sse
+    python scripts/bridge.py                      # serves http://127.0.0.1:8000/mcp (+ /sse)
     python scripts/bridge.py --port 9000
     python scripts/bridge.py --print-cmd          # show what it would run, don't run
     python scripts/bridge.py -- <custom neuron launch command>   # override the child
 
-Then expose the port over public HTTPS (ChatGPT connectors can't reach
+Then expose the port over public HTTPS (remote connectors can't reach
 localhost) — e.g.  ``cloudflared tunnel --url http://127.0.0.1:8000`` — and add
-the resulting ``https://…/sse`` URL as a connector. See docs/BRIDGE.md.
+the resulting ``https://…/mcp`` URL as a connector. Use the ``/mcp`` (Streamable
+HTTP) endpoint, NOT ``/sse``: Cloudflare buffers the legacy SSE handshake so the
+``/sse`` URL times out behind a tunnel. See docs/BRIDGE.md.
 """
 from __future__ import annotations
 
@@ -132,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     full = proxy + [f"--port={args.port}", f"--host={args.host}", "--"] + neuron_cmd
-    url = f"http://{args.host}:{args.port}/sse"
+    url = f"http://{args.host}:{args.port}/mcp"
 
     if args.print_cmd:
         print(" ".join(full))
@@ -145,7 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  local endpoint : {url}")
     print(f"  next step      : expose it over public HTTPS, e.g.")
     print(f"                   cloudflared tunnel --url http://{args.host}:{args.port}")
-    print(f"  then add the https://…/sse URL as an MCP connector (ChatGPT Developer Mode).\n")
+    print(f"  then add the https://…/mcp URL as an MCP connector (Perplexity, ChatGPT Dev Mode).")
+    print(f"  Use /mcp (Streamable HTTP), not /sse — Cloudflare buffers the SSE handshake.\n")
     try:
         return subprocess.call(full)
     except KeyboardInterrupt:

@@ -15,7 +15,7 @@ Run the helper **with the Python where Neuron is installed** (its venv). It find
 the next step:
 
 ```bash
-python scripts/bridge.py            # → serves http://127.0.0.1:8000/sse
+python scripts/bridge.py            # → serves http://127.0.0.1:8000/mcp (+ legacy /sse)
 # options:  --port 9000   --print-cmd (dry run)   -- <your own neuron launch command>
 ```
 
@@ -26,14 +26,22 @@ Windows      : irm https://astral.sh/uv/install.ps1 | iex
 macOS / Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then expose the local port over **public HTTPS** (ChatGPT connectors can't reach `localhost`):
+Then expose the local port over **public HTTPS** (remote connectors can't reach `localhost`):
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8000     # → https://<random>.trycloudflare.com
 ```
 
-Finally, in **ChatGPT → Settings → Connectors (Developer Mode)** add the public URL with the
-SSE path, e.g. `https://<random>.trycloudflare.com/sse`.
+Finally, in your client (**Perplexity**, or **ChatGPT → Settings → Connectors (Developer
+Mode)**) add the public URL with the **`/mcp`** path, e.g.
+`https://<random>.trycloudflare.com/mcp`.
+
+> **Use `/mcp`, not `/sse`.** `mcp-proxy` serves both, but `/mcp` is the modern
+> **Streamable HTTP** transport, while `/sse` is the legacy HTTP+SSE one. Behind a
+> Cloudflare tunnel the legacy transport hangs: Cloudflare buffers the initial SSE
+> `endpoint` handshake event, so the client never learns where to POST and times out
+> (this is the classic "connector can't get a valid response in 15s" error). `/mcp`
+> uses plain request/response and works through the tunnel.
 
 That's it: `python scripts/bridge.py` + a tunnel + paste the URL.
 
@@ -61,8 +69,11 @@ uvx mcp-proxy --port=8000 --host=127.0.0.1 -- <python-that-has-neuron> -m neuron
     `python scripts/bridge.py -- cmd /c %LOCALAPPDATA%\Programs\neuron\scripts\run_mcp.bat`
   - sanity-check first: `python -m neuron` should start and **wait** (not exit). If it exits,
     that error is your real problem — fix the install before bridging.
-- **ChatGPT can't connect** — make sure you used the **public HTTPS** tunnel URL (not
-  `localhost`) and included the `/sse` path, and that the tunnel is still running.
+- **Connector can't connect / "no valid response in 15s"** — make sure you used the
+  **public HTTPS** tunnel URL (not `localhost`), that you appended the **`/mcp`** path
+  (not `/sse` — see the note above), and that the tunnel is still running. Quick check:
+  `curl -sS -m5 -H "Accept: application/json, text/event-stream" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"c","version":"0"}}}' https://<random>.trycloudflare.com/mcp`
+  should return a JSON `initialize` result with `serverInfo`.
 
 ## Security
 
