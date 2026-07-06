@@ -33,6 +33,7 @@ def _make_mod(name):
 mcp = _make_mod("mcp")
 srv = _make_mod("mcp.server")
 low = _make_mod("mcp.server.lowlevel")
+hlp = _make_mod("mcp.server.lowlevel.helper_types")
 mdl = _make_mod("mcp.server.models")
 std = _make_mod("mcp.server.stdio")
 typ = _make_mod("mcp.types")
@@ -43,6 +44,8 @@ class _FakeSrv:
     def __init__(self, *a, **kw): pass
     def list_tools(self): return lambda f: f
     def call_tool(self):  return lambda f: f
+    def list_resources(self): return lambda f: f
+    def read_resource(self):  return lambda f: f
 
 @contextlib.asynccontextmanager
 async def _fake_stdio(*a, **kw): yield None, None
@@ -55,6 +58,8 @@ typ.Tool                      = type("Tool", (), {"__init__": lambda s, **kw: No
 typ.TextContent               = type("TC", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
 typ.ServerCapabilities        = type("SC", (), {})
 typ.ToolsCapability           = type("TsCap", (), {})
+typ.Resource                  = type("Resource", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
+hlp.ReadResourceContents      = type("ReadResourceContents", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
