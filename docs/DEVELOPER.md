@@ -652,20 +652,23 @@ the toolchain (Rust/MSVC), creates the venv and installs deps — heavy, and not
 for a quick "push my code edits to the install" loop. Use `scripts/deploy.ps1` for that:
 
 ```powershell
-# preview exactly what would change (no writes):
+# preview the plan (source vs installed version, target venv) — no writes:
 powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -DryRun
 
-# sync changed/new files, then byte-compile + import-check the install:
+# reinstall the current source into the install venv, then import-check it:
 powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
 
-# also remove files deleted from source, and run the test suite in the install:
-powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Prune -RunTests
+# also run the test suite via the install venv (if it has pytest):
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -RunTests
 ```
 
-It copies only the deployable set (code, config, docs, the seed `knowledge\base_knowledge.db`),
-never the install's `.venv`, `graphs\` or `knowledge_grown\`, is idempotent (MD5 diff), and
-checks that the deployed `__version__` matches source. This replaces hand-copying and keeps
-source ↔ install from drifting between releases.
+It **reinstalls the package into the install's venv** (`pip install --force-reinstall --no-deps`),
+which is what `python -m neuron` actually imports (site-packages) — not a loose copy of `src\`
+that nothing loads. `--force-reinstall` also beats the "same `__version__` → pip skips" trap, so
+identical-version code still lands. It never touches the install's `.venv` interpreter, `graphs\`
+or `logs\`, verifies by importing `neuron.server` **from the venv**, and confirms the installed
+`__version__` matches source. This replaces hand-copying and keeps source ↔ install from drifting
+between releases. (`-Prune` is now a no-op — a wheel reinstall already replaces stale files.)
 
 ## License
 
