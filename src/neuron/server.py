@@ -24,9 +24,10 @@ TURSO_ENGINE = _db.LOCAL_TURSO_ENGINE
 
 from mcp.server import Server
 from mcp.server.lowlevel import NotificationOptions
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent, ServerCapabilities, ToolsCapability
+from mcp.types import Tool, TextContent, ServerCapabilities, ToolsCapability, Resource
 
 # ---------------------------------------------------------------------------
 # Imports from models (breaks circular import with registry.py)
@@ -1000,7 +1001,102 @@ _domain_signal: dict = {
     "count": 0,       # consecutive turns signaling that domain
 }
 
+# ---------------------------------------------------------------------------
+# Operating contract served automatically to every client
+# ---------------------------------------------------------------------------
+# Neuron's skills only help if the model actually follows them. Instead of hoping
+# each client is configured to load skill files, the server delivers the guidance
+# itself on two near-zero-cost channels:
+#   1. INSTRUCTIONS — a short signpost injected ONCE at the MCP handshake (below):
+#      always present, states the per-turn loop and points at the full playbook.
+#   2. RESOURCES — the four skill files at stable neuron://skill/... URIs, read on
+#      demand (zero standing token cost until a client opens one).
+# The tool outputs themselves also re-teach the loop (see pre_turn/store_turn), so
+# a model that skipped the manual is still funnelled onto the right path.
+
+SIGNPOST = (
+    "Neuron is your persistent semantic memory across turns. Use it on every "
+    "substantive turn:\n"
+    "1. BEFORE replying: call pre_turn(topic, keywords) and fold the returned "
+    "context silently into your reasoning (do not announce the tool).\n"
+    "2. AFTER replying: call store_turn(topic, keywords, links) to persist what is "
+    "new — curate concept nouns, not verbs; typed links; never a self-link. Use "
+    "auto(text) only as a cheap fallback.\n"
+    "Skip both on procedural turns (ack/thanks/yes-no); skip pre_turn when the "
+    "graph is empty.\n"
+    "Full playbook on demand: call the `help` tool, or read resource "
+    "neuron://skill/auto-context (curation patterns: neuron://skill/curated)."
+)
+
+# Skill files shipped inside the wheel (see pyproject package-data). Each is
+# exposed as an MCP resource; `parts` is the importlib.resources path under the
+# `neuron` package.
+_SKILLS: dict[str, dict] = {
+    "neuron://skill/auto-context": {
+        "parts": ("skills", "auto-context.md"),
+        "name": "neuron-auto-context",
+        "description": "PRE/POST per-turn workflow for MCP clients — the recommended playbook.",
+    },
+    "neuron://skill/curated": {
+        "parts": ("skills", "neuron-curated-memory", "SKILL.md"),
+        "name": "neuron-curated-memory",
+        "description": "How to curate turns so the graph stays clean: concept nouns, typed links, no self-links.",
+    },
+    "neuron://skill/base": {
+        "parts": ("skills", "SKILL_base.md"),
+        "name": "neuron-base",
+        "description": "Compact reference / fallback for clients without MCP tool access.",
+    },
+    "neuron://skill/full": {
+        "parts": ("skills", "SKILL_full.md"),
+        "name": "neuron-full",
+        "description": "Full reference with all modules and the JSON export format.",
+    },
+}
+
+
+def _read_skill(parts: tuple[str, ...]) -> str:
+    """Read a packaged skill file via importlib.resources (works from the wheel).
+
+    Mirrors registry.py's seed-DB loading. Falls back to the repo-root ``skills/``
+    copy when running from a bare source checkout without the packaged copy."""
+    from importlib.resources import files
+    try:
+        return files("neuron").joinpath(*parts).read_text(encoding="utf-8")
+    except Exception:
+        # Source checkout without a packaged copy: parts[0] == "skills" already.
+        root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # repo root
+        with open(os.path.join(root, *parts), encoding="utf-8") as fh:
+            return fh.read()
+
+
 app = Server("neuron", version=__version__)   # single source of truth: neuron/__init__.py
+
+
+# ---------------------------------------------------------------------------
+# MCP resources — the "door": skills reachable at stable URIs, read on demand
+# ---------------------------------------------------------------------------
+
+@app.list_resources()
+async def list_resources() -> list[Resource]:
+    """Expose the skill files so any MCP client can navigate to the guidance."""
+    return [
+        Resource(
+            uri=uri,                       # AnyUrl coerces the str (host_required=False)
+            name=meta["name"],
+            description=meta["description"],
+            mimeType="text/markdown",
+        )
+        for uri, meta in _SKILLS.items()
+    ]
+
+
+@app.read_resource()
+async def read_resource(uri) -> list[ReadResourceContents]:
+    meta = _SKILLS.get(str(uri).rstrip("/"))
+    if meta is None:
+        raise ValueError(f"Unknown Neuron resource: {uri}")
+    return [ReadResourceContents(content=_read_skill(meta["parts"]), mime_type="text/markdown")]
 
 
 # ---------------------------------------------------------------------------
@@ -1236,7 +1332,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="auto",
-            description="Complete auto-pipeline: extract, detect topic shift, auto-link, save turn, return context. No parameters required.",
+            description="POST fallback (0-token): one-shot extract + topic-shift + auto-link + save. Prefer a curated store_turn when you can pick the concepts yourself; use auto only for throwaway turns.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1341,7 +1437,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="help",
-            description="Show every Neuron command with a one-line explanation of what it does.",
+            description="Show every Neuron command (one line each) plus how to use Neuron well. Call once at the start if unsure; full playbook: resource neuron://skill/auto-context.",
             inputSchema={"type": "object", "properties": {}},
         ),
     ]
@@ -1582,6 +1678,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=(
             f"Turn {turn} saved. Nodes: {len(g.nodes)}, Links: {len(g.links)}"
             + (f", pruned: {removed}" if removed else "")
+            + "\n→ if the loaded context helped this turn, call confirm(keywords); "
+              "start the next turn with pre_turn."
         ))]
 
     if name == "get_context":
@@ -1977,7 +2075,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             parts_pt.append(f"(from:{inh_pt})")
         ctx_text_pt = " | ".join(parts_pt) if parts_pt else "no context"
         out_pt = f"{status_line}\n{ctx_text_pt}"
-        return [TextContent(type="text", text=out_pt[:char_budget_pt])]
+        # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
+        # so the hint is always present and never truncated away (~15 tokens).
+        out_pt = out_pt[:char_budget_pt] + (
+            "\n→ next: fold this context into your reply silently, then call "
+            "store_turn(topic, keywords, links) to persist the turn."
+        )
+        return [TextContent(type="text", text=out_pt)]
 
     if name == "confirm":
         keywords = [str(k) for k in arguments.get("keywords", [])]
@@ -2072,6 +2176,9 @@ async def main() -> None:
             InitializationOptions(
                 server_name="neuron",
                 server_version=__version__,
+                # The signpost: injected once at the handshake, present for the
+                # whole session on every client that surfaces server instructions.
+                instructions=SIGNPOST,
                 capabilities=app.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},

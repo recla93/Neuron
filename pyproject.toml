@@ -56,6 +56,9 @@ where = ["src"]
 [tool.setuptools.dynamic]
 version = {attr = "neuron.__version__"}
 
-# Ship the seed knowledge DB inside the wheel (loaded via importlib.resources).
+# Ship the seed knowledge DB AND the skill files inside the wheel (both loaded
+# via importlib.resources). The skills are the source the MCP server serves as
+# `instructions` + resources, so they MUST travel in the package, not just at repo
+# root. `skills/*/*.md` covers the nested neuron-curated-memory/SKILL.md.
 [tool.setuptools.package-data]
-neuron = ["data/*.db"]
+neuron = ["data/*.db", "skills/*.md", "skills/*/*.md"]
