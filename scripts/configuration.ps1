@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Neuron - Configuration Center (interactive, arrow-key menu).
 .DESCRIPTION
