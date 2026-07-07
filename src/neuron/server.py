@@ -1266,7 +1266,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="vector_search",
-            description="Semantic vector search. Find similar keywords via Turso vector_distance_cos or Python fallback (256-dim feature hashing).",
+            description="Semantic vector search. Find similar keywords via Turso vector_distance_cos or a Python cosine fallback (384-dim fastembed all-MiniLM-L6-v2 embeddings).",
             inputSchema={
                 "type": "object",
                 "properties": {
