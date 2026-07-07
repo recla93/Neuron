@@ -15,6 +15,7 @@ installer) is supported via flags:
 
     python scripts/connect_turso.py --url libsql://... --token *** --yes
     python scripts/connect_turso.py --check-only        # test, never write
+    python scripts/connect_turso.py --show-token        # token entry VISIBLE, to verify a paste
 
 Exit codes: 0 = connection OK (and saved, unless --check-only), 1 = failure.
 
@@ -45,6 +46,17 @@ _PROBE_TABLE = "_neuron_conn_probe"
 def _mask(token: str) -> str:
     """Render a token safe to display: only its length, never its content."""
     return f"<{len(token)} chars>" if token else "<empty>"
+
+
+def _preview(token: str) -> str:
+    """A verifiable-but-guarded preview: head…tail + length, so a user can
+    confirm they pasted the right value without splashing the whole secret on
+    screen. For very short strings just show the length."""
+    if not token:
+        return "<empty>"
+    if len(token) <= 24:
+        return f"<{len(token)} chars>"
+    return f"{token[:12]}…{token[-8:]}  ({len(token)} chars)"
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +247,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yes", action="store_true", help="Save without asking for confirmation.")
     parser.add_argument("--check-only", action="store_true",
                         help="Only test the connection; never write .env.")
+    parser.add_argument("--show-token", action="store_true",
+                        help="Mostra il token mentre lo incolli (input visibile, non "
+                             "nascosto) così puoi verificarlo. Default: nascosto.")
     args = parser.parse_args(argv)
 
     url = (args.url or "").strip() or input("Turso database URL (libsql://...): ").strip()
     token = (args.token or "").strip()
     if not token:
-        token = getpass.getpass("Turso auth token (hidden): ").strip()
+        if args.show_token:
+            # Visible entry: the whole point is to SEE what got pasted, since a
+            # hidden prompt hides a mangled paste (wrapped/truncated token).
+            token = input("Turso auth token (visibile): ").strip()
+        else:
+            token = getpass.getpass("Turso auth token (nascosto, usa --show-token per vederlo): ").strip()
 
     # Strip stray whitespace/control chars ANYWHERE (not just the ends): a hidden
     # newline in the token is what makes every scheme fail with a header-injection
@@ -267,7 +287,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"\nTesting connection to: {url}")
-    print(f"  token: {_mask(token)}  (never displayed or logged)")
+    if args.show_token:
+        # Explicit opt-in: echo the full token so it can be checked char-by-char.
+        print(f"  token: {token}")
+    else:
+        print(f"  token: {_preview(token)}  (usa --show-token per vederlo intero)")
     ok, working_url, msg = probe_connection(url, token)
     print(f"  {'✅' if ok else '❌'} {msg}")
     if not ok:
