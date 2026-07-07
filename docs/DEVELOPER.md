@@ -675,3 +675,28 @@ between releases. (`-Prune` is now a no-op — a wheel reinstall already replace
 ## License
 
 PolyForm Noncommercial License 1.0.0. See [LICENSE](../LICENSE).
+
+## Consolidation & search scaling (ANN threshold)
+
+Neuron keeps the graph small so search stays fast, rather than reaching for an
+approximate-nearest-neighbour index too early.
+
+**Consolidation.** `neuron consolidate` (or the `consolidate` MCP tool) merges
+near-duplicate concepts (cosine > 0.85, configurable) and archives low-salience
+orphans to a recoverable `_graveyard` table. Enable the automatic pass by setting
+`NS_CONSOLIDATE_AUTO=1` — it then runs every 20 turns after a save. Merges are
+salience-aware (`protect_salience`) so important nodes are never absorbed, and
+everything is recoverable from `_graveyard`.
+
+**Search cost today.** Vector search is a linear scan: `vector_distance_cos` in
+SQL on the Turso tiers, a Python cosine loop on the plain-sqlite tier. Cost is
+O(N) per query in the *active context* (search is context-scoped, so N is the
+nodes of one context, not the whole store). Missing vectors are computed once and
+cached/persisted (never re-embedded per search).
+
+**When to introduce an ANN index.** Stay on the linear scan until a single
+context regularly exceeds **~10–20k nodes** and query latency becomes noticeable.
+At that point add an approximate index on `node_vectors` (libSQL/Turso
+`libsql_vector_idx` / DiskANN) to move from O(N) to sub-linear search. Before then
+it is over-engineering: pruning + consolidation + context scoping keep N well
+under that range for normal use.

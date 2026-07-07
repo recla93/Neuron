@@ -32,7 +32,13 @@ TANGENTIAL_EXPIRY_TURNS  = 5
 WEIGHT_ORDER             = {"strong": 3, "medium": 2, "tangential": 1}
 SALIENCE_DECAY_THRESHOLD = 5
 SALIENCE_DECAY_AMOUNT    = 1
-VECTOR_DIM               = 384
+# Embedding dimension. Default 384 (fastembed all-MiniLM-L6-v2 and the common
+# 384-dim multilingual models). Overridable via NS_EMBED_DIM for a model with a
+# different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
+VECTOR_DIM               = int(os.environ.get("NS_EMBED_DIM", "384"))
+# Nome del modello di embedding attivo (deve combaciare con i vettori nello
+# store: vettori di modelli diversi non sono confrontabili — vedi load_sqlite).
+EMBED_MODEL              = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2").strip()
 MAX_NODES                = 500   # evict lowest-salience nodes beyond this cap
 
 # ---------------------------------------------------------------------------
@@ -57,6 +63,14 @@ def _get_vector(text: str) -> list[float]:
 # ---------------------------------------------------------------------------
 # Vector helpers
 # ---------------------------------------------------------------------------
+
+def _cos(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length vectors (0 if a norm is 0)."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = (sum(x * x for x in a) ** 0.5) or 1.0
+    nb = (sum(y * y for y in b) ** 0.5) or 1.0
+    return dot / (na * nb)
+
 
 def pack_vector(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
@@ -186,6 +200,9 @@ class Graph:
     _dirty_links:   set = field(default_factory=set)   # link keys to upsert
     _removed_nodes: set = field(default_factory=set)   # keywords to delete
     _removed_links: set = field(default_factory=set)   # link keys to delete
+    # Archived nodes (merged near-duplicates / dropped orphans) — recoverable,
+    # flushed to the _graveyard table on save, then cleared. (E1.2/E1.3)
+    _graveyard: list = field(default_factory=list)
     # Save mode for the next write:
     #   _needs_full_write  — upsert EVERY in-memory row (not just the dirty delta),
     #     additively (no deletes). Needed when the store may be missing rows we
@@ -249,6 +266,14 @@ class Graph:
         key = self._link_key(link)
         self._dirty_links.add(key)
         self._removed_links.discard(key)
+        self._dirty = True
+
+    def mark_vector_dirty(self, keyword: str) -> None:
+        """Record that a node's vector must be (re)written on the next save — e.g.
+        when it was computed lazily during search because it was missing on disk,
+        so the same vector is never recomputed again (E1.1)."""
+        kw = self._norm(keyword)
+        self._dirty_vectors.add(kw)
         self._dirty = True
 
     def mark_full_rewrite(self) -> None:
@@ -516,6 +541,117 @@ class Graph:
                          f"(SELECT MIN(id) FROM {table} GROUP BY {dedupe_group})")
             conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table}({cols})")
 
+    # ------------------------------------------------------------------
+    # Consolidation (E1.2) — merge near-duplicates, archive to _graveyard
+    # ------------------------------------------------------------------
+
+    def consolidate(self, sim_threshold: float = 0.85,
+                    protect_salience: "int | None" = None,
+                    turn: "int | None" = None,
+                    drop_orphans: bool = False,
+                    orphan_salience: int = 2,
+                    orphan_inactive: int = 10) -> list[dict]:
+        """Merge near-duplicate nodes (cosine > sim_threshold) into a survivor.
+
+        Survivor = shorter keyword (tie -> higher salience). Salience is summed,
+        links are rewired+deduped, self-loops dropped, and the absorbed node is
+        archived into ``self._graveyard`` (recoverable). Nodes whose salience is
+        >= protect_salience are never absorbed (preserve what matters). Idempotent:
+        a second call after the duplicates are gone is a no-op. Returns a report.
+        """
+        from itertools import combinations
+        report: list[dict] = []
+        turn = self.turn_count if turn is None else turn
+        guard = 0
+        merged_any = True
+        while merged_any and guard < 10000:
+            merged_any = False
+            guard += 1
+            nodes = [n for n in self.nodes if n.vector is not None]
+            found = None
+            for a, b in combinations(nodes, 2):
+                sim = _cos(a.vector, b.vector)
+                if sim <= sim_threshold:
+                    continue
+                if (len(a.keyword), -a.salience) <= (len(b.keyword), -b.salience):
+                    survivor, absorbed = a, b
+                else:
+                    survivor, absorbed = b, a
+                if protect_salience is not None and absorbed.salience >= protect_salience:
+                    continue
+                found = (survivor, absorbed, sim)
+                break
+            if found:
+                self._merge_into(*found, turn, report)
+                merged_any = True
+        if drop_orphans:
+            self._drop_orphans(orphan_salience, orphan_inactive, turn, report)
+        if report:
+            # merge rewrites node/link identity in bulk -> reconcile on next save
+            self.mark_full_rewrite()
+        return report
+
+    def _merge_into(self, survivor: Node, absorbed: Node, sim: float,
+                    turn: int, report: list[dict]) -> None:
+        survivor.salience += absorbed.salience
+        a, s = absorbed.keyword, survivor.keyword
+        for lk in self.links:
+            if lk.source == a:
+                lk.source = s
+            if lk.target == a:
+                lk.target = s
+        # drop self-loops, then dedup links by natural key
+        seen: set = set()
+        uniq: list = []
+        for lk in self.links:
+            if lk.source == lk.target:
+                continue
+            key = self._link_key(lk)
+            if key not in seen:
+                seen.add(key)
+                uniq.append(lk)
+        self.links = uniq
+        self._graveyard.append({
+            "keyword": a, "salience": absorbed.salience, "domain": absorbed.domain,
+            "reason": f"merged into {s} (cos={round(sim, 3)})", "turn": turn,
+        })
+        self.nodes = [n for n in self.nodes if n.keyword != a]
+        self._rebuild_node_map()
+        self.mark_node_dirty(s)
+        report.append({"kept": s, "absorbed": a, "cos": round(sim, 3)})
+
+    def _drop_orphans(self, orphan_salience: int, inactive_turns: int,
+                      turn: int, report: list[dict]) -> None:
+        """Archive low-salience nodes with no *active* link (E1.3). A node is an
+        orphan if salience < orphan_salience AND it has no incident link, or all
+        its incident links have been inactive for >= inactive_turns. Archived to
+        _graveyard (recoverable); its dangling links are dropped too."""
+        incident: dict[str, list[int]] = {}
+        for lk in self.links:
+            incident.setdefault(lk.source, []).append(lk.inactive_turns)
+            incident.setdefault(lk.target, []).append(lk.inactive_turns)
+        drop: set[str] = set()
+        for nd in self.nodes:
+            if nd.salience >= orphan_salience:
+                continue
+            inc = incident.get(nd.keyword)
+            if not inc or min(inc) >= inactive_turns:
+                drop.add(nd.keyword)
+        if not drop:
+            return
+        for kw in drop:
+            nd = self._node_map.get(kw)
+            self._graveyard.append({
+                "keyword": kw, "salience": nd.salience if nd else 0,
+                "domain": nd.domain if nd else "",
+                "reason": f"orphan drop (salience<{orphan_salience}, inactive>={inactive_turns})",
+                "turn": turn,
+            })
+            report.append({"dropped": kw, "salience": nd.salience if nd else 0})
+        self.links = [lk for lk in self.links if lk.source not in drop and lk.target not in drop]
+        self.nodes = [nd for nd in self.nodes if nd.keyword not in drop]
+        self._rebuild_node_map()
+
     def save_sqlite(self, path: str, *, context: str = "default", force: bool = False) -> None:
         """Persist to SQLite/Turso, scoped to ``context``. Skips the write
         entirely if the graph is not dirty (unless ``force=True``).
@@ -591,7 +727,23 @@ class Graph:
                 ("last_sentiment", self.last_sentiment),
                 ("last_topic",     self.last_topic),
                 ("last_keywords",  json.dumps(self.last_keywords)),
+                ("embed_model",    EMBED_MODEL),
+                ("embed_dim",      str(VECTOR_DIM)),
             ])
+
+            # Flush archived nodes (E1.2/E1.3) — recoverable, then clear the buffer.
+            if self._graveyard:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS _graveyard "
+                    "(context TEXT, keyword TEXT, salience INTEGER, domain TEXT, "
+                    "reason TEXT, turn INTEGER)")
+                conn.executemany(
+                    "INSERT INTO _graveyard (context, keyword, salience, domain, reason, turn) "
+                    "VALUES (?,?,?,?,?,?)",
+                    [(context, e["keyword"], int(e.get("salience", 0)), e.get("domain", ""),
+                      e.get("reason", ""), int(e.get("turn", 0))) for e in self._graveyard],
+                )
+                self._graveyard = []
 
             if self._needs_diff_delete:
                 self._save_reconcile(conn, context)      # merge: absolute + diff-delete
@@ -698,6 +850,26 @@ class Graph:
             except (json.JSONDecodeError, TypeError):
                 self.last_keywords = []
 
+            # Guard modello<->store: i vettori salvati con un modello diverso vivono
+            # in uno spazio diverso e NON sono confrontabili col modello attivo. Se
+            # non combaciano, ignora i vettori salvati (verranno ricalcolati col
+            # modello attivo) e avvisa di rigenerare lo store con scripts/reembed.py.
+            _stored_model = meta.get("embed_model")
+            _stored_dim   = meta.get("embed_dim")
+            _vec_incompatible = bool(
+                (_stored_model and _stored_model != EMBED_MODEL)
+                or (_stored_dim and _stored_dim != str(VECTOR_DIM))
+            )
+            if _vec_incompatible:
+                import sys as _sys
+                print(
+                    f"neuron: store '{path}' ha vettori del modello '{_stored_model}' "
+                    f"(dim {_stored_dim}) ma il modello attivo e' '{EMBED_MODEL}' "
+                    f"(dim {VECTOR_DIM}). Vettori salvati IGNORATI (ricalcolati col "
+                    f"modello attivo). Rigenera: python scripts/reembed.py",
+                    file=_sys.stderr,
+                )
+
             cols     = [c[1] for c in conn.execute("PRAGMA table_info(nodes)").fetchall()]
             has_extra   = "entities" in cols
             # Scope by context only when the store has the column — the seed DB
@@ -727,7 +899,9 @@ class Graph:
             # Load vectors (scoped by context when available)
             vec_map: dict[str, list[float]] = {}
             try:
-                if has_context:
+                if _vec_incompatible:
+                    vrows = []
+                elif has_context:
                     vrows = conn.execute("SELECT keyword, embedding FROM node_vectors "
                                          "WHERE context=?", (context,))
                 else:

@@ -736,23 +736,48 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph: Graph 
 
 
 # ---------------------------------------------------------------------------
-# Vector embedding — lazy-loaded fastembed (384-dim)
+# Vector embedding — lazy-loaded fastembed.
 # ---------------------------------------------------------------------------
+# Model is configurable via NS_EMBED_MODEL (default: the English all-MiniLM-L6-v2,
+# 384-dim — kept as default for backward compatibility with existing stores). To
+# cover Italian/other languages pick a multilingual 384-dim model (e.g.
+# paraphrase-multilingual-MiniLM-L12-v2) and re-embed the store (scripts/reembed.py).
+# Vectors from different models are NOT comparable, so changing the model requires
+# a full re-embed; the dimension is validated on first use against VECTOR_DIM.
+
+NS_EMBED_MODEL = os.environ.get(
+    "NS_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+).strip()
 
 _embedder: TextEmbedding | None = None
+_embed_dim_checked = False
 
 
 def _get_embedder() -> TextEmbedding:
     """Lazy-load the embedding model on first use (avoids slow startup)."""
     global _embedder
     if _embedder is None:
-        _embedder = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+        _embedder = TextEmbedding(NS_EMBED_MODEL)
     return _embedder
 
 
 def _get_embedding(text: str) -> list[float]:
-    """384-dim semantic embedding via fastembed (all-MiniLM-L6-v2)."""
-    return list(_get_embedder().embed([text]))[0]
+    """Semantic embedding via fastembed (model = NS_EMBED_MODEL, dim = VECTOR_DIM).
+
+    On the first call, verify the model's output width matches VECTOR_DIM — a
+    mismatch means the configured model and NS_EMBED_DIM disagree, which would
+    silently corrupt vector search (cosine across incompatible spaces)."""
+    global _embed_dim_checked
+    vec = list(_get_embedder().embed([text]))[0]
+    if not _embed_dim_checked:
+        _embed_dim_checked = True
+        if len(vec) != VECTOR_DIM:
+            raise RuntimeError(
+                f"Embedding model '{NS_EMBED_MODEL}' produces {len(vec)}-dim vectors "
+                f"but VECTOR_DIM={VECTOR_DIM}. Set NS_EMBED_DIM={len(vec)} and re-embed "
+                f"the store (scripts/reembed.py), or choose a {VECTOR_DIM}-dim model."
+            )
+    return vec
 
 
 
@@ -824,8 +849,13 @@ def _search_embeddings(
 
     scores: list[tuple[str, float]] = []
     for nd in g.nodes:
-        v = nd.vector if nd.vector is not None else _get_embedding(nd.keyword)
-        sim = sum(qi * vi for qi, vi in zip(query_vec, v))
+        if nd.vector is None:
+            # Missing vector: compute it ONCE, cache in memory and mark it dirty so
+            # the next save persists it — the old code re-embedded on every search
+            # (O(N) embeddings per query on the sqlite fallback tier). (E1.1)
+            nd.vector = _get_embedding(nd.keyword)
+            g.mark_vector_dirty(nd.keyword)
+        sim = sum(qi * vi for qi, vi in zip(query_vec, nd.vector))
         if sim > 0:
             scores.append((nd.keyword, round(sim, 4)))
     scores.sort(key=lambda x: -x[1])
@@ -986,6 +1016,10 @@ def _active_db_path() -> str:
 
 dedup_enabled = True
 flash_enabled = True
+# Auto-consolidation: se attivo (NS_CONSOLIDATE_AUTO), lo store viene consolidato
+# (merge near-duplicati + drop orfani) ogni CONSOLIDATE_EVERY turni. (E1.4)
+consolidate_auto = os.environ.get("NS_CONSOLIDATE_AUTO", "").strip().lower() in ("1","true","yes","on")
+CONSOLIDATE_EVERY = 20
 
 # ---------------------------------------------------------------------------
 # Context switch hysteresis
@@ -1310,6 +1344,19 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
+                },
+            },
+        ),
+        Tool(
+            name="consolidate",
+            description="Consolidate the graph: merge near-duplicate concepts (cosine) and archive low-salience orphans to a recoverable _graveyard. Keeps the memory clean; safe to run periodically.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
+                    "merge": {"type": "boolean", "description": "Merge near-duplicate nodes (default true).", "default": True},
+                    "drop_orphans": {"type": "boolean", "description": "Archive low-salience orphan nodes (default true).", "default": True},
+                    "sim_threshold": {"type": "number", "description": "Cosine threshold for merging (default 0.85).", "default": 0.85},
                 },
             },
         ),
@@ -1722,6 +1769,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         g.increment_inactivity(set(keywords))
         removed = g.prune_tangential()
         _g.save(ctx or None)
+        if consolidate_auto and g.turn_count % CONSOLIDATE_EVERY == 0:
+            g.consolidate(drop_orphans=True)   # merge near-duplicati + orfani
+            _g.save(ctx or None)
 
         return [TextContent(type="text", text=(
             f"Turn {turn} saved. Nodes: {len(g.nodes)}, Links: {len(g.links)}"
@@ -1889,6 +1939,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         removed = g.prune_tangential()
         _g.save(ctx or None)
         return [TextContent(type="text", text=f"Pruned {removed} tangential links.")]
+
+    if name == "consolidate":
+        do_merge = arguments.get("merge", True)
+        report = g.consolidate(
+            sim_threshold=float(arguments.get("sim_threshold", 0.85)) if do_merge else 2.0,
+            drop_orphans=arguments.get("drop_orphans", True),
+        )
+        _g.save(ctx or None)
+        merged = [r for r in report if "kept" in r]
+        dropped = [r for r in report if "dropped" in r]
+        return [TextContent(type="text", text=json.dumps({
+            "merged": merged, "dropped": [r["dropped"] for r in dropped],
+            "nodes": len(g.nodes), "links": len(g.links),
+        }))]
 
     if name == "dedup":
         dedup_enabled = not dedup_enabled

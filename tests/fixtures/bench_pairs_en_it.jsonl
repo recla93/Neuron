@@ -1,0 +1,25 @@
+{"type": "doc", "id": "attention", "text": "attention mechanism in transformer neural networks"}
+{"type": "doc", "id": "backprop", "text": "backpropagation and gradient descent for training models"}
+{"type": "doc", "id": "vector-search", "text": "semantic vector search with cosine similarity"}
+{"type": "doc", "id": "sql-injection", "text": "SQL injection vulnerability and input sanitization"}
+{"type": "doc", "id": "async-await", "text": "asynchronous programming with async await and event loops"}
+{"type": "doc", "id": "structured-concurrency", "text": "structured concurrency and scoped task cancellation"}
+{"type": "doc", "id": "docker", "text": "containerizing applications with Docker images and layers"}
+{"type": "doc", "id": "pizza-dough", "text": "leavening pizza dough with slow fermentation and hydration"}
+{"type": "doc", "id": "espresso", "text": "extracting espresso coffee with pressure and grind size"}
+{"type": "doc", "id": "photosynthesis", "text": "photosynthesis converts light into chemical energy in plants"}
+{"type": "doc", "id": "compound-interest", "text": "compound interest and exponential growth of savings"}
+{"type": "doc", "id": "graph-memory", "text": "persistent semantic memory as a concept graph with links"}
+{"type": "query", "lang": "en", "target": "attention", "text": "how does self attention work in transformers"}
+{"type": "query", "lang": "it", "target": "attention", "text": "come funziona il meccanismo di attenzione nei transformer"}
+{"type": "query", "lang": "en", "target": "vector-search", "text": "find similar items using embeddings and cosine"}
+{"type": "query", "lang": "it", "target": "vector-search", "text": "ricerca semantica di elementi simili con la similarità coseno"}
+{"type": "query", "lang": "it", "target": "sql-injection", "text": "vulnerabilità di iniezione SQL e sanificazione dell'input"}
+{"type": "query", "lang": "en", "target": "async-await", "text": "event loop and awaiting coroutines"}
+{"type": "query", "lang": "it", "target": "async-await", "text": "programmazione asincrona con attesa delle coroutine"}
+{"type": "query", "lang": "it", "target": "structured-concurrency", "text": "cancellazione strutturata dei task con ambito"}
+{"type": "query", "lang": "it", "target": "docker", "text": "creare immagini di container con i layer"}
+{"type": "query", "lang": "it", "target": "pizza-dough", "text": "lievitazione lenta dell'impasto della pizza e idratazione"}
+{"type": "query", "lang": "en", "target": "espresso", "text": "coffee extraction pressure and grind"}
+{"type": "query", "lang": "it", "target": "compound-interest", "text": "interesse composto e crescita esponenziale del risparmio"}
+{"type": "query", "lang": "it", "target": "graph-memory", "text": "memoria semantica persistente come grafo di concetti"}
