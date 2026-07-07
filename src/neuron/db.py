@@ -20,11 +20,26 @@ of importing sqlite3/turso directly, so the three tiers stay interchangeable.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3 as _sqlite3
 from typing import Any, Sequence
 
-TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL", "").strip()
-TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+# Strip whitespace/control chars ANYWHERE in the value, not just at the ends.
+# The auth token becomes the HTTP header ``Authorization: Bearer <token>``, and
+# the HTTP stack rejects any header value containing a control char (\r/\n/\0)
+# as a header-injection risk — so a token with a hidden newline (wrapped on
+# copy-paste, or a CRLF .env) makes EVERY connection scheme fail identically.
+# ``str.strip()`` only cleans the ends and would let an internal line break
+# through; ``_clean_env`` removes them wherever they are.
+_CTRL_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]")
+
+
+def _clean_env(name: str) -> str:
+    return _CTRL_WS_RE.sub("", os.environ.get(name, ""))
+
+
+TURSO_DATABASE_URL = _clean_env("TURSO_DATABASE_URL")
+TURSO_AUTH_TOKEN = _clean_env("TURSO_AUTH_TOKEN")
 REMOTE_TURSO = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
 
 try:

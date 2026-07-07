@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import re
 import sys
 
 # Make Unicode output safe on legacy Windows consoles (cp1252): reconfigure
@@ -44,6 +45,62 @@ _PROBE_TABLE = "_neuron_conn_probe"
 def _mask(token: str) -> str:
     """Render a token safe to display: only its length, never its content."""
     return f"<{len(token)} chars>" if token else "<empty>"
+
+
+# ---------------------------------------------------------------------------
+# Credential sanitising / validation
+# ---------------------------------------------------------------------------
+# A stray newline/CR inside the auth token is the classic cause of "every
+# scheme failed": the token goes into the HTTP header ``Authorization: Bearer
+# <token>``, and the underlying HTTP stack REJECTS any header value containing a
+# control char (\r/\n/\0) to prevent header injection. Since the bad header is
+# built the same way for libsql://, wss://, ws:// and https://, they all fail
+# identically — which looks like a connection problem but is really a malformed
+# credential (usually a token that got wrapped across lines on copy-paste, or a
+# .env value with CRLF/quotes). ``.strip()`` only cleans the ends, so an
+# *internal* line break slips through; here we strip whitespace/control chars
+# everywhere, then validate what remains.
+
+# Anything that is whitespace or an ASCII/Unicode control character.
+_CTRL_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]")
+# A Turso JWT is base64url with '.' separators; allow base64 '=' padding too.
+_TOKEN_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._~+/=-]+$")
+# RFC-3986-ish set: enough for libsql://host:port/path?query URLs.
+_URL_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$")
+_URL_SCHEMES = ("libsql", "wss", "ws", "https", "http")
+
+
+def sanitize_credential(value: str) -> str:
+    """Drop stray whitespace/control chars anywhere in the value (not just the
+    ends). This removes the hidden \\r/\\n that breaks the auth header while
+    leaving the real credential content untouched."""
+    return _CTRL_WS_RE.sub("", value or "")
+
+
+def validate_url(url: str) -> str | None:
+    """Return a human error message if the URL is unusable, else ``None``."""
+    if not url:
+        return "URL vuoto."
+    if not _URL_ALLOWED_RE.match(url):
+        bad = sorted({c for c in url if not _URL_ALLOWED_RE.match(c)})
+        return f"URL contiene caratteri non validi: {bad!r}."
+    if "://" not in url:
+        return "URL senza schema (atteso libsql://… o https://…)."
+    scheme = url.split("://", 1)[0].lower()
+    if scheme not in _URL_SCHEMES:
+        return f"schema '{scheme}' non supportato (usa {' / '.join(_URL_SCHEMES)})."
+    return None
+
+
+def validate_token(token: str) -> str | None:
+    """Return a human error message if the token is unusable, else ``None``.
+    Never includes the token content in the message."""
+    if not token:
+        return "token vuoto."
+    if not _TOKEN_ALLOWED_RE.match(token):
+        bad = sorted({c for c in token if not _TOKEN_ALLOWED_RE.match(c)})
+        return f"token contiene caratteri non validi: {bad!r}."
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +242,28 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         token = getpass.getpass("Turso auth token (hidden): ").strip()
 
+    # Strip stray whitespace/control chars ANYWHERE (not just the ends): a hidden
+    # newline in the token is what makes every scheme fail with a header-injection
+    # rejection. Report if the cleanup actually removed something, so the user
+    # learns their pasted value was malformed.
+    url_clean = sanitize_credential(url)
+    token_clean = sanitize_credential(token)
+    if url_clean != url:
+        print("  ⚠️  rimossi spazi/caratteri di controllo dall'URL.")
+    if token_clean != token:
+        print("  ⚠️  rimossi spazi/caratteri di controllo dal token "
+              "(probabile a-capo nascosto nel copia-incolla).")
+    url, token = url_clean, token_clean
+
     if not url or not token:
         print("Both a URL and a token are required. Aborting.", file=sys.stderr)
+        return 1
+
+    err = validate_url(url) or validate_token(token)
+    if err:
+        print(f"Credenziali non valide: {err}", file=sys.stderr)
+        print("  Ricontrolla di aver incollato URL e token senza spazi o a-capo interni.",
+              file=sys.stderr)
         return 1
 
     print(f"\nTesting connection to: {url}")
