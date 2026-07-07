@@ -48,4 +48,5 @@ jobs:
           /tmp/venv/bin/pip install dist/*.whl
           /tmp/venv/bin/python -c "import neuron; print('neuron', neuron.__version__)"
       - name: Skills are packaged inside the wheel
-        run: python -c "import zipfile, glob; w = glob.glob('dist/*.whl')[0]; names = zipfile.ZipFile(w).namelist(); md = [n for n in names if '/neuron/skills/' in n and n.endswith('.md')]; assert len(md) >= 5, f'skills missing from wheel: {md}'; print('skills packaged OK:', len(md))"
+        run: |
+          python -c "import zipfile, glob; w = glob.glob('dist/*.whl')[0]; names = zipfile.ZipFile(w).namelist(); md = [n for n in names if n.startswith('neuron/skills/') and n.endswith('.md')]; assert len(md) >= 5, f'skills missing from wheel (found {len(md)}): {md}'; print('skills packaged OK:', len(md))"
