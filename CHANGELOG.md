@@ -26,6 +26,9 @@ Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and t
 - **Hebbian reinforcement** (E2.1): links whose endpoints co-occur in a turn accrue a
   `co_activation_count` (≤1 per 2 turns) and get promoted `tangential→medium→strong` at 3/8 —
   associations that keep firing together wire together. `Graph.reinforce_coactivation()`.
+- **Composite salience-aware retrieval** (E2.2): `get_context` ranks nodes by
+  `sim·0.5 + salience·0.3 + recency·0.2` (`RANK_WEIGHTS`, tunable) — retrieve what matters, not
+  only what matches. Auto-consolidation now protects high-salience nodes from being merged.
 - **Configurable embedding model** via `NS_EMBED_MODEL`; `VECTOR_DIM` from `NS_EMBED_DIM`,
   dimension guard on first embed (E0.1). Re-embed script `scripts/reembed.py` (E0.3) and
   model↔store coherence guard at load (E0.2). Benchmark harness `scripts/bench_embed.py` (EX.2).

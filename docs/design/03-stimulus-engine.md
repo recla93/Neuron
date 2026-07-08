@@ -90,7 +90,11 @@ motore amplifica anche gli errori. Per questo è Fase 2, dopo 0 e 1.
        CASE atomico di T11; colonna `co_activation_count` persistita (MAX sotto scrittori concorrenti).
        Chiamato in `store_turn` e `auto`. Test: `tests/test_hebbian.py`.
 2. [ ] Implementare `spreading_activation(seed_keywords, k, weights)` in `server.py`/`models.py`.
-3. [ ] Sostituire l'ordinamento di `get_context` col punteggio composito (#5), pesi via costante.
+3. [x] Sostituire l'ordinamento di `get_context` col punteggio composito (#5), pesi via costante.
+       — `_resolve_context` ranca i nodi con `RANK_WEIGHTS["sim"]*cos + ["salience"]*sal_norm +
+       ["recency"]*1/(inactive+1)` (0.5/0.3/0.2, tunable). Sblocca il gate salienza di E1.2: la
+       auto-consolidation ora passa `protect_salience=CONSOLIDATE_PROTECT_SALIENCE` (=8). Test:
+       `tests/test_composite_ranking.py`.
 4. [ ] Unificare i tre flash sotto il motore; selezione dello stimolo top-1/top-2 per compattezza.
 5. [ ] Emettere il blocco-stimolo compatto in **ogni** tool response (piggyback), con budget token.
 6. [ ] Test: co-attivazione rinforza il link giusto; propagazione a 2 hop emerge; salienza alta

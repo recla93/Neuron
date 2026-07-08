@@ -1021,6 +1021,14 @@ flash_enabled = True
 # (merge near-duplicati + drop orfani) ogni CONSOLIDATE_EVERY turni. (E1.4)
 consolidate_auto = os.environ.get("NS_CONSOLIDATE_AUTO", "").strip().lower() in ("1","true","yes","on")
 CONSOLIDATE_EVERY = 20
+# Composite retrieval ranking (ADR-003 #3, E2.2): a node's rank blends semantic
+# similarity to the query, its salience (what matters), and recency — "retrieve
+# what matters, not only what matches". Weights are tunable and sum to 1.0.
+RANK_WEIGHTS = {"sim": 0.5, "salience": 0.3, "recency": 0.2}
+# Now that salience means "what matters" (E2.2), auto-consolidation protects the
+# most-salient nodes from being merged away. Threshold mirrors the Hebbian "strong"
+# bar: a node this reinforced is worth keeping intact. Tunable on real data (ADR-003).
+CONSOLIDATE_PROTECT_SALIENCE = 8
 
 # ---------------------------------------------------------------------------
 # Context switch hysteresis
@@ -1614,20 +1622,27 @@ def _resolve_context(
             deduped.append(lk)
     related_links_sorted = deduped
 
-    # Rank nodes
+    # Rank nodes — composite salience-aware score (ADR-003 #3, E2.2). Blend of
+    # semantic similarity to the query, node salience (normalized), and recency,
+    # so a highly-salient neighbour surfaces even without a direct vector match.
+    sim_map = (
+        {kw: s for kw, s in _search_embeddings(list(search_kws),
+                                               top_n=max(len(g.nodes), 1), graph=g)}
+        if search_kws else {}
+    )
+    max_sal = max((g.get_node(k).salience for k in related_nodes if g.get_node(k)),
+                  default=0) or 1
     node_scores: dict[str, float] = {}
     for nd_kw in related_nodes:
         nd = g.get_node(nd_kw)
         if nd is None:
             continue
-        base = float(nd.salience)
-        recency = 2.0 if (g.turn_count - nd.turn) <= 5 else 0.0
-        link_score = sum(
-            WEIGHT_ORDER.get(lk.weight, 0)
-            for lk in related_links_sorted
-            if lk.source == nd_kw or lk.target == nd_kw
-        )
-        node_scores[nd_kw] = base + recency + link_score * 0.5
+        sim      = sim_map.get(nd_kw, 0.0)
+        salience = nd.salience / max_sal
+        recency  = 1.0 / (max(0, g.turn_count - nd.turn) + 1)
+        node_scores[nd_kw] = (RANK_WEIGHTS["sim"] * sim
+                              + RANK_WEIGHTS["salience"] * salience
+                              + RANK_WEIGHTS["recency"] * recency)
     top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
 
     return related_links_sorted, top_nodes, used_fallback, inherited_ctx, g
@@ -1772,7 +1787,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         removed = g.prune_tangential()
         _g.save(ctx or None)
         if consolidate_auto and g.turn_count % CONSOLIDATE_EVERY == 0:
-            g.consolidate(drop_orphans=True)   # merge near-duplicati + orfani
+            # E2.2: protect high-salience nodes from being merged away.
+            g.consolidate(drop_orphans=True, protect_salience=CONSOLIDATE_PROTECT_SALIENCE)
             _g.save(ctx or None)
 
         return [TextContent(type="text", text=(
