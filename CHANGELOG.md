@@ -26,6 +26,9 @@ Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and t
 - **Hebbian reinforcement** (E2.1): links whose endpoints co-occur in a turn accrue a
   `co_activation_count` (≤1 per 2 turns) and get promoted `tangential→medium→strong` at 3/8 —
   associations that keep firing together wire together. `Graph.reinforce_coactivation()`.
+- **Spreading activation** (E2.3): `Graph.spreading_activation()` propagates activation k hops
+  from seed keywords along links, weighted by (Hebbian) link strength × node salience × per-hop
+  decay — surfaces the strongest association even without a direct vector match. Wired in E2.4.
 - **Composite salience-aware retrieval** (E2.2): `get_context` ranks nodes by
   `sim·0.5 + salience·0.3 + recency·0.2` (`RANK_WEIGHTS`, tunable) — retrieve what matters, not
   only what matches. Auto-consolidation now protects high-salience nodes from being merged.

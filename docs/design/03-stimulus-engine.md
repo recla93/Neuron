@@ -89,7 +89,11 @@ motore amplifica anche gli errori. Per questo è Fase 2, dopo 0 e 1.
        turni, upgrade `tangential→medium` a 3, `medium→strong` a 8, promozione monotòna via il
        CASE atomico di T11; colonna `co_activation_count` persistita (MAX sotto scrittori concorrenti).
        Chiamato in `store_turn` e `auto`. Test: `tests/test_hebbian.py`.
-2. [ ] Implementare `spreading_activation(seed_keywords, k, weights)` in `server.py`/`models.py`.
+2. [x] Implementare `spreading_activation(seed_keywords, k, weights)` in `server.py`/`models.py`.
+       — `Graph.spreading_activation(seeds, k=2, decay=0.5, min_activation=0.01)` (E2.3): walk puro,
+       contributo per hop = `attivazione × (WEIGHT_ORDER/3) × (1 + salience/max_sal) × decay`; la
+       forza-link cresce con l'Hebbian (E2.1). Ritorna i nodi non-seed per attivazione. Cablato ai
+       flash in E2.4. Test: `tests/test_spreading.py`.
 3. [x] Sostituire l'ordinamento di `get_context` col punteggio composito (#5), pesi via costante.
        — `_resolve_context` ranca i nodi con `RANK_WEIGHTS["sim"]*cos + ["salience"]*sal_norm +
        ["recency"]*1/(inactive+1)` (0.5/0.3/0.2, tunable). Sblocca il gate salienza di E1.2: la

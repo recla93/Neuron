@@ -465,6 +465,48 @@ class Graph:
             reverse=True,
         )[:n]
 
+    def spreading_activation(self, seeds, k: int = 2, decay: float = 0.5,
+                             min_activation: float = 0.01) -> list[tuple[str, float]]:
+        """Spread activation from ``seeds`` along links, k hops out (E2.3).
+
+        Each hop's contribution is ``activation × link_strength × salience_factor ×
+        decay``: link_strength comes from the (Hebbian-promoted, E2.1) weight, the
+        salience_factor makes salient nodes act as activation hubs, and ``decay``
+        (<1) plus small ``k`` keep it from flooding. Returns the reached NON-seed
+        nodes ranked by accumulated activation — the top one is the associative
+        stimulus, surfacing even without a direct vector match. Pure graph walk."""
+        seed_set = {self._norm(s) for s in seeds}
+        seed_set = {s for s in seed_set if self.get_node(s) is not None}
+        if not seed_set:
+            return []
+        max_sal = max((nd.salience for nd in self.nodes), default=0) or 1
+        adj: dict[str, list[tuple[str, str]]] = {}
+        for lk in self.links:
+            adj.setdefault(lk.source, []).append((lk.target, lk.weight))
+            adj.setdefault(lk.target, []).append((lk.source, lk.weight))
+
+        activation = {s: 1.0 for s in seed_set}
+        frontier = dict(activation)
+        for _hop in range(k):
+            nxt: dict[str, float] = {}
+            for src, act in frontier.items():
+                for other, weight in adj.get(src, ()):
+                    strength = WEIGHT_ORDER.get(weight, 0) / 3.0
+                    nd = self.get_node(other)
+                    if nd is None or strength == 0:
+                        continue
+                    contrib = act * strength * (1.0 + nd.salience / max_sal) * decay
+                    if contrib < min_activation:
+                        continue
+                    activation[other] = activation.get(other, 0.0) + contrib
+                    nxt[other] = nxt.get(other, 0.0) + contrib
+            frontier = nxt
+            if not frontier:
+                break
+        out = [(kw, round(a, 4)) for kw, a in activation.items() if kw not in seed_set]
+        out.sort(key=lambda x: -x[1])
+        return out
+
     # ------------------------------------------------------------------
     # Decay / pruning
     # ------------------------------------------------------------------
