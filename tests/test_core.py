@@ -944,6 +944,39 @@ class TestSemanticFlashes:
                                         turn=10, graph=g)
             assert "Creative leap" not in out
 
+    # -- E2.4: engine selects top-2 among the three heuristics ---------------
+
+    def test_flashes_capped_at_top_two(self):
+        # All three heuristics fire at once; only the 2 highest-activation are emitted.
+        active_g = Graph()
+        for kw, dom in [("kotlin", "backend"), ("coroutines", "backend"), ("unity", "gaming"),
+                        ("docker", "architecture")]:
+            turn0 = 0 if kw == "docker" else 9      # docker is the dormant one
+            active_g.add_node(Node(keyword=kw, turn=turn0, topic="t", domain=dom,
+                                   sentiment="neutral", salience=5))
+        active_g.add_link(Link(source="kotlin", target="coroutines", link_type="deepening",
+                               weight="strong", rationale="r", created_turn=1, last_active_turn=9))
+        active_g.add_link(Link(source="coroutines", target="unity", link_type="analogy",
+                               weight="medium", rationale="r", created_turn=1, last_active_turn=9))
+        other_g = Graph()
+        other_g.add_node(Node(keyword="spring", turn=1, topic="t", domain="backend",
+                              sentiment="neutral", salience=4))
+
+        def fake_search(kws, top_n=8, graph=None):
+            if graph is other_g:
+                return [("spring", 0.9)]        # cross-domain spark
+            return [("docker", 0.9)]            # dormant pulse (on active_g)
+
+        with self._isolated(search=fake_search):
+            _srv._g._graphs["default"] = active_g
+            _srv._g._graphs["java"] = other_g
+            _srv._g._active = "default"
+            out = _build_context_window(_extraction(["kotlin"], domain="backend"),
+                                        turn=10, graph=active_g)
+            assert "Flash semantici" in out
+            n_flashes = out.count("💤") + out.count("🔗") + out.count("⚡")
+            assert n_flashes == 2       # capped at top-2, not all three
+
     # -- end-to-end structure ------------------------------------------------
 
     def test_window_contains_links_and_nodes(self):

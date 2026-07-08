@@ -652,12 +652,21 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph: Graph 
         overlap = _keyword_overlap(extraction.keywords, g.last_keywords)
         parts.append(f"\nContinuità col turno precedente: {overlap:.0%}")
 
-    # --- Semantic flashes ---
+    # --- Semantic flashes (E2.4) ---
+    # The three heuristics (dormant pulse / cross-domain spark / creative leap)
+    # now GENERATE candidates; the stimulus engine (spreading_activation, E2.3)
+    # SCORES the in-graph ones, and only the top-2 by activation are emitted —
+    # "which association is strongest", not a dump of three.
+    # NOTE (future, "Option B"): make spreading_activation the PRIMARY generator —
+    # the highest-activation non-obvious node IS the stimulus, with dormant/leap as
+    # emergent properties — a bolder reshape kept as a maybe, to revisit on real data.
     if flash_enabled and turn > 3:
-        flashes: list[str] = []
         active_kws = set(extraction.keywords)
+        act_map = dict(g.spreading_activation(list(active_kws), k=2))
+        max_act = max(act_map.values(), default=1.0) or 1.0
+        candidates: list[tuple[float, str]] = []   # (score ~0..1, text)
 
-        # 1. Dormant pulse: salient node silent for ≥ TANGENTIAL_EXPIRY_TURNS turns
+        # 1. Dormant pulse: salient node silent for ≥ threshold, close to the query
         sleep_threshold = max(TANGENTIAL_EXPIRY_TURNS, 4)
         dormant = [
             nd for nd in g.nodes
@@ -667,22 +676,24 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph: Graph 
         ]
         if dormant:
             try:
-                candidates = _search_embeddings(extraction.keywords, top_n=8, graph=g)
+                sims = _search_embeddings(extraction.keywords, top_n=8, graph=g)
             except Exception:
                 # Fallback: pick most salient dormant node directly without vector search
-                candidates = [(nd.keyword, 0.5) for nd in sorted(dormant, key=lambda n: -n.salience)]
+                sims = [(nd.keyword, 0.5) for nd in sorted(dormant, key=lambda n: -n.salience)]
             dormant_set = {nd.keyword for nd in dormant}
-            for kw, sim in candidates:
+            for kw, sim in sims:
                 if kw in dormant_set and sim > 0.38:
                     nd = g.get_node(kw)
                     dormant_since = turn - nd.turn if nd else "?"
-                    flashes.append(
+                    score = max(act_map.get(kw, 0.0) / max_act, sim)
+                    candidates.append((score,
                         f"💤 Dormant pulse: '{kw}' (sim={sim:.2f}, "
-                        f"silent {dormant_since} turns, salience={nd.salience if nd else '?'})"
-                    )
+                        f"silent {dormant_since} turns, salience={nd.salience if nd else '?'})"))
                     break  # one dormant flash is enough
 
-        # 2. Cross-domain spark: semantically close node from a different context graph
+        # 2. Cross-domain spark: semantically close node from a different context
+        # graph. The engine is single-graph, so this stays a distinct signal,
+        # scored by its own similarity.
         if hasattr(_g, "_graphs"):
             for other_ctx, other_g in list(_g._graphs.items()):
                 if other_ctx == _g.active or not other_g.nodes:
@@ -692,44 +703,43 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph: Graph 
                     if sim > 0.48 and kw not in active_kws:
                         nd = other_g.get_node(kw)
                         dom = nd.domain if nd else other_ctx
-                        flashes.append(
+                        candidates.append((sim,
                             f"🔗 Cross-domain spark [{other_ctx}]: '{kw}' "
-                            f"(sim={sim:.2f}, domain={dom})"
-                        )
+                            f"(sim={sim:.2f}, domain={dom})"))
                         break  # one spark per other context
 
-        # 3. Creative leap: 2-hop path from active keywords to a node in a different domain
-        # Build adjacency: keyword → set of directly linked keywords
+        # 3. Creative leap: 2-hop path from active keywords to a node in a different
+        # domain, scored by that far node's activation.
         adjacency: dict[str, set[str]] = {}
         for lk in g.links:
             if lk.weight in ("strong", "medium"):
                 adjacency.setdefault(lk.source, set()).add(lk.target)
                 adjacency.setdefault(lk.target, set()).add(lk.source)
 
-        seen_leaps: set[str] = set()
+        leap: tuple[float, str] | None = None
         for kw in active_kws:
             for mid in adjacency.get(kw, set()):
                 if mid in active_kws:
                     continue
                 for far in adjacency.get(mid, set()):
-                    if far in active_kws or far in seen_leaps or far == kw:
+                    if far in active_kws or far == kw:
                         continue
                     nd = g.get_node(far)
                     if nd and nd.domain != extraction.domain:
-                        flashes.append(
-                            f"⚡ Creative leap: '{kw}' → '{mid}' → '{far}' "
-                            f"[{nd.domain}]"
-                        )
-                        seen_leaps.add(far)
+                        leap = (act_map.get(far, 0.0) / max_act,
+                                f"⚡ Creative leap: '{kw}' → '{mid}' → '{far}' [{nd.domain}]")
                         break
-                if seen_leaps:
+                if leap:
                     break
-            if seen_leaps:
+            if leap:
                 break
+        if leap:
+            candidates.append(leap)
 
-        if flashes:
+        if candidates:
+            candidates.sort(key=lambda x: -x[0])
             parts.append("\nFlash semantici:")
-            for fl in flashes[:3]:  # cap at 3 total flashes per turn
+            for _score, fl in candidates[:2]:   # top-2 by activation (E2.4)
                 parts.append(f"  {fl}")
 
     return "\n".join(parts) if parts else ""

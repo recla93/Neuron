@@ -99,7 +99,14 @@ motore amplifica anche gli errori. Per questo è Fase 2, dopo 0 e 1.
        ["recency"]*1/(inactive+1)` (0.5/0.3/0.2, tunable). Sblocca il gate salienza di E1.2: la
        auto-consolidation ora passa `protect_salience=CONSOLIDATE_PROTECT_SALIENCE` (=8). Test:
        `tests/test_composite_ranking.py`.
-4. [ ] Unificare i tre flash sotto il motore; selezione dello stimolo top-1/top-2 per compattezza.
+4. [x] Unificare i tre flash sotto il motore; selezione dello stimolo top-1/top-2 per compattezza.
+       — **Scelta owner: motore come SELETTORE** (non generatore). Le 3 euristiche (dormant/cross/leap)
+       generano candidati; `spreading_activation` (E2.3) punteggia quelli in-graph (dormant/leap),
+       il cross-domain resta scored per sim (motore single-graph); emessi solo i **top-2** per
+       attivazione in `_build_context_window`. Test: `test_flashes_capped_at_top_two`.
+       **Opzione B (futuro "forse"):** far diventare `spreading_activation` il generatore PRIMARIO
+       (il nodo a più alta attivazione È lo stimolo, dormant/leap emergenti) — reshape più audace,
+       da rivalutare sui dati reali. Nota lasciata nel codice (`_build_context_window`) e qui.
 5. [ ] Emettere il blocco-stimolo compatto in **ogni** tool response (piggyback), con budget token.
 6. [ ] Test: co-attivazione rinforza il link giusto; propagazione a 2 hop emerge; salienza alta
        risale nel ranking; stimolo sotto soglia soppresso; budget token rispettato.

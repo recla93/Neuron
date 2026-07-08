@@ -26,6 +26,9 @@ Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and t
 - **Hebbian reinforcement** (E2.1): links whose endpoints co-occur in a turn accrue a
   `co_activation_count` (≤1 per 2 turns) and get promoted `tangential→medium→strong` at 3/8 —
   associations that keep firing together wire together. `Graph.reinforce_coactivation()`.
+- **Unified flashes** (E2.4): the three heuristics (dormant / cross-domain / creative leap) now feed
+  one selector — `spreading_activation` scores them and only the top-2 by activation are emitted,
+  ordered by relevance instead of a fixed dump of three.
 - **Spreading activation** (E2.3): `Graph.spreading_activation()` propagates activation k hops
   from seed keywords along links, weighted by (Hebbian) link strength × node salience × per-hop
   decay — surfaces the strongest association even without a direct vector match. Wired in E2.4.
