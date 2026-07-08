@@ -1,9 +1,12 @@
 # ADR-001: Modello di embedding configurabile e multilingua (EN + IT)
 
-**Stato:** Proposed
+**Stato:** Accepted (2026-07-08)
 **Data:** 2026-07-07
 **Deciders:** recla93 (owner)
 **Fase roadmap:** 0 (fondazione)
+
+**Modello scelto:** `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384-dim),
+default di `NS_EMBED_MODEL`. `all-MiniLM-L6-v2` resta selezionabile via env per workload solo-EN.
 
 ## Contesto
 
@@ -90,11 +93,33 @@ non dal modello (vedi ADR-002). Quindi pagare ~0.5 GB per coprire EN+IT con un s
 - **Da rivedere:** se in futuro servono lingue molto distanti dove il multilingua crolla, si
   riapre l'Opzione B accettando i silos.
 
+## Esito benchmark (2026-07-08)
+
+`scripts/bench_embed.py` sulla fixture `tests/fixtures/bench_pairs_en_it.jsonl` (12 doc, 13 query,
+k=3), hardware dell'owner, fastembed reale:
+
+| modello | dim | recall@3 | MRR | ms/emb | EN | IT |
+|---|---|---|---|---|---|---|
+| `all-MiniLM-L6-v2` (status quo) | 384 | 0.92 | 0.94 | 15.0 | 1.00 | 0.89 |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 384 | **1.00** | **0.96** | **6.9** | 1.00 | **1.00** |
+
+Il multilingua domina su ogni asse **a parità di dim (384 → nessun cambio schema)** e col recall IT
+che sale a 1.00 (il punto debole previsto). Più veloce perché è la build ONNX quantizzata (qdrant).
+Nota: `intfloat/multilingual-e5-small` **non è supportato** da fastembed (verificato con
+`list_supported_models()`); gli unici multilingua disponibili sono il 384-dim scelto, un mpnet
+768-dim e `multilingual-e5-large` 1024-dim (entrambi = cambio di `VECTOR_DIM` + re-embed più pesante).
+La fixture è piccola: i numeri confermano la *direzione*, non sono una prova di superiorità universale.
+RSS non misurato su Windows (`resource` è POSIX-only) → il costo RAM del vocabolario multilingua
+resta reale ma non quantificato qui.
+
+**Decisione:** Opzione A con `paraphrase-multilingual-MiniLM-L12-v2` come default. A2 (pivot LLM)
+resta complemento opzionale, non necessario come default.
+
 ## Action items
 
-1. [ ] Parametrizzare `_get_embedder()` su `NS_EMBED_MODEL` (default multilingua 384-dim).
-2. [ ] Derivare `VECTOR_DIM` dal modello e propagarlo a `models.py` (oggi costante).
-3. [ ] Scrivere il nome del modello nei `meta` del DB; check di coerenza all'avvio.
-4. [ ] `scripts/reembed.py`: rigenera `node_vectors` per ogni contesto + eventuale seed.
-5. [ ] Aggiornare CI (cache fastembed) e `docs/DEVELOPER.md` (sezione "Embedding model").
-6. [ ] Benchmark EN/IT: recall cross-lingua, RAM, ms/embedding — A vs A2, decidere il default coi numeri.
+1. [x] Parametrizzare `_get_embedder()` su `NS_EMBED_MODEL` (default multilingua 384-dim).
+2. [x] `VECTOR_DIM` da `NS_EMBED_DIM` (384) e propagato a `models.py`; guard dim al primo embed.
+3. [x] Scrivere il nome del modello nei `meta` del DB; check di coerenza al load (`load_sqlite`).
+4. [x] `scripts/reembed.py`: rigenera `node_vectors` per ogni contesto + eventuale seed.
+5. [x] `docs/DEVELOPER.md`: sezione "Embedding model". (Cache fastembed in CI: follow-up.)
+6. [x] Benchmark EN/IT: recall cross-lingua, ms/embedding — default deciso coi numeri.

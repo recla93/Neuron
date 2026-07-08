@@ -35,7 +35,9 @@ def _save_with_model(model, sentinel):
 def test_save_writes_embed_model_meta():
     path = _save_with_model("model-A", 9.9)
     try:
-        meta = dict(sqlite3.connect(path).execute("SELECT key, value FROM meta").fetchall())
+        conn = sqlite3.connect(path)
+        meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+        conn.close()
         assert meta["embed_model"] == "model-A"
         assert meta["embed_dim"] == str(m.VECTOR_DIM)
     finally:

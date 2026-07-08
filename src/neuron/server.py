@@ -738,15 +738,16 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph: Graph 
 # ---------------------------------------------------------------------------
 # Vector embedding — lazy-loaded fastembed.
 # ---------------------------------------------------------------------------
-# Model is configurable via NS_EMBED_MODEL (default: the English all-MiniLM-L6-v2,
-# 384-dim — kept as default for backward compatibility with existing stores). To
-# cover Italian/other languages pick a multilingual 384-dim model (e.g.
-# paraphrase-multilingual-MiniLM-L12-v2) and re-embed the store (scripts/reembed.py).
-# Vectors from different models are NOT comparable, so changing the model requires
-# a full re-embed; the dimension is validated on first use against VECTOR_DIM.
+# Model is configurable via NS_EMBED_MODEL. Default: the 384-dim multilingual
+# paraphrase-multilingual-MiniLM-L12-v2 (ADR-001) — covers EN+IT in one space
+# (bench: IT recall 0.89→1.00 vs the English all-MiniLM-L6-v2, same 384-dim).
+# For an English-only workload the lighter all-MiniLM-L6-v2 is still selectable:
+# NS_EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2. Vectors from different
+# models are NOT comparable, so changing the model requires a full re-embed
+# (scripts/reembed.py); the dimension is validated on first use against VECTOR_DIM.
 
 NS_EMBED_MODEL = os.environ.get(
-    "NS_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+    "NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 ).strip()
 
 _embedder: TextEmbedding | None = None
@@ -1300,7 +1301,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="vector_search",
-            description="Semantic vector search. Find similar keywords via Turso vector_distance_cos or a Python cosine fallback (384-dim fastembed all-MiniLM-L6-v2 embeddings).",
+            description="Semantic vector search. Find similar keywords via Turso vector_distance_cos or a Python cosine fallback (384-dim fastembed embeddings, NS_EMBED_MODEL).",
             inputSchema={
                 "type": "object",
                 "properties": {

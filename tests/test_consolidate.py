@@ -74,8 +74,10 @@ def test_graveyard_persisted_on_save():
     fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd); os.unlink(path)
     try:
         g.save_sqlite(path, context="default")
-        rows = sqlite3.connect(path).execute(
+        conn = sqlite3.connect(path)
+        rows = conn.execute(
             "SELECT keyword, salience, reason FROM _graveyard").fetchall()
+        conn.close()
         assert len(rows) == 1 and rows[0][0] == "spring-boot"
         assert "merged into spring" in rows[0][2]
         assert g._graveyard == []               # buffer svuotato dopo il flush

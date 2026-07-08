@@ -38,7 +38,7 @@ SALIENCE_DECAY_AMOUNT    = 1
 VECTOR_DIM               = int(os.environ.get("NS_EMBED_DIM", "384"))
 # Nome del modello di embedding attivo (deve combaciare con i vettori nello
 # store: vettori di modelli diversi non sono confrontabili — vedi load_sqlite).
-EMBED_MODEL              = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2").strip()
+EMBED_MODEL              = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
 MAX_NODES                = 500   # evict lowest-salience nodes beyond this cap
 
 # ---------------------------------------------------------------------------

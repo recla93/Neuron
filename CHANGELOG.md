@@ -15,6 +15,27 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.0.0] "Synapse" — in development (`feat/neuron-bomb`)
+
+The "brain" release: Neuron stops being a tagged store and becomes an associative
+memory — Hebbian link reinforcement, salience-aware ranking, spreading activation.
+MAJOR because the default embedding model changes (existing stores must re-embed).
+Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and tags `v5.0.0`.
+
+### Added
+- **Configurable embedding model** via `NS_EMBED_MODEL`; `VECTOR_DIM` from `NS_EMBED_DIM`,
+  dimension guard on first embed (E0.1). Re-embed script `scripts/reembed.py` (E0.3) and
+  model↔store coherence guard at load (E0.2). Benchmark harness `scripts/bench_embed.py` (EX.2).
+- **Consolidation**: `Graph.consolidate()` merges near-duplicate nodes (cosine > 0.85) and drops
+  orphans into a recoverable `_graveyard`; MCP tool + `neuron consolidate` CLI + `NS_CONSOLIDATE_AUTO` (E1).
+- Cheap vector fallback: missing vectors embedded once, cached and persisted (E1.1).
+
+### Changed
+- **Default `NS_EMBED_MODEL` → `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`**
+  (384-dim, EN+IT). Bench on real hardware: IT recall 0.89→1.00, same dim (no schema change),
+  faster (ADR-001, E0.4). English-only workloads can pin `all-MiniLM-L6-v2` via env.
+  **Breaking:** stores embedded with the old model are re-embedded on load — run `scripts/reembed.py`.
+
 ## [Unreleased]
 
 _Next up, after 4.0.0 ships:_

@@ -116,14 +116,33 @@ The MCP server runs with only the first 3. The LLM providers are only for `run_i
 
 ## Vector Embeddings
 
-384-dim semantic embeddings via `fastembed` (sentence-transformers/all-MiniLM-L6-v2, ONNX runtime ~80MB model).
-Downloaded on first `import`.
+384-dim semantic embeddings via `fastembed`, ONNX runtime, downloaded on first `import`.
 
 ```python
 from fastembed import TextEmbedding
 embedder = TextEmbedding()
 vec = list(embedder.embed("database"))[0]  # 384-dim float32
 ```
+
+### Embedding model (ADR-001)
+
+The model is configurable via **`NS_EMBED_MODEL`**. Default:
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384-dim, multilingual) — covers
+EN **and IT** in one comparable space. English-only workload → set
+`NS_EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2` for a lighter model.
+
+| model | dim | recall@3 | IT recall | ms/emb |
+|---|---|---|---|---|
+| `all-MiniLM-L6-v2` | 384 | 0.92 | 0.89 | 15.0 |
+| `paraphrase-multilingual-MiniLM-L12-v2` (default) | 384 | 1.00 | 1.00 | 6.9 |
+
+Benchmark: `python scripts/bench_embed.py --k 3` (fixture `tests/fixtures/bench_pairs_en_it.jsonl`).
+
+**Vectors from different models are not comparable.** Changing `NS_EMBED_MODEL` requires re-embedding
+the store: run `python scripts/reembed.py`. `save_sqlite` records `meta.embed_model`/`meta.embed_dim`;
+`load_sqlite` ignores stored vectors (and recomputes them) when they disagree with the active model,
+so a model switch degrades gracefully instead of returning garbage cosine scores. For a non-384-dim
+model also set `NS_EMBED_DIM` to match (a mismatch raises on first embed).
 
 ## Fallback Chain
 

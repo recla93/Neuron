@@ -42,13 +42,14 @@ def test_vector_dim_env_override():
 
 # --- NS_EMBED_MODEL selection + dim guard (need the server module) ----------
 
-def test_embed_model_default_is_backward_compatible():
+def test_embed_model_default_is_multilingual():
+    # ADR-001: default flipped to the 384-dim multilingual model (EN+IT).
     pytest.importorskip("mcp")
     pytest.importorskip("fastembed")
     os.environ.pop("NS_EMBED_MODEL", None)
     import neuron.server as srv
     importlib.reload(srv)
-    assert srv.NS_EMBED_MODEL == "sentence-transformers/all-MiniLM-L6-v2"
+    assert srv.NS_EMBED_MODEL == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 def test_embed_model_env_override():

@@ -7,4 +7,4 @@ from neuron._env import load_dotenv_once as _load_dotenv_once
 
 _load_dotenv_once()
 
-__version__ = "4.0.0"
+__version__ = "5.0.0.dev0"  # Neuron 5 "Synapse" (feat/neuron-bomb); master stays 4.0.0

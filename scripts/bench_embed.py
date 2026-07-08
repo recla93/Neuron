@@ -139,6 +139,11 @@ def main(argv=None) -> int:
     ap.add_argument("--k", type=int, default=3)
     args = ap.parse_args(argv)
 
+    try:  # Windows console is cp1252 by default → the arrows/ellipses below would crash
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     docs, queries = load_fixture(args.fixture)
     print(f"Fixture: {len(docs)} docs, {len(queries)} queries (k={args.k})\n")
 
