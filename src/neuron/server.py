@@ -54,11 +54,14 @@ def _default_graphs_dir() -> str:
     launch setups, somewhere throwaway — so memory didn't reliably persist
     across restarts. Use a real user-data dir instead. Override with
     ``NS_GRAPHS_DIR`` (e.g. to keep an existing ``./graphs``)."""
+    # v5 "Synapse" uses its OWN store dir ("neuron5") so it can run side by side
+    # with a v4 install without sharing a graph store — their DB schema and default
+    # embedding model differ, so a shared store would corrupt each other's vectors.
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "neuron", "graphs")
+        return os.path.join(base, "neuron5", "graphs")
     base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
-    return os.path.join(base, "neuron", "graphs")
+    return os.path.join(base, "neuron5", "graphs")
 
 
 GRAPHS_DIR = os.path.normpath(os.environ.get("NS_GRAPHS_DIR") or _default_graphs_dir())
@@ -1154,7 +1157,7 @@ def _read_skill(parts: tuple[str, ...]) -> str:
             return fh.read()
 
 
-app = Server("neuron", version=__version__)   # single source of truth: neuron/__init__.py
+app = Server("neuron5", version=__version__)   # v5 "Synapse" identity (side-by-side with v4); version from neuron/__init__.py
 
 
 # ---------------------------------------------------------------------------

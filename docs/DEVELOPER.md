@@ -691,6 +691,30 @@ or `logs\`, verifies by importing `neuron.server` **from the venv**, and confirm
 `__version__` matches source. This replaces hand-copying and keeps source ↔ install from drifting
 between releases. (`-Prune` is now a no-op — a wheel reinstall already replaces stale files.)
 
+## Running v4 and v5 "Synapse" side by side
+
+Neuron ships as two active lines: **v4.x** (the stable line, `master`) and **v5.x "Synapse"**
+(this branch — associative-memory engine: Hebbian links, spreading activation, drift, sleep-mode).
+They are designed to coexist on one machine as **separate MCP servers with isolated memory**, because
+v5 changed the DB schema and the default embedding model — a shared graph store would corrupt each
+other's vectors. Nothing in the package needs renaming; the two lines differ only in *install
+identity*:
+
+| Axis | v4 | v5 "Synapse" |
+|---|---|---|
+| Version | `4.x` | `5.x` (`__version__` 5.0.0.dev…) |
+| MCP server name (`Server(...)`) | `neuron` | `neuron5` |
+| Default graph store | `%LOCALAPPDATA%\neuron\graphs` | `%LOCALAPPDATA%\neuron5\graphs` |
+| Install dir (target) | `%LOCALAPPDATA%\Programs\neuron` | `%LOCALAPPDATA%\Programs\neuron5` |
+| MCP client config key | `neuron` | `neuron5` |
+
+Each install is a self-contained directory with its own venv, so `import neuron` never clashes — the
+isolation is purely at the install/registration layer plus the distinct default store dir (baked into
+`_default_graphs_dir()` on this branch). Register both in the client's MCP config under different keys
+(`neuron` → v4's `run_mcp.bat`, `neuron5` → v5's) and they appear as two independent memories. Override
+either store with `NS_GRAPHS_DIR` if you want a custom location. See `TASKLIST.md` T39 for the
+remaining install-layer wiring (deploy target dir + installer registration name).
+
 ## License
 
 PolyForm Noncommercial License 1.0.0. See [LICENSE](../LICENSE).
