@@ -32,6 +32,14 @@ TANGENTIAL_EXPIRY_TURNS  = 5
 WEIGHT_ORDER             = {"strong": 3, "medium": 2, "tangential": 1}
 SALIENCE_DECAY_THRESHOLD = 5
 SALIENCE_DECAY_AMOUNT    = 1
+# Hebbian reinforcement (E2.1): links whose endpoints co-occur in a turn get their
+# co_activation_count bumped (at most once per HEBBIAN_COOLDOWN turns, so a single
+# chatty turn or rapid repeats can't inflate it), and the weight is promoted at the
+# thresholds below. Promotion is monotone (never a downgrade), reusing the atomic
+# weight CASE from T11.
+HEBBIAN_COOLDOWN         = 2   # min turns between two counts on the same link
+HEBBIAN_UPGRADE_MEDIUM   = 3   # co_activation_count promoting tangential -> medium
+HEBBIAN_UPGRADE_STRONG   = 8   # co_activation_count promoting medium    -> strong
 # Embedding dimension. Default 384 (fastembed all-MiniLM-L6-v2 and the common
 # 384-dim multilingual models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
@@ -101,11 +109,13 @@ _NODE_UPSERT = (
 
 _LINK_UPSERT = (
     "INSERT INTO links (context, source, target, link_type, weight, rationale, "
-    "created_turn, last_active_turn, inactive_turns) VALUES (?,?,?,?,?,?,?,?,?) "
+    "created_turn, last_active_turn, inactive_turns, co_activation_count) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, source, target, link_type) DO UPDATE SET "
     "weight=excluded.weight, rationale=excluded.rationale, "
     "created_turn=excluded.created_turn, last_active_turn=excluded.last_active_turn, "
-    "inactive_turns=excluded.inactive_turns"
+    "inactive_turns=excluded.inactive_turns, "
+    "co_activation_count=excluded.co_activation_count"
 )
 
 _VEC_UPSERT = ("INSERT OR REPLACE INTO node_vectors (context, keyword, embedding, dim) "
@@ -132,12 +142,15 @@ _WEIGHT_RANK = ("CASE {c} WHEN 'strong' THEN 3 WHEN 'medium' THEN 2 "
                 "WHEN 'tangential' THEN 1 ELSE 0 END")
 _LINK_UPSERT_ATOMIC = (
     "INSERT INTO links (context, source, target, link_type, weight, rationale, "
-    "created_turn, last_active_turn, inactive_turns) VALUES (?,?,?,?,?,?,?,?,?) "
+    "created_turn, last_active_turn, inactive_turns, co_activation_count) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, source, target, link_type) DO UPDATE SET "
     "weight=CASE WHEN " + _WEIGHT_RANK.format(c="excluded.weight") + " > "
     + _WEIGHT_RANK.format(c="weight") + " THEN excluded.weight ELSE weight END, "
     "rationale=excluded.rationale, created_turn=excluded.created_turn, "
-    "last_active_turn=excluded.last_active_turn, inactive_turns=excluded.inactive_turns"
+    "last_active_turn=excluded.last_active_turn, inactive_turns=excluded.inactive_turns, "
+    # Hebbian count only ever grows: MAX() so a stale concurrent writer can't lower it.
+    "co_activation_count=MAX(co_activation_count, excluded.co_activation_count)"
 )
 
 
@@ -169,6 +182,7 @@ class Link:
     created_turn:    int
     last_active_turn: int
     inactive_turns:  int = 0
+    co_activation_count: int = 0   # Hebbian reinforcement counter (E2.1)
 
 
 @dataclass
@@ -222,6 +236,10 @@ class Graph:
     # persists ``salience - baseline`` as an atomic relative delta (T11 Fase 2b)
     # so concurrent writers on the same node don't lose each other's increments.
     _salience_baseline: dict = field(default_factory=dict)
+    # Hebbian cooldown: link key -> turn of its last co-activation count. In-memory
+    # only (not persisted): losing it on restart merely allows one extra count after
+    # a reload, which is harmless anti-noise state, not worth a schema column. (E2.1)
+    _coact_cooldown: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Node map helpers
@@ -394,6 +412,44 @@ class Graph:
         self.links.remove(link)
         self._record_removed_link(link)
 
+    @staticmethod
+    def _hebbian_weight(count: int) -> Weight:
+        if count >= HEBBIAN_UPGRADE_STRONG:
+            return "strong"
+        if count >= HEBBIAN_UPGRADE_MEDIUM:
+            return "medium"
+        return "tangential"
+
+    def reinforce_coactivation(self, keywords, turn: int | None = None) -> list[Link]:
+        """Hebbian reinforcement (E2.1): 'neurons that fire together wire together'.
+
+        For every EXISTING link whose both endpoints are among ``keywords`` (the
+        keywords co-active this turn), bump ``co_activation_count`` — at most once
+        per HEBBIAN_COOLDOWN turns per link, so a single chatty turn or rapid
+        repeats can't inflate it — and promote the link weight monotonically at
+        the thresholds. Only reinforces links that already exist (creating links
+        stays with auto-link). Returns the links whose weight was upgraded."""
+        turn = self.turn_count if turn is None else turn
+        active = {self._norm(k) for k in keywords}
+        if len(active) < 2:
+            return []
+        upgraded: list[Link] = []
+        for lk in self.links:
+            if lk.source not in active or lk.target not in active:
+                continue
+            key = self._link_key(lk)
+            last = self._coact_cooldown.get(key)
+            if last is not None and turn - last < HEBBIAN_COOLDOWN:
+                continue
+            lk.co_activation_count += 1
+            self._coact_cooldown[key] = turn
+            new_weight = self._hebbian_weight(lk.co_activation_count)
+            if WEIGHT_ORDER.get(new_weight, 0) > WEIGHT_ORDER.get(lk.weight, 0):
+                lk.weight = new_weight
+                upgraded.append(lk)
+            self.mark_link_dirty(lk)   # count changed → must be persisted
+        return upgraded
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
@@ -476,7 +532,8 @@ class Graph:
 
     def _link_row(self, lk: Link, context: str) -> tuple:
         return (context, lk.source, lk.target, lk.link_type, lk.weight, lk.rationale,
-                lk.created_turn, lk.last_active_turn, lk.inactive_turns)
+                lk.created_turn, lk.last_active_turn, lk.inactive_turns,
+                lk.co_activation_count)
 
     def _vec_row(self, nd: Node, context: str) -> tuple:
         vec = nd.vector if nd.vector is not None else _get_vector(nd.keyword)
@@ -513,6 +570,9 @@ class Graph:
         if "context" not in self._table_cols(conn, "links"):
             conn.execute("ALTER TABLE links ADD COLUMN context TEXT DEFAULT 'default'")
             conn.execute("UPDATE links SET context=?", (context,))
+        # E2.1: Hebbian counter column (older stores lack it)
+        if "co_activation_count" not in self._table_cols(conn, "links"):
+            conn.execute("ALTER TABLE links ADD COLUMN co_activation_count INTEGER DEFAULT 0")
         conn.execute("DROP INDEX IF EXISTS idx_links_unique")
         self._create_unique(conn, "idx_links_ctx", "links",
                             "context, source, target, link_type",
@@ -705,7 +765,8 @@ class Graph:
                         context          TEXT DEFAULT 'default',
                         source           TEXT, target TEXT, link_type TEXT, weight TEXT,
                         rationale        TEXT, created_turn INTEGER,
-                        last_active_turn INTEGER, inactive_turns INTEGER);
+                        last_active_turn INTEGER, inactive_turns INTEGER,
+                        co_activation_count INTEGER DEFAULT 0);
                     CREATE INDEX IF NOT EXISTS idx_links_source ON links(source);
                     CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
                     CREATE INDEX IF NOT EXISTS idx_links_turn   ON links(created_turn);
@@ -917,15 +978,16 @@ class Graph:
             # Load links (scoped by context when available)
             self.links.clear()
             node_kws = {nd.keyword for nd in self.nodes}
+            # co_activation_count is absent in legacy/seed stores → select it only
+            # when present, else default to 0 (E2.1).
+            link_cols = [c[1] for c in conn.execute("PRAGMA table_info(links)").fetchall()]
+            coact_sql = "co_activation_count" if "co_activation_count" in link_cols else "0"
+            select = ("SELECT source, target, link_type, weight, rationale, "
+                      f"created_turn, last_active_turn, inactive_turns, {coact_sql} FROM links")
             if has_context:
-                link_rows = conn.execute(
-                    "SELECT source, target, link_type, weight, rationale, "
-                    "created_turn, last_active_turn, inactive_turns FROM links "
-                    "WHERE context=? ORDER BY id", (context,))
+                link_rows = conn.execute(select + " WHERE context=? ORDER BY id", (context,))
             else:
-                link_rows = conn.execute(
-                    "SELECT source, target, link_type, weight, rationale, "
-                    "created_turn, last_active_turn, inactive_turns FROM links ORDER BY id")
+                link_rows = conn.execute(select + " ORDER BY id")
             for row in link_rows:
                 if domain_filter and row[0] not in node_kws and row[1] not in node_kws:
                     continue
@@ -935,6 +997,7 @@ class Graph:
                     created_turn=row[5] or 0,
                     last_active_turn=row[6] or 0,
                     inactive_turns=row[7] or 0,
+                    co_activation_count=row[8] or 0,
                 )
                 self.links.append(link)
         finally:

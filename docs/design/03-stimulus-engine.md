@@ -84,8 +84,11 @@ motore amplifica anche gli errori. Per questo è Fase 2, dopo 0 e 1.
 
 ## Action items
 
-1. [ ] Aggiungere `co_activation_count` + cooldown ai link; upgrade peso Hebbian (riusa il path
-       atomico T11).
+1. [x] Aggiungere `co_activation_count` + cooldown ai link; upgrade peso Hebbian (riusa il path
+       atomico T11). — `Graph.reinforce_coactivation()` (E2.1): bump ≤1 ogni `HEBBIAN_COOLDOWN=2`
+       turni, upgrade `tangential→medium` a 3, `medium→strong` a 8, promozione monotòna via il
+       CASE atomico di T11; colonna `co_activation_count` persistita (MAX sotto scrittori concorrenti).
+       Chiamato in `store_turn` e `auto`. Test: `tests/test_hebbian.py`.
 2. [ ] Implementare `spreading_activation(seed_keywords, k, weights)` in `server.py`/`models.py`.
 3. [ ] Sostituire l'ordinamento di `get_context` col punteggio composito (#5), pesi via costante.
 4. [ ] Unificare i tre flash sotto il motore; selezione dello stimolo top-1/top-2 per compattezza.

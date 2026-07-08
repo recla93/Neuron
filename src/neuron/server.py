@@ -1767,6 +1767,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         g.last_sentiment = sentiment
         g.last_topic = topic
         g.last_keywords = keywords
+        g.reinforce_coactivation(keywords)   # Hebbian: co-active links wire together (E2.1)
         g.increment_inactivity(set(keywords))
         removed = g.prune_tangential()
         _g.save(ctx or None)
@@ -2114,6 +2115,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         g.last_sentiment = extraction.sentiment
         g.last_topic = extraction.topic
         g.last_keywords = extraction.keywords
+        g.reinforce_coactivation(extraction.keywords)   # Hebbian (E2.1)
         g.increment_inactivity(set(extraction.keywords))
         removed = g.prune_tangential()
         _save_domain_signal()

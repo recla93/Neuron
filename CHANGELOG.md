@@ -23,6 +23,9 @@ MAJOR because the default embedding model changes (existing stores must re-embed
 Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and tags `v5.0.0`.
 
 ### Added
+- **Hebbian reinforcement** (E2.1): links whose endpoints co-occur in a turn accrue a
+  `co_activation_count` (≤1 per 2 turns) and get promoted `tangential→medium→strong` at 3/8 —
+  associations that keep firing together wire together. `Graph.reinforce_coactivation()`.
 - **Configurable embedding model** via `NS_EMBED_MODEL`; `VECTOR_DIM` from `NS_EMBED_DIM`,
   dimension guard on first embed (E0.1). Re-embed script `scripts/reembed.py` (E0.3) and
   model↔store coherence guard at load (E0.2). Benchmark harness `scripts/bench_embed.py` (EX.2).
