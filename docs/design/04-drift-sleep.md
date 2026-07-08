@@ -1,6 +1,7 @@
 # ADR-004: Drift cross-contesto + consolidation "sleep-mode" (pre-staging asincrono)
 
-**Stato:** Proposed
+**Stato:** Accepted (2026-07-08) — Opzione A implementata (E3.1–E3.4). Sleep-mode gira nel fallback
+"consolidation all'avvio-se-inattivo" (nessuno scheduler esterno cablato: integrazione futura).
 **Data:** 2026-07-07
 **Deciders:** recla93 (owner)
 **Fase roadmap:** 3
@@ -83,7 +84,16 @@ disponibile, si degrada al trigger "consolidation all'avvio se inattivo da > sog
        escluso da `get_active_links` e dall'adiacenza di `spreading_activation`.
        **E3.2**: `_resolve_context` salta i drift nella traversal normale e li fa affiorare solo a
        `depth>=3` (cap del tool = 3), annotati `target@context` nel render. Test: `tests/test_drift.py`.
-2. [ ] Sleep-mode: trigger da scheduler / all'avvio-se-inattivo; esegue `consolidate` (ADR-002) +
+2. [x] Sleep-mode: trigger da scheduler / all'avvio-se-inattivo; esegue `consolidate` (ADR-002) +
        pre-staging degli stimoli nei `meta`.
-3. [ ] `pre_turn` restituisce lo stimolo pre-caricato se presente e fresco.
-4. [~] Test: drift si forma solo tra contesti visitati ✅; prune rapido ✅; pre-staging (E3.4) da fare.
+       — **E3.3**: `meta.last_active_timestamp` scritto a ogni save, letto al load (`_loaded_ts`).
+       `Graph.sleep_maybe(now, idle_threshold=SLEEP_IDLE_SECONDS=1800, do_consolidate)` gira dal
+       `registry.get` (una volta per contesto/processo) se inattivo > soglia: consolidate opzionale
+       (gate `NS_CONSOLIDATE_AUTO`) + pre-staging. Nessuno scheduler esterno → fallback avvio-se-inattivo.
+3. [x] `pre_turn` restituisce lo stimolo pre-caricato se presente e fresco.
+       — **E3.4**: `sleep_maybe` precalcola il top stimolo (spreading dai `last_keywords`/nodo più
+       saliente) e lo salva in `meta.staged_stimulus`/`staged_ts`. `Graph.take_staged_stimulus(now,
+       fresh=STAGE_FRESH_SECONDS=6h)` lo serve UNA volta (one-shot) se fresco, lo scarta se stale;
+       `pre_turn` lo mostra come `🧠 staged: …`.
+4. [x] Test: drift solo tra contesti visitati ✅; prune rapido ✅; pre-staging servito+invalidato ✅;
+       degradazione senza scheduler ✅ (`tests/test_drift.py`, `tests/test_sleep.py`).

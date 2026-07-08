@@ -23,6 +23,10 @@ MAJOR because the default embedding model changes (existing stores must re-embed
 Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and tags `v5.0.0`.
 
 ### Added
+- **Sleep-mode + pre-staging** (E3.3/E3.4): when a context is loaded after being idle >30 min, Neuron
+  consolidates it (if `NS_CONSOLIDATE_AUTO`) and pre-computes the top stimulus, stored in `meta`.
+  `pre_turn` serves that "while you were away" stimulus once if still fresh — a warm start that works
+  around MCP's lack of push. `Graph.sleep_maybe()` / `take_staged_stimulus()`.
 - **Cross-context drift links** (E3.1/E3.2): when a node from another *visited* context surfaces
   alongside the current keywords, Neuron forms an implicit `drift` link (no rationale, born
   tangential, cooldown 5, pruned after 3 idle turns, reinforced via the Hebbian counter). They stay

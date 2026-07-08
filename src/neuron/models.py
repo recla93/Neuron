@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import struct
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -46,6 +47,12 @@ HEBBIAN_UPGRADE_STRONG   = 8   # co_activation_count promoting medium    -> stro
 # turns, and pruned faster than intra-context tangentials (DRIFT_EXPIRY_TURNS < 5).
 DRIFT_COOLDOWN           = 5   # min turns between forming/reinforcing the same drift
 DRIFT_EXPIRY_TURNS       = 3   # inactive turns before a drift link is pruned
+# Sleep-mode (E3.3/E3.4): when a graph is loaded after being idle longer than
+# SLEEP_IDLE_SECONDS, consolidate it and pre-stage the top stimulus so pre_turn
+# can serve it "warm". The staged stimulus is only served while fresher than
+# STAGE_FRESH_SECONDS (else it's dropped as stale).
+SLEEP_IDLE_SECONDS       = 1800     # 30 min idle → sleep-mode on next load
+STAGE_FRESH_SECONDS      = 6 * 3600 # staged stimulus valid for 6h
 # Embedding dimension. Default 384 (fastembed all-MiniLM-L6-v2 and the common
 # 384-dim multilingual models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
@@ -252,6 +259,12 @@ class Graph:
     # Drift cooldown: (source, target, target_context) -> last turn formed/reinforced.
     # In-memory anti-noise, same rationale as _coact_cooldown. (E3.1)
     _drift_cooldown: dict = field(default_factory=dict)
+    # Sleep-mode / pre-staging (E3.3/E3.4). staged_stimulus + its timestamp persist
+    # in meta so a background/previous run can leave a warm stimulus for pre_turn;
+    # _loaded_ts is the last-active timestamp read at load (transient).
+    staged_stimulus: "str | None" = None
+    _staged_ts: "float | None" = None
+    _loaded_ts: "float | None" = None
 
     # ------------------------------------------------------------------
     # Node map helpers
@@ -504,6 +517,50 @@ class Graph:
     def drift_links(self) -> list["Link"]:
         """All active cross-context drift links (E3.1/E3.2)."""
         return [lk for lk in self.links if lk.link_type == "drift"]
+
+    # ------------------------------------------------------------------
+    # Sleep-mode / pre-staging (E3.3 / E3.4)
+    # ------------------------------------------------------------------
+
+    def sleep_maybe(self, now: "float | None" = None,
+                    idle_threshold: float = SLEEP_IDLE_SECONDS,
+                    do_consolidate: bool = False) -> "dict | None":
+        """If this graph was loaded after being idle > idle_threshold, run
+        sleep-mode: optionally consolidate (merge near-dupes + drop orphans),
+        then pre-stage the top stimulus (spreading activation from the most
+        salient nodes) so the next pre_turn can serve it warm (E3.4). Returns a
+        summary, or None if not idle / no last-active timestamp. This is the
+        "consolidate at startup if inactive" fallback when no scheduler drives it."""
+        now = time.time() if now is None else now
+        if self._loaded_ts is None or (now - self._loaded_ts) <= idle_threshold:
+            return None
+        actions = 0
+        if do_consolidate:
+            actions = len(self.consolidate(drop_orphans=True))
+        # Seed from the last turn's focus, or fall back to the single most-salient
+        # node — a single anchor leaves the rest of the graph as activation targets
+        # (seeding from all top-salient nodes would starve a tiny graph of targets).
+        top = sorted(self.nodes, key=lambda n: -n.salience)
+        seeds = self.last_keywords or ([top[0].keyword] if top else [])
+        ranked = self.spreading_activation(seeds, k=2) if seeds else []
+        if ranked:
+            kw, act = ranked[0]
+            self.staged_stimulus = f"{kw} (act={act:.2f})"
+            self._staged_ts = now
+        return {"consolidated": do_consolidate, "actions": actions,
+                "staged": self.staged_stimulus}
+
+    def take_staged_stimulus(self, now: "float | None" = None,
+                             fresh: float = STAGE_FRESH_SECONDS) -> "str | None":
+        """Return the pre-staged stimulus once if still fresh, then clear it
+        (one-shot: the "while you were away" nudge). Stale → dropped, None (E3.4)."""
+        now = time.time() if now is None else now
+        s, ts = self.staged_stimulus, self._staged_ts
+        self.staged_stimulus = None          # one-shot, whether served or dropped
+        self._staged_ts = None
+        if s and ts is not None and (now - ts) < fresh:
+            return s
+        return None
 
     # ------------------------------------------------------------------
     # Queries
@@ -898,6 +955,9 @@ class Graph:
                 ("last_keywords",  json.dumps(self.last_keywords)),
                 ("embed_model",    EMBED_MODEL),
                 ("embed_dim",      str(VECTOR_DIM)),
+                ("last_active_timestamp", str(time.time())),           # E3.3
+                ("staged_stimulus",       self.staged_stimulus or ""),  # E3.4
+                ("staged_ts",             str(self._staged_ts or "")),
             ])
 
             # Flush archived nodes (E1.2/E1.3) — recoverable, then clear the buffer.
@@ -1018,6 +1078,15 @@ class Graph:
                 self.last_keywords = json.loads(meta.get("last_keywords", "[]"))
             except (json.JSONDecodeError, TypeError):
                 self.last_keywords = []
+            # Sleep-mode / pre-staging state (E3.3/E3.4)
+            def _as_float(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+            self._loaded_ts      = _as_float(meta.get("last_active_timestamp"))
+            self.staged_stimulus = meta.get("staged_stimulus") or None
+            self._staged_ts      = _as_float(meta.get("staged_ts"))
 
             # Guard modello<->store: i vettori salvati con un modello diverso vivono
             # in uno spazio diverso e NON sono confrontabili col modello attivo. Se

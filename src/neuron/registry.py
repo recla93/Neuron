@@ -129,6 +129,15 @@ class GraphRegistry:
                         self._seed_loaded.add(ctx)
                 except Exception:
                     pass
+            # E3.3/E3.4: if this graph was idle long enough, run sleep-mode on load
+            # (pre-stage the top stimulus; consolidate only when NS_CONSOLIDATE_AUTO
+            # is on). Never let it break graph loading.
+            try:
+                _sleep_consolidate = os.environ.get(
+                    "NS_CONSOLIDATE_AUTO", "").strip().lower() in ("1", "true", "yes", "on")
+                g.sleep_maybe(do_consolidate=_sleep_consolidate)
+            except Exception:
+                pass
             self._graphs[ctx] = g
         return self._graphs[ctx]
 

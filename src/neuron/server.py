@@ -2265,7 +2265,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         out_pt = f"{status_line}\n{ctx_text_pt}"
         # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
         # so the hint is always present and never truncated away (~15 tokens).
-        out_pt = out_pt[:char_budget_pt] + _stimulus_block(g_pt, search_kws_pt) + (
+        # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.
+        staged = g_pt.take_staged_stimulus()
+        staged_line = f"\n🧠 staged: {staged}" if staged else ""
+        out_pt = out_pt[:char_budget_pt] + staged_line + _stimulus_block(g_pt, search_kws_pt) + (
             "\n→ next: fold this context into your reply silently, then call "
             "store_turn(topic, keywords, links) to persist the turn."
         )
