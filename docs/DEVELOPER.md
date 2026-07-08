@@ -715,6 +715,56 @@ isolation is purely at the install/registration layer plus the distinct default 
 either store with `NS_GRAPHS_DIR` if you want a custom location. See `TASKLIST.md` T39 for the
 remaining install-layer wiring (deploy target dir + installer registration name).
 
+## Memory dynamics (v5 "Synapse")
+
+v5 turns the graph from a tagged store into an associative memory. All of the below
+live in `src/neuron/models.py` (pure graph logic) and `src/neuron/server.py` (wiring).
+
+**Hebbian reinforcement (E2.1).** When two keywords co-occur in a turn, the link between
+them accrues `co_activation_count` — at most once per `HEBBIAN_COOLDOWN` (2) turns — and its
+weight is promoted `tangential→medium→strong` at 3 and 8. Promotion is monotone (a stale
+concurrent writer can only raise it). `Graph.reinforce_coactivation()`, called from
+`store_turn`/`auto`. Schema: `links.co_activation_count`.
+
+**Composite retrieval ranking (E2.2).** `get_context` ranks nodes by
+`RANK_WEIGHTS = sim·0.5 + salience·0.3 + recency·0.2` (tunable) instead of weight→recency, so a
+salient neighbour surfaces even without a direct vector match. Auto-consolidation protects
+nodes with `salience ≥ CONSOLIDATE_PROTECT_SALIENCE` (8) from being merged.
+
+**Spreading activation (E2.3).** `Graph.spreading_activation(seeds, k=2)` propagates activation
+along links, each hop weighted by `link_strength × (1 + salience/max) × decay`. Hebbian-strong
+links carry more; `decay<1` and small `k` prevent flooding. It's the engine behind the flashes
+and the pre-staged stimulus.
+
+**Unified flashes (E2.4).** The three heuristics — 💤 dormant pulse, 🔗 cross-domain spark,
+⚡ creative leap — now feed one selector: spreading activation scores the in-graph candidates and
+only the **top-2** are emitted (`_build_context_window`). Cross-domain stays a distinct signal
+(the engine is single-graph). A future "Option B" (engine as the primary generator) is noted in
+the code.
+
+**Piggyback stimulus (E2.5).** `store_turn` and `pre_turn` append a compact one-line stimulus
+(top spreading-activation node), capped to ~40 tokens and suppressed below
+`STIMULUS_MIN_ACTIVATION` (no noise on a cold graph). `_stimulus_block()`.
+
+**Cross-context drift (E3.1/E3.2).** When a node from another *visited* context surfaces
+alongside the current keywords (via the cross-domain spark), Neuron forms an implicit `drift`
+link: born tangential, `DRIFT_COOLDOWN` (5), pruned after `DRIFT_EXPIRY_TURNS` (3) idle turns
+(faster than intra-context tangentials), reinforced via the Hebbian counter. Drift stays out of
+the normal views and surfaces only on `get_context(depth≥3)`, rendered `target@context`. Schema:
+`links.target_context`. `Graph.form_drift_link()`.
+
+**Sleep-mode + pre-staging (E3.3/E3.4).** On load, if a context was idle >`SLEEP_IDLE_SECONDS`
+(30 min), `Graph.sleep_maybe()` (called from `registry.get`) consolidates (when
+`NS_CONSOLIDATE_AUTO`) and pre-computes the top stimulus into `meta.staged_stimulus`. `pre_turn`
+serves it once via `take_staged_stimulus()` if fresher than `STAGE_FRESH_SECONDS` (6h) — a warm
+start that works around MCP's lack of push. Degrades to "consolidate-at-startup-if-idle" with no
+external scheduler. Schema: `meta.last_active_timestamp` / `staged_stimulus` / `staged_ts`.
+
+**Testing each** (all real-dep-free except where noted): `tests/test_hebbian.py`,
+`test_composite_ranking.py` (needs mcp/fastembed), `test_spreading.py`, `test_core.py`
+(flash cap), `test_stimulus_piggyback.py` (needs mcp/fastembed), `test_drift.py`, `test_sleep.py`.
+Tuning knobs are the module constants above — calibrate on real data.
+
 ## License
 
 PolyForm Noncommercial License 1.0.0. See [LICENSE](../LICENSE).
