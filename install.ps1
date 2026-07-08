@@ -40,7 +40,16 @@ if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) {
     if (-not $psExe) { $psExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
     if (-not $psExe) { $psExe = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
     if ($psExe) {
-        & $psExe -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters
+        # Rebuild args by hand: splatting @PSBoundParameters into -File renders a
+        # [switch] as "-Name True", which -File mode can't bind back to a switch.
+        # Forward switches as bare flags and value params as "-Name Value".
+        $fwd = @()
+        foreach ($kv in $PSBoundParameters.GetEnumerator()) {
+            if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
+                if ($kv.Value.IsPresent) { $fwd += "-$($kv.Key)" }
+            } else { $fwd += "-$($kv.Key)"; $fwd += "$($kv.Value)" }
+        }
+        & $psExe -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @fwd
         exit $LASTEXITCODE
     }
     # No separate host found - continue in this process (we're already running, so
