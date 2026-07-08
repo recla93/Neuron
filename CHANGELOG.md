@@ -23,6 +23,9 @@ MAJOR because the default embedding model changes (existing stores must re-embed
 Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and tags `v5.0.0`.
 
 ### Added
+- **Piggyback stimulus** (E2.5): `store_turn` and `pre_turn` append a compact one-line associative
+  stimulus (top spreading-activation node), capped to ~40 tokens and suppressed below an activation
+  floor — continuous stimulation without MCP push. Token budget documented in ADR-003 (E2.6).
 - **Hebbian reinforcement** (E2.1): links whose endpoints co-occur in a turn accrue a
   `co_activation_count` (≤1 per 2 turns) and get promoted `tangential→medium→strong` at 3/8 —
   associations that keep firing together wire together. `Graph.reinforce_coactivation()`.

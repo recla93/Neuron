@@ -1,6 +1,7 @@
 # ADR-003: Motore di stimolo unificato (spreading activation) — il cuore
 
-**Stato:** Proposed
+**Stato:** Accepted (2026-07-08) — Opzione A implementata (E2.1–E2.6); "Option B" (motore
+generatore primario) resta un follow-up documentato.
 **Data:** 2026-07-07
 **Deciders:** recla93 (owner)
 **Fase roadmap:** 2 — il "bomba"
@@ -107,6 +108,29 @@ motore amplifica anche gli errori. Per questo è Fase 2, dopo 0 e 1.
        **Opzione B (futuro "forse"):** far diventare `spreading_activation` il generatore PRIMARIO
        (il nodo a più alta attivazione È lo stimolo, dormant/leap emergenti) — reshape più audace,
        da rivalutare sui dati reali. Nota lasciata nel codice (`_build_context_window`) e qui.
-5. [ ] Emettere il blocco-stimolo compatto in **ogni** tool response (piggyback), con budget token.
-6. [ ] Test: co-attivazione rinforza il link giusto; propagazione a 2 hop emerge; salienza alta
-       risale nel ranking; stimolo sotto soglia soppresso; budget token rispettato.
+5. [x] Emettere il blocco-stimolo compatto in **ogni** tool response (piggyback), con budget token.
+       — `_stimulus_block(g, keywords)` (E2.5): top-1 di `spreading_activation`, una riga
+       `🧠 stimulus: <kw> (act=…, <domain>)`. Agganciato ai tool "muti" **store_turn** e **pre_turn**;
+       `auto`/`get_context` portano già il blocco flash completo (nessun doppione). Vuoto sotto
+       `STIMULUS_MIN_ACTIVATION=0.15` (niente rumore), cap `STIMULUS_MAX_CHARS=200` (~40 token).
+       Test: `tests/test_stimulus_piggyback.py`.
+6. [x] Test complessivi (E2.1–E2.5): `test_hebbian` (co-attivazione + soglie + cooldown),
+       `test_spreading` (propagazione 2-hop + decay + k), `test_composite_ranking` (salienza risale),
+       `test_core::test_flashes_capped_at_top_two` (top-2), `test_stimulus_piggyback` (soglia + cap).
+
+## Token budget & accounting (E2.6)
+
+Lo stimolo deve restare **compatto**: è allegato a risposte che il modello legge a ogni turno, quindi
+un costo che si paga di continuo. Contabilità attuale:
+
+| Sorgente | Dove | Budget |
+|---|---|---|
+| Blocco flash completo (top-2) | `get_context`, `auto` (`context_window`) | governato dal `max_tokens`/`char_budget` del tool chiamante |
+| Riga stimolo piggyback | `store_turn`, `pre_turn` | `STIMULUS_MAX_CHARS=200` (~40 token), **una** riga, spesso 0 |
+| Soppressione | ovunque | niente output sotto `STIMULUS_MIN_ACTIVATION=0.15` → nessuna riga di rumore |
+
+Principio: il piggyback aggiunge **al più ~40 token** e solo quando c'è un'associazione abbastanza
+forte; quando il grafo è freddo o slegato non aggiunge nulla. Il blocco flash pieno resta confinato
+ai due tool che già espongono contesto (dove il modello ha comunque chiesto un budget esplicito), così
+il costo continuo dello stimolo è limitato e prevedibile. Le soglie/pesi (`RANK_WEIGHTS`,
+`STIMULUS_*`, `HEBBIAN_*`, `decay`) sono tutte costanti tarabili sui dati reali.

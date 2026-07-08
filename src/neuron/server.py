@@ -745,6 +745,23 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph: Graph 
     return "\n".join(parts) if parts else ""
 
 
+def _stimulus_block(g: "Graph", keywords) -> str:
+    """Compact one-line associative stimulus for piggybacking on tool responses
+    that don't already carry the full flash block (E2.5). It is the top
+    spreading-activation node from this turn's keywords — continuous stimulation
+    without MCP push. Empty when nothing clears STIMULUS_MIN_ACTIVATION, so
+    responses aren't padded with noise; hard-capped to ~40 tokens."""
+    if not flash_enabled:
+        return ""
+    ranked = g.spreading_activation(list(keywords), k=2)
+    if not ranked or ranked[0][1] < STIMULUS_MIN_ACTIVATION:
+        return ""
+    kw, act = ranked[0]
+    nd = g.get_node(kw)
+    dom = f", {nd.domain}" if nd else ""
+    return f"\n🧠 stimulus: {kw} (act={act:.2f}{dom})"[:STIMULUS_MAX_CHARS]
+
+
 # ---------------------------------------------------------------------------
 # Vector embedding — lazy-loaded fastembed.
 # ---------------------------------------------------------------------------
@@ -1039,6 +1056,11 @@ RANK_WEIGHTS = {"sim": 0.5, "salience": 0.3, "recency": 0.2}
 # most-salient nodes from being merged away. Threshold mirrors the Hebbian "strong"
 # bar: a node this reinforced is worth keeping intact. Tunable on real data (ADR-003).
 CONSOLIDATE_PROTECT_SALIENCE = 8
+# Piggyback stimulus (E2.5): a compact associative nudge appended to tool responses
+# that don't already carry the full flash block (store_turn, pre_turn). Emitted only
+# above the activation floor (no noise) and hard-capped to stay within ~40 tokens.
+STIMULUS_MIN_ACTIVATION = 0.15
+STIMULUS_MAX_CHARS = 200   # ~40 tokens
 
 # ---------------------------------------------------------------------------
 # Context switch hysteresis
@@ -1804,6 +1826,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=(
             f"Turn {turn} saved. Nodes: {len(g.nodes)}, Links: {len(g.links)}"
             + (f", pruned: {removed}" if removed else "")
+            + _stimulus_block(g, keywords)   # E2.5: piggyback the top stimulus
             + "\n→ if the loaded context helped this turn, call confirm(keywords); "
               "start the next turn with pre_turn."
         ))]
@@ -2218,7 +2241,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         out_pt = f"{status_line}\n{ctx_text_pt}"
         # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
         # so the hint is always present and never truncated away (~15 tokens).
-        out_pt = out_pt[:char_budget_pt] + (
+        out_pt = out_pt[:char_budget_pt] + _stimulus_block(g_pt, search_kws_pt) + (
             "\n→ next: fold this context into your reply silently, then call "
             "store_turn(topic, keywords, links) to persist the turn."
         )
