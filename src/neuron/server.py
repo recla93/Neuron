@@ -706,6 +706,11 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph: Graph 
                         candidates.append((sim,
                             f"🔗 Cross-domain spark [{other_ctx}]: '{kw}' "
                             f"(sim={sim:.2f}, domain={dom})"))
+                        # E3.1: persist this cross-context co-occurrence as an
+                        # implicit drift link (other_ctx is loaded → visited;
+                        # born tangential, cooldown 5, pruned fast).
+                        if extraction.keywords:
+                            g.form_drift_link(extraction.keywords[0], kw, other_ctx, turn)
                         break  # one spark per other context
 
         # 3. Creative leap: 2-hop path from active keywords to a node in a different
@@ -1590,6 +1595,8 @@ def _resolve_context(
     for _ in range(depth):
         new_kws: set[str] = set()
         for lk in g.links:
+            if lk.link_type == "drift":
+                continue   # drift is cross-context: surfaced separately at depth>=3
             if lk.source in current and lk.target not in current:
                 new_kws.add(lk.target)
                 related_links.append(lk)
@@ -1612,6 +1619,8 @@ def _resolve_context(
                 for _ in range(depth):
                     new_kws = set()
                     for lk in g.links:
+                        if lk.link_type == "drift":
+                            continue
                         if lk.source in current and lk.target not in current:
                             new_kws.add(lk.target)
                             related_links.append(lk)
@@ -1629,6 +1638,8 @@ def _resolve_context(
         chain = _g.resolve_chain(ctx or None)
         for ancestor_g in chain[1:]:
             for lk in ancestor_g.links:
+                if lk.link_type == "drift":
+                    continue
                 if lk.source in search_kws or lk.target in search_kws:
                     related_links.append(lk)
                     related_nodes.add(lk.source)
@@ -1640,6 +1651,16 @@ def _resolve_context(
                         inherited_ctx = cname
                         break
                 break
+
+    # E3.2: cross-context drift links surface only on deep queries (depth>=3) —
+    # an opt-in cost. Add those anchored on a searched/related keyword so they get
+    # ranked and rendered next to the normal links (their foreign target is NOT
+    # added to related_nodes, so node ranking is untouched).
+    if depth >= 3:
+        anchor = related_nodes | search_kws
+        for lk in g.drift_links():
+            if lk.source in anchor:
+                related_links.append(lk)
 
     # Rank links
     seen_pairs: set[tuple[str, str]] = set()
@@ -1854,6 +1875,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if related_links_sorted:
                 link_strs = [
                     f"{lk.source}-[{lk.weight[0]}]->{lk.target}"
+                    + (f"@{lk.target_context}" if lk.link_type == "drift" else "")
                     for lk in related_links_sorted[:6]
                 ]
                 parts.append("links:" + "|".join(link_strs))
@@ -1877,8 +1899,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if related_links_sorted:
             lines.append("Links (by weight):")
             for lk in related_links_sorted[:10]:
+                tgt = (f"{lk.target}@{lk.target_context}"
+                       if lk.link_type == "drift" else lk.target)
                 lines.append(
-                    f"  [{lk.weight:10s}] {lk.source} ->({lk.link_type})-> {lk.target}"
+                    f"  [{lk.weight:10s}] {lk.source} ->({lk.link_type})-> {tgt}"
                     + (f"  # {lk.rationale}" if lk.rationale else "")
                 )
         elif used_fallback:

@@ -23,6 +23,11 @@ MAJOR because the default embedding model changes (existing stores must re-embed
 Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and tags `v5.0.0`.
 
 ### Added
+- **Cross-context drift links** (E3.1/E3.2): when a node from another *visited* context surfaces
+  alongside the current keywords, Neuron forms an implicit `drift` link (no rationale, born
+  tangential, cooldown 5, pruned after 3 idle turns, reinforced via the Hebbian counter). They stay
+  out of the normal views and surface only on a deep `get_context(depth≥3)` query — implicit
+  cross-domain bridges, opt-in. `Graph.form_drift_link()`, `Link.target_context`.
 - **Piggyback stimulus** (E2.5): `store_turn` and `pre_turn` append a compact one-line associative
   stimulus (top spreading-activation node), capped to ~40 tokens and suppressed below an activation
   floor — continuous stimulation without MCP push. Token budget documented in ADR-003 (E2.6).

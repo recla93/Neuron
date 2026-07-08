@@ -40,6 +40,12 @@ SALIENCE_DECAY_AMOUNT    = 1
 HEBBIAN_COOLDOWN         = 2   # min turns between two counts on the same link
 HEBBIAN_UPGRADE_MEDIUM   = 3   # co_activation_count promoting tangential -> medium
 HEBBIAN_UPGRADE_STRONG   = 8   # co_activation_count promoting medium    -> strong
+# Drift links (E3.1): implicit cross-context associations formed without a rationale
+# when a node from another *visited* context surfaces alongside the current keywords.
+# Highest noise risk, so the rules are strict: born tangential, one per DRIFT_COOLDOWN
+# turns, and pruned faster than intra-context tangentials (DRIFT_EXPIRY_TURNS < 5).
+DRIFT_COOLDOWN           = 5   # min turns between forming/reinforcing the same drift
+DRIFT_EXPIRY_TURNS       = 3   # inactive turns before a drift link is pruned
 # Embedding dimension. Default 384 (fastembed all-MiniLM-L6-v2 and the common
 # 384-dim multilingual models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
@@ -109,13 +115,14 @@ _NODE_UPSERT = (
 
 _LINK_UPSERT = (
     "INSERT INTO links (context, source, target, link_type, weight, rationale, "
-    "created_turn, last_active_turn, inactive_turns, co_activation_count) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?) "
+    "created_turn, last_active_turn, inactive_turns, co_activation_count, target_context) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, source, target, link_type) DO UPDATE SET "
     "weight=excluded.weight, rationale=excluded.rationale, "
     "created_turn=excluded.created_turn, last_active_turn=excluded.last_active_turn, "
     "inactive_turns=excluded.inactive_turns, "
-    "co_activation_count=excluded.co_activation_count"
+    "co_activation_count=excluded.co_activation_count, "
+    "target_context=excluded.target_context"
 )
 
 _VEC_UPSERT = ("INSERT OR REPLACE INTO node_vectors (context, keyword, embedding, dim) "
@@ -142,15 +149,16 @@ _WEIGHT_RANK = ("CASE {c} WHEN 'strong' THEN 3 WHEN 'medium' THEN 2 "
                 "WHEN 'tangential' THEN 1 ELSE 0 END")
 _LINK_UPSERT_ATOMIC = (
     "INSERT INTO links (context, source, target, link_type, weight, rationale, "
-    "created_turn, last_active_turn, inactive_turns, co_activation_count) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?) "
+    "created_turn, last_active_turn, inactive_turns, co_activation_count, target_context) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, source, target, link_type) DO UPDATE SET "
     "weight=CASE WHEN " + _WEIGHT_RANK.format(c="excluded.weight") + " > "
     + _WEIGHT_RANK.format(c="weight") + " THEN excluded.weight ELSE weight END, "
     "rationale=excluded.rationale, created_turn=excluded.created_turn, "
     "last_active_turn=excluded.last_active_turn, inactive_turns=excluded.inactive_turns, "
     # Hebbian count only ever grows: MAX() so a stale concurrent writer can't lower it.
-    "co_activation_count=MAX(co_activation_count, excluded.co_activation_count)"
+    "co_activation_count=MAX(co_activation_count, excluded.co_activation_count), "
+    "target_context=excluded.target_context"
 )
 
 
@@ -183,6 +191,7 @@ class Link:
     last_active_turn: int
     inactive_turns:  int = 0
     co_activation_count: int = 0   # Hebbian reinforcement counter (E2.1)
+    target_context:  str | None = None   # set on drift links → context the target lives in (E3.1)
 
 
 @dataclass
@@ -240,6 +249,9 @@ class Graph:
     # only (not persisted): losing it on restart merely allows one extra count after
     # a reload, which is harmless anti-noise state, not worth a schema column. (E2.1)
     _coact_cooldown: dict = field(default_factory=dict)
+    # Drift cooldown: (source, target, target_context) -> last turn formed/reinforced.
+    # In-memory anti-noise, same rationale as _coact_cooldown. (E3.1)
+    _drift_cooldown: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Node map helpers
@@ -450,12 +462,58 @@ class Graph:
             self.mark_link_dirty(lk)   # count changed → must be persisted
         return upgraded
 
+    def form_drift_link(self, source: str, target: str, target_context: str,
+                        turn: int | None = None) -> "Link | None":
+        """Form (or gently reinforce) an implicit cross-context drift link (E3.1):
+        ``source`` (this context) ↔ ``target`` which lives in ``target_context`` —
+        an association discovered without an explicit rationale. Born tangential,
+        at most once per DRIFT_COOLDOWN turns, and it reuses the Hebbian counter so
+        a bridge noticed repeatedly strengthens. Caller must pass a *visited*
+        ``target_context``. Returns the link, or None on cooldown / invalid input."""
+        source = self._norm(source)
+        target = self._norm(target)
+        if not source or not target or not target_context:
+            return None
+        if source == target and target_context is None:   # never a real self-drift
+            return None
+        turn = self.turn_count if turn is None else turn
+        key = (source, target, target_context)
+        last = self._drift_cooldown.get(key)
+        if last is not None and turn - last < DRIFT_COOLDOWN:
+            return None
+        self._drift_cooldown[key] = turn
+        for lk in self.links:
+            if (lk.link_type == "drift" and lk.source == source
+                    and lk.target == target and lk.target_context == target_context):
+                lk.co_activation_count += 1
+                lk.inactive_turns = 0
+                lk.last_active_turn = turn
+                new_weight = self._hebbian_weight(lk.co_activation_count)
+                if WEIGHT_ORDER.get(new_weight, 0) > WEIGHT_ORDER.get(lk.weight, 0):
+                    lk.weight = new_weight
+                self.mark_link_dirty(lk)
+                return lk
+        lk = Link(source=source, target=target, link_type="drift", weight="tangential",
+                  rationale="", created_turn=turn, last_active_turn=turn,
+                  co_activation_count=1, target_context=target_context)
+        self.links.append(lk)
+        self._dirty = True
+        self.mark_link_dirty(lk)
+        return lk
+
+    def drift_links(self) -> list["Link"]:
+        """All active cross-context drift links (E3.1/E3.2)."""
+        return [lk for lk in self.links if lk.link_type == "drift"]
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
 
     def get_active_links(self) -> list[Link]:
-        return [lk for lk in self.links if lk.weight in ("strong", "medium")]
+        # Drift links are cross-context and surface only on deep get_context (E3.2),
+        # never in the normal active-links view.
+        return [lk for lk in self.links
+                if lk.weight in ("strong", "medium") and lk.link_type != "drift"]
 
     def top_links(self, n: int = 5) -> list[Link]:
         active = self.get_active_links()
@@ -482,6 +540,8 @@ class Graph:
         max_sal = max((nd.salience for nd in self.nodes), default=0) or 1
         adj: dict[str, list[tuple[str, str]]] = {}
         for lk in self.links:
+            if lk.link_type == "drift":
+                continue   # drift targets live in another context — not this graph's walk
             adj.setdefault(lk.source, []).append((lk.target, lk.weight))
             adj.setdefault(lk.target, []).append((lk.source, lk.weight))
 
@@ -514,7 +574,9 @@ class Graph:
     def prune_tangential(self) -> int:
         kept, removed_links = [], []
         for lk in self.links:
-            if lk.weight == "tangential" and lk.inactive_turns > TANGENTIAL_EXPIRY_TURNS:
+            # Drift links are the noisiest, so they expire faster (E3.1).
+            expiry = DRIFT_EXPIRY_TURNS if lk.link_type == "drift" else TANGENTIAL_EXPIRY_TURNS
+            if lk.weight == "tangential" and lk.inactive_turns > expiry:
                 removed_links.append(lk)
             else:
                 kept.append(lk)
@@ -575,7 +637,7 @@ class Graph:
     def _link_row(self, lk: Link, context: str) -> tuple:
         return (context, lk.source, lk.target, lk.link_type, lk.weight, lk.rationale,
                 lk.created_turn, lk.last_active_turn, lk.inactive_turns,
-                lk.co_activation_count)
+                lk.co_activation_count, lk.target_context)
 
     def _vec_row(self, nd: Node, context: str) -> tuple:
         vec = nd.vector if nd.vector is not None else _get_vector(nd.keyword)
@@ -615,6 +677,9 @@ class Graph:
         # E2.1: Hebbian counter column (older stores lack it)
         if "co_activation_count" not in self._table_cols(conn, "links"):
             conn.execute("ALTER TABLE links ADD COLUMN co_activation_count INTEGER DEFAULT 0")
+        # E3.1: drift link target-context column (older stores lack it)
+        if "target_context" not in self._table_cols(conn, "links"):
+            conn.execute("ALTER TABLE links ADD COLUMN target_context TEXT")
         conn.execute("DROP INDEX IF EXISTS idx_links_unique")
         self._create_unique(conn, "idx_links_ctx", "links",
                             "context, source, target, link_type",
@@ -808,7 +873,8 @@ class Graph:
                         source           TEXT, target TEXT, link_type TEXT, weight TEXT,
                         rationale        TEXT, created_turn INTEGER,
                         last_active_turn INTEGER, inactive_turns INTEGER,
-                        co_activation_count INTEGER DEFAULT 0);
+                        co_activation_count INTEGER DEFAULT 0,
+                        target_context   TEXT);
                     CREATE INDEX IF NOT EXISTS idx_links_source ON links(source);
                     CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
                     CREATE INDEX IF NOT EXISTS idx_links_turn   ON links(created_turn);
@@ -1024,8 +1090,10 @@ class Graph:
             # when present, else default to 0 (E2.1).
             link_cols = [c[1] for c in conn.execute("PRAGMA table_info(links)").fetchall()]
             coact_sql = "co_activation_count" if "co_activation_count" in link_cols else "0"
+            tctx_sql  = "target_context" if "target_context" in link_cols else "NULL"
             select = ("SELECT source, target, link_type, weight, rationale, "
-                      f"created_turn, last_active_turn, inactive_turns, {coact_sql} FROM links")
+                      f"created_turn, last_active_turn, inactive_turns, {coact_sql}, "
+                      f"{tctx_sql} FROM links")
             if has_context:
                 link_rows = conn.execute(select + " WHERE context=? ORDER BY id", (context,))
             else:
@@ -1040,6 +1108,7 @@ class Graph:
                     last_active_turn=row[6] or 0,
                     inactive_turns=row[7] or 0,
                     co_activation_count=row[8] or 0,
+                    target_context=row[9],
                 )
                 self.links.append(link)
         finally:

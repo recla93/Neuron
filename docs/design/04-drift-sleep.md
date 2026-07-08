@@ -74,10 +74,16 @@ disponibile, si degrada al trigger "consolidation all'avvio se inattivo da > sog
 
 ## Action items
 
-1. [ ] Drift link: formazione su co-occorrenza cross-contesto (contesti visitati), `tangential` +
+1. [x] Drift link: formazione su co-occorrenza cross-contesto (contesti visitati), `tangential` +
        cooldown 5, prune a 3 turni inattivi; superficie in `get_context(depth≥3)`.
+       — **E3.1**: `Link.target_context` (colonna+migrazione, pattern di E2.1); `Graph.form_drift_link(
+       source, target, target_context, turn)` (nasce tangential, `DRIFT_COOLDOWN=5`, riusa il contatore
+       Hebbian per rinforzare, `DRIFT_EXPIRY_TURNS=3` in `prune_tangential`). Formazione dal ramo
+       cross-domain spark di `_build_context_window` (solo `other_ctx` caricato = visitato). Drift
+       escluso da `get_active_links` e dall'adiacenza di `spreading_activation`.
+       **E3.2**: `_resolve_context` salta i drift nella traversal normale e li fa affiorare solo a
+       `depth>=3` (cap del tool = 3), annotati `target@context` nel render. Test: `tests/test_drift.py`.
 2. [ ] Sleep-mode: trigger da scheduler / all'avvio-se-inattivo; esegue `consolidate` (ADR-002) +
        pre-staging degli stimoli nei `meta`.
 3. [ ] `pre_turn` restituisce lo stimolo pre-caricato se presente e fresco.
-4. [ ] Test: drift si forma solo tra contesti visitati; prune rapido; pre-staging restituito e
-       invalidato se stale; degradazione graziosa senza scheduler.
+4. [~] Test: drift si forma solo tra contesti visitati ✅; prune rapido ✅; pre-staging (E3.4) da fare.
