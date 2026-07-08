@@ -21,6 +21,28 @@ function Get-LocalAppData {
     return (Join-Path $HOME 'AppData\Local')   # last-ditch fallback, never empty
 }
 
+# Stop a running Neuron server before touching its venv/files, so deploy/uninstall
+# don't fail on locked files (or half-write and corrupt). Matches processes running
+# `-m neuron`, run_mcp.bat, or anything under the given install dir. Never touches $PID.
+function Stop-NeuronServices {
+    param([string]$InstallDir, [switch]$Yes)
+    $pat = '(?i)(-m\s+neuron\b|\\run_mcp\.bat'
+    if ($InstallDir) { $pat += '|' + [regex]::Escape($InstallDir) }
+    $pat += ')'
+    $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and $_.ProcessId -ne $PID })
+    if ($procs.Count -eq 0) { return }
+    Write-Host "   Found running Neuron process(es):" -ForegroundColor Yellow
+    $procs | ForEach-Object { Write-Host ("     PID {0}: {1}" -f $_.ProcessId, $_.CommandLine) -ForegroundColor DarkGray }
+    $stop = if ($Yes) { $true } else { (Read-Host "   Stop them first (avoids locked files)? [Y/n]") -notmatch '^\s*(n|no)\s*$' }
+    if (-not $stop) { Write-Host "   Continuing without stopping - may fail on locked files." -ForegroundColor DarkYellow; return }
+    foreach ($p in $procs) {
+        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Host "     stopped PID $($p.ProcessId)" -ForegroundColor Green }
+        catch { Write-Host "     could not stop PID $($p.ProcessId): $_" -ForegroundColor Red }
+    }
+    Start-Sleep -Seconds 1
+}
+
 function Get-NeuronPaths {
     param([string]$Slug)
     if (-not $Slug) { if ($env:NEURON_SLUG) { $Slug = $env:NEURON_SLUG } else { $Slug = 'neuron5' } }

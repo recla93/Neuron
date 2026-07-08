@@ -1,0 +1,13 @@
+# Dependency caps for a reproducible Neuron install (pip install -c constraints.txt).
+# These do NOT pin exact versions — they cap the majors so a future breaking release
+# can't silently land during an install. install.ps1 passes this automatically when
+# present; DELETE this file to always take the latest resolvable versions.
+#
+# Rationale per pin:
+#   mcp        — cap the major; the MCP SDK moves fast and 2.x could break the server.
+#   fastembed  — it's pre-1.0, and minor bumps have changed embedding behavior
+#                (e.g. mean- vs CLS-pooling), which shifts the vector space. Cap tight.
+#   pyturso    — matches the prebuilt win_amd64 wheels shipped in vendor/ (0.6.1).
+mcp>=1.28,<2
+fastembed>=0.5,<0.9
+pyturso==0.6.1

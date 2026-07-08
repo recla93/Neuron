@@ -52,11 +52,13 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Dest = "$env:LOCALAPPDATA\Programs\neuron",
+    [string]$Dest,                # default computed from -Slug below (with LOCALAPPDATA fallback)
+    [string]$Slug = 'neuron5',    # install identity (v5 "Synapse"); use 'neuron' for the v4 line
     [switch]$DryRun,
     [switch]$RunTests,
     [switch]$Force,
-    [switch]$Prune
+    [switch]$Prune,
+    [switch]$Yes                  # non-interactive (don't prompt to stop a running server)
 )
 
 # Self-reinvoke with ExecutionPolicy Bypass. Rebuild the argument list by hand:
@@ -73,14 +75,23 @@ if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) {
             $fwd += "-$($kv.Key)"; $fwd += "$($kv.Value)"
         }
     }
-    & powershell -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @fwd
-    exit $LASTEXITCODE
+    $psExe = (Get-Process -Id $PID).Path                       # current host (works on pwsh-7-only boxes)
+    if (-not $psExe) { $psExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
+    if (-not $psExe) { $psExe = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
+    if ($psExe) { & $psExe -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @fwd; exit $LASTEXITCODE }
+    # else: fall through and run in this process (policy already allowed it)
 }
 
 $ErrorActionPreference = "Stop"
 
 # Repo root = parent of this script's folder (scripts\deploy.ps1 -> repo root)
 $Src = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot '_neuron_paths.ps1')
+
+# Resolve the install dir: -Dest wins; else %LOCALAPPDATA%\Programs\<slug> (with fallback).
+if (-not $Dest) { $Dest = Join-Path (Get-LocalAppData) "Programs\$Slug" }
+# Don't sync over a running server (locked venv files -> partial write / corruption).
+if (-not $DryRun) { Stop-NeuronServices -InstallDir $Dest -Yes:$Yes }
 
 # --- Sanity: are we really pointed at a Neuron source tree? -------------------
 if (-not (Test-Path (Join-Path $Src "pyproject.toml")) -or

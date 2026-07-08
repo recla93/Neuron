@@ -109,6 +109,7 @@ if (-not (Confirm-Step "Proceed?")) { Write-Host "  Cancelled - nothing changed.
 
 # --- base -------------------------------------------------------------------
 Write-Host "`n  Removing app..." -ForegroundColor Yellow
+if (-not $DryRun) { Stop-NeuronServices -InstallDir $P.InstallDir -Yes:$Yes }  # unlock venv files first
 Remove-Guarded $P.InstallDir 'Programs' 'install dir'
 Remove-Guarded $P.StartMenu  'Start Menu' 'Start-Menu shortcut'
 foreach ($t in $P.RegistrationTargets) { Remove-McpEntry $t }

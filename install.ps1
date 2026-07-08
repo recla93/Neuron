@@ -25,7 +25,9 @@
 
 param(
     [switch]$skipLlmProviders,
-    [switch]$ForceCompile   # skip the prebuilt-wheel path, go straight to compiling
+    [switch]$ForceCompile,      # skip the prebuilt-wheel path, go straight to compiling
+    [string]$Slug = 'neuron5',  # install identity (v5 "Synapse"); use 'neuron' for the v4 line
+    [switch]$Yes                # non-interactive: assume defaults, no prompts
 )
 
 # Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host
@@ -48,11 +50,52 @@ if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) {
 
 $ErrorActionPreference = "Continue"
 $SrcDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DestDir = "$env:LOCALAPPDATA\Programs\neuron"
+# %LOCALAPPDATA% with a fallback: if it's ever empty (stripped service env),
+# don't collapse to "\Programs\<slug>" at a drive root.
+$LocalApp = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { "$env:USERPROFILE\AppData\Local" }
+$DestDir = Join-Path $LocalApp "Programs\$Slug"   # install identity from -Slug (default neuron5)
 $Vendor  = Join-Path $SrcDir "vendor"     # pre-built pyturso wheels live here
 
-Write-Host "Neuron v3.3 - Installer (wheel-based)" -ForegroundColor Cyan
+Write-Host "Neuron installer (wheel-based) - slug '$Slug'" -ForegroundColor Cyan
 Write-Host "Source: $SrcDir  ->  Destination: $DestDir`n"
+
+# ---------------------------------------------------------------
+# Helper: stop a running Neuron server before we touch its venv/files,
+# so the install can't fail on locked files (or half-write and corrupt).
+# ---------------------------------------------------------------
+function Stop-NeuronServices {
+    param([string]$InstallDir)
+    $pat = '(?i)(-m\s+neuron\b|\\run_mcp\.bat|' + [regex]::Escape($InstallDir) + ')'
+    $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and ($_.CommandLine -match $pat) -and $_.ProcessId -ne $PID })
+    if (-not $procs -or $procs.Count -eq 0) { return }
+    Write-Host "   Found running Neuron process(es):" -ForegroundColor Yellow
+    $procs | ForEach-Object { Write-Host ("     PID {0}: {1}" -f $_.ProcessId, $_.CommandLine) -ForegroundColor DarkGray }
+    $stop = if ($Yes) { $true } else { (Read-Host "   Stop them before installing (avoids locked files)? [Y/n]") -notmatch '^\s*(n|no)\s*$' }
+    if ($stop) {
+        foreach ($p in $procs) {
+            try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Host "     stopped PID $($p.ProcessId)" -ForegroundColor Green }
+            catch { Write-Host "     could not stop PID $($p.ProcessId): $_" -ForegroundColor Red }
+        }
+        Start-Sleep -Seconds 1
+    } else {
+        Write-Host "   Continuing without stopping - install may fail on locked files." -ForegroundColor DarkYellow
+    }
+}
+
+# ---------------------------------------------------------------
+# Helper: which of our deps are already importable in a given interpreter.
+# Lets us skip re-installing on a re-run and gives the user control.
+# ---------------------------------------------------------------
+function Get-DepsPresent {
+    param([string]$Py)
+    if (-not (Test-Path $Py)) { return @{} }
+    $probe = 'import importlib.util as u,json; print(json.dumps({m:(u.find_spec(m) is not None) for m in ["neuron","mcp","fastembed","turso"]}))'
+    $out = & $Py -c $probe 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return @{} }
+    try { $h=@{}; ($out | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $h[$_.Name]=$_.Value }; return $h }
+    catch { return @{} }
+}
 
 # ---------------------------------------------------------------
 # Helper: download with URL fallback (each URL: 3 attempts)
@@ -122,6 +165,7 @@ Write-Host "   Tooling: python $maj.$min | uv=$HasUv | uvx=$HasUvx"
 # 2. VENV  (pip by default; fall back to uv when the venv has no pip)
 # ===============================================================
 Write-Host "`n2. Virtual env..." -ForegroundColor Yellow
+Stop-NeuronServices -InstallDir $DestDir   # don't install over a running server (locked files)
 New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
 $venv = "$DestDir\.venv"
 if (-not (Test-Path "$venv\Scripts\python.exe")) {
@@ -169,12 +213,20 @@ Write-Host "`n4. Installing Neuron + dependencies..." -ForegroundColor Yellow
 
 # Install via pip OR uv (when the venv has no working pip). Keeps the
 # prebuilt-pyturso --find-links path working under both. Retries 3x.
+# Optional dependency pins the user controls: a constraints file caps the majors
+# of unpinned deps (mcp/fastembed) so a future breaking release can't silently
+# land. Ship it beside install.ps1; delete it to always take latest.
+$Constraints = Join-Path $SrcDir "constraints.txt"
 function Invoke-Install {
-    param([string[]]$Target, [switch]$AllowVendor, [string]$Name = "Neuron")
+    param([string[]]$Target, [switch]$AllowVendor, [switch]$Upgrade, [switch]$ForceReinstall, [string]$Name = "Neuron")
+    $extra = @()
+    if (Test-Path $Constraints) { $extra += @("-c", $Constraints) }
+    if ($Upgrade)        { $extra += "--upgrade" }
+    if ($ForceReinstall) { $extra += "--force-reinstall" }
     if ($UseUv) {
         $a = @("pip", "install", "--python", $venvPy)
         if ($AllowVendor -and (Test-Path $Vendor)) { $a += @("--find-links", $Vendor) }
-        $a += $Target
+        $a += $extra; $a += $Target
         for ($t = 1; $t -le 3; $t++) {
             if ($t -gt 1) { Write-Host "   Attempt $t/3..." -ForegroundColor DarkYellow; Start-Sleep -Seconds 3 }
             & uv @a
@@ -185,14 +237,45 @@ function Invoke-Install {
     }
     $a = @("install", "--timeout", "180", "--retries", "3")
     if ($AllowVendor -and (Test-Path $Vendor)) { $a += @("--find-links", $Vendor) }
-    $a += $Target
+    $a += $extra; $a += $Target
     return (Invoke-Pip -Pip $pip -PipArgs $a -Name $Name)
 }
 
-$installed = $false
-if (-not $ForceCompile) {
+# --- User control: report deps already present, let the user skip/reinstall/upgrade.
+$present  = Get-DepsPresent -Py $venvPy
+$allThere = $present.Count -gt 0 -and $present["neuron"] -and $present["mcp"] -and $present["fastembed"] -and $present["turso"]
+$instUpgrade = $false; $instForce = $false
+Write-Host "   Dependencies already in the venv: " -NoNewline
+if ($present.Count -eq 0) { Write-Host "none (fresh venv)" -ForegroundColor DarkGray }
+else { Write-Host (($present.GetEnumerator() | ForEach-Object { "$($_.Key)=$(if($_.Value){'yes'}else{'no'})" }) -join ' ') -ForegroundColor DarkGray }
+
+$skipInstall = $false
+if ($allThere) {
+    & $venvPy -c "import neuron; print('   Neuron ' + neuron.__version__ + ' already installed here.')" 2>$null
+    $ans = if ($Yes) { 'S' } else { Read-Host "   [S]kip install / [R]einstall / [U]pgrade? (default S)" }
+    switch -Regex ($ans) {
+        '^[Rr]' { $instForce = $true;   Write-Host "   -> reinstalling." -ForegroundColor Yellow }
+        '^[Uu]' { $instUpgrade = $true; Write-Host "   -> upgrading." -ForegroundColor Yellow }
+        default { $skipInstall = $true; Write-Host "   -> keeping existing install (skipping)." -ForegroundColor Green }
+    }
+}
+
+# --- Preview + confirm what will be installed (unless -Yes / skipping).
+if (-not $skipInstall) {
+    Write-Host "   Will install: $installTarget" -ForegroundColor Gray
+    Write-Host "     + runtime deps from pyproject (mcp, fastembed, pyturso$(if (Test-Path $Constraints) {'; capped by constraints.txt'}))" -ForegroundColor Gray
+    Write-Host "     into venv: $venv" -ForegroundColor Gray
+    if (-not $Yes) {
+        $go = Read-Host "   Proceed with install? [Y/n]"
+        if ($go -match '^\s*(n|no)\s*$') { Write-Host "   Install cancelled by user." -ForegroundColor DarkYellow; exit 0 }
+    }
+}
+
+$installed = $skipInstall
+if ($skipInstall) { Write-Host "   [skip] using existing dependencies." -ForegroundColor Green }
+if (-not $installed -and -not $ForceCompile) {
     Write-Host "   [a] Prebuilt path (no compiler needed)..." -ForegroundColor Yellow
-    $installed = Invoke-Install -Target @($installTarget) -AllowVendor
+    $installed = Invoke-Install -Target @($installTarget) -AllowVendor -Upgrade:$instUpgrade -ForceReinstall:$instForce
 }
 
 if (-not $installed) {
@@ -240,7 +323,7 @@ if (-not $installed) {
     }
 
     Write-Host "   [b] Compile path (pyturso from source)..." -ForegroundColor Yellow
-    $installed = Invoke-Install -Target @($installTarget)   # no vendor: build pyturso from source
+    $installed = Invoke-Install -Target @($installTarget) -Upgrade:$instUpgrade -ForceReinstall:$instForce   # no vendor: build pyturso from source
 }
 
 if (-not $installed) {
@@ -271,44 +354,36 @@ if (-not $skipLlmProviders) {
 # ===============================================================
 # 6. MCP REGISTRATION
 # ===============================================================
-Write-Host "`n6. MCP Registration..." -ForegroundColor Yellow
+Write-Host "`n6. MCP Registration (key '$Slug')..." -ForegroundColor Yellow
 $runCmd = "$venv\Scripts\python.exe"
-$mcpEntryStd = @{ command = $runCmd; args = @("-m","neuron") }
+$mcpEntryStd = @{ command = $runCmd; args = @("-m","neuron") }   # module stays 'neuron'; only the registration key is the slug
 
-# --- Claude Desktop ---
-$cd = "$env:APPDATA\Claude\claude_desktop_config.json"
-if (Test-Path $cd) {
-    try {
-        $cfg = Get-Content $cd -Raw | ConvertFrom-Json
-        if (-not $cfg.mcpServers) { $cfg | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue @{} }
-        $cfg.mcpServers | Add-Member -Force -MemberType NoteProperty -Name "neuron" -Value $mcpEntryStd
-        $cfg | ConvertTo-Json -Depth 10 | Set-Content $cd -Encoding UTF8
-        Write-Host "   [OK] Claude Desktop - restart it to activate"
-    } catch { Write-Host "   [!] Claude Desktop config parse error: $_" -ForegroundColor Red }
-} else { Write-Host "   [ ] Claude Desktop - config not found" -ForegroundColor DarkYellow }
+# Register under mcpServers with a backup + full-depth write (never a blind, shallow
+# overwrite that could truncate a deep config or lose it if it wasn't valid JSON).
+function Register-Mcp {
+    param([string]$App, [string]$Path, [object]$Entry, [string]$Key)
+    if (-not (Test-Path $Path)) { Write-Host "   [ ] $App - config not found" -ForegroundColor DarkYellow; return }
+    try { $cfg = Get-Content $Path -Raw | ConvertFrom-Json -ErrorAction Stop }
+    catch { Write-Host "   [!] $App - not plain JSON; add '$Key' by hand ($Path)" -ForegroundColor Red; return }
+    Copy-Item $Path "$Path.neuron-bak" -Force -ErrorAction SilentlyContinue
+    if (-not $cfg.mcpServers) { $cfg | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue (New-Object PSObject) -Force }
+    $cfg.mcpServers | Add-Member -Force -MemberType NoteProperty -Name $Key -Value $Entry
+    ($cfg | ConvertTo-Json -Depth 32) | Set-Content $Path -Encoding UTF8
+    Write-Host "   [OK] $App (key '$Key'; backup: $Path.neuron-bak)"
+}
 
-# --- Cursor ---
-$cur = "$env:USERPROFILE\.cursor\mcp.json"
-if (Test-Path $cur) {
-    try {
-        $cfg = Get-Content $cur -Raw | ConvertFrom-Json
-        if (-not $cfg.mcpServers) { $cfg | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue @{} }
-        $cfg.mcpServers | Add-Member -Force -MemberType NoteProperty -Name "neuron" -Value $mcpEntryStd
-        $cfg | ConvertTo-Json -Depth 10 | Set-Content $cur -Encoding UTF8
-        Write-Host "   [OK] Cursor (mcp.json)"
-    } catch { Write-Host "   [!] Cursor config parse error: $_" -ForegroundColor Red }
-} else { Write-Host "   [ ] Cursor - mcp.json not found" -ForegroundColor DarkYellow }
-
-Write-Host "   Other clients (OpenCode, Claude Code, VS Code, Zed, ...): see clients\ and INSTALL.md."
+Register-Mcp -App "Claude Desktop" -Path "$env:APPDATA\Claude\claude_desktop_config.json" -Entry $mcpEntryStd -Key $Slug
+Register-Mcp -App "Cursor"         -Path "$env:USERPROFILE\.cursor\mcp.json"                -Entry $mcpEntryStd -Key $Slug
+Write-Host "   Other clients (OpenCode, Claude Code, VS Code, Zed, ...): run scripts\configuration.ps1 or see INSTALL.md."
 
 # ===============================================================
 # 7. SHORTCUT
 # ===============================================================
 Write-Host "`n7. Start Menu shortcut..." -ForegroundColor Yellow
-$sd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Neuron"
+$sd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$Slug"
 New-Item -ItemType Directory -Path $sd -Force | Out-Null
 $w = New-Object -ComObject WScript.Shell
-$s = $w.CreateShortcut("$sd\Neuron.lnk")
+$s = $w.CreateShortcut("$sd\$Slug.lnk")
 $s.TargetPath = "$venv\Scripts\python.exe"
 $s.Arguments = "-m neuron"
 $s.WorkingDirectory = $DestDir; $s.Save()
