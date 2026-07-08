@@ -43,20 +43,12 @@ except Exception:
 _PROBE_TABLE = "_neuron_conn_probe"
 
 
-def _mask(token: str) -> str:
-    """Render a token safe to display: only its length, never its content."""
-    return f"<{len(token)} chars>" if token else "<empty>"
-
-
 def _preview(token: str) -> str:
-    """A verifiable-but-guarded preview: head…tail + length, so a user can
-    confirm they pasted the right value without splashing the whole secret on
-    screen. For very short strings just show the length."""
-    if not token:
-        return "<empty>"
-    if len(token) <= 24:
-        return f"<{len(token)} chars>"
-    return f"{token[:12]}…{token[-8:]}  ({len(token)} chars)"
+    """Show only the token length by default. The token isn't very sensitive
+    (long, revocable) and lands in .env in cleartext anyway, so elaborate
+    console masking is theater — confidentiality is handled by .env file perms +
+    gitignore. Use --show-token to echo it whole for a char-by-char check."""
+    return f"<{len(token)} chars>" if token else "<empty>"
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +67,6 @@ def _preview(token: str) -> str:
 
 # Anything that is whitespace or an ASCII/Unicode control character.
 _CTRL_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]")
-# A Turso JWT is base64url with '.' separators; allow base64 '=' padding too.
-_TOKEN_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._~+/=-]+$")
 # RFC-3986-ish set: enough for libsql://host:port/path?query URLs.
 _URL_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$")
 _URL_SCHEMES = ("libsql", "wss", "ws", "https", "http")
@@ -104,15 +94,10 @@ def validate_url(url: str) -> str | None:
     return None
 
 
-def validate_token(token: str) -> str | None:
-    """Return a human error message if the token is unusable, else ``None``.
-    Never includes the token content in the message."""
-    if not token:
-        return "token vuoto."
-    if not _TOKEN_ALLOWED_RE.match(token):
-        bad = sorted({c for c in token if not _TOKEN_ALLOWED_RE.match(c)})
-        return f"token contiene caratteri non validi: {bad!r}."
-    return None
+# NOTE: a token charset check used to live here; dropped — the real read+write
+# network probe (_probe_one) validates the token authoritatively, and a regex
+# risks false-rejecting a future token format. sanitize_credential (control-char
+# strip) stays: it's the actual fix for the hidden-newline header-injection bug.
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Both a URL and a token are required. Aborting.", file=sys.stderr)
         return 1
 
-    err = validate_url(url) or validate_token(token)
+    err = validate_url(url)
     if err:
         print(f"Credenziali non valide: {err}", file=sys.stderr)
         print("  Ricontrolla di aver incollato URL e token senza spazi o a-capo interni.",

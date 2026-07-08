@@ -7,7 +7,8 @@ header ``Authorization: Bearer <token>``; the HTTP stack rejects any header valu
 with a control char (header-injection guard), so EVERY connection scheme fails
 identically ("every scheme failed"). ``.strip()`` only cleaned the ends, letting
 an internal line break through. sanitize_credential now removes control/whitespace
-chars anywhere; validate_url/validate_token reject genuinely bad input clearly.
+chars anywhere; validate_url rejects a genuinely bad URL scheme clearly (the
+token itself is validated authoritatively by the real network probe).
 """
 
 import importlib.util
@@ -59,20 +60,11 @@ def test_sanitized_token_is_a_legal_http_header_value():
     c.putheader("Authorization", "Bearer " + clean)  # must NOT raise
 
 
-# --- validate_token ---------------------------------------------------------
+# --- token preview (length-only; masking de-obscured) -----------------------
 
-def test_validate_token_accepts_real_turso_token_with_underscore():
-    assert ct.validate_token("eyJhbG_ciOi-Jd.ab_c-123.si_g") is None
-
-
-def test_validate_token_rejects_bad_char_without_leaking_token():
-    err = ct.validate_token("abc@def")
-    assert err is not None and "@" in err
-    assert "abc" not in err  # never echo the token body
-
-
-def test_validate_token_rejects_empty():
-    assert ct.validate_token("") is not None
+def test_preview_shows_length_only():
+    assert ct._preview("eyJhbGciOi_secret_token-123") == "<27 chars>"
+    assert ct._preview("") == "<empty>"
 
 
 # --- validate_url -----------------------------------------------------------
