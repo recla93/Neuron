@@ -1403,7 +1403,7 @@ function Invoke-CleanUninstall {
 
     Write-Host ""
     $deReg = Confirm-YesNo "Also remove Neuron from your AI apps' config (recommended)?"
-    $wipeData = Confirm-YesNo "Also DELETE local memory data in this repo (graphs\*.db)? This is irreversible."
+    $wipeData = Confirm-YesNo "Also DELETE ALL local memory data (the real store + repo graphs\*.db)? Irreversible."
 
     Write-Host "`n  Uninstalling..." -ForegroundColor Yellow
     if ($deReg) { Remove-McpRegistrations }
@@ -1411,11 +1411,22 @@ function Invoke-CleanUninstall {
     Remove-InstallDir
 
     if ($wipeData) {
-        $graphs = Join-Path $Repo "graphs"
-        if (Test-Path $graphs) {
-            Get-ChildItem $graphs -Filter "*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-            Write-Host "  [OK] Cleared local memory graphs in $graphs" -ForegroundColor Green
+        # The real memory store lives OUTSIDE the repo/install dir (see server.py
+        # _default_graphs_dir): %LOCALAPPDATA%\<slug>\graphs. Also clear the legacy
+        # v4 store and the repo copy. NS_GRAPHS_DIR overrides the location.
+        $stores = @()
+        if ($env:NS_GRAPHS_DIR) { $stores += $env:NS_GRAPHS_DIR }
+        $local = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { "$env:USERPROFILE\AppData\Local" }
+        $stores += (Join-Path $local "neuron5\graphs")   # v5 "Synapse"
+        $stores += (Join-Path $local "neuron\graphs")    # legacy v4
+        $stores += (Join-Path $Repo "graphs")            # repo copy
+        foreach ($s in ($stores | Select-Object -Unique)) {
+            if (Test-Path $s) {
+                Get-ChildItem $s -Filter "*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+                Write-Host "  [OK] Cleared memory graphs in $s" -ForegroundColor Green
+            }
         }
+        Write-Host "  Tip: for a full wipe (secrets, model cache too) run scripts\uninstall.ps1 -All" -ForegroundColor DarkGray
     } else {
         Write-Host "  Kept your local memory data." -ForegroundColor DarkGray
     }

@@ -261,10 +261,30 @@ See the README "Database engine" section.
 
 ## Uninstall
 
+**Recommended — the tiered uninstaller** (you choose how much to remove; nothing
+destructive by default, and it can preview first):
+
 ```powershell
-# remove the install + venv
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\neuron"
-# remove the Start Menu shortcut
-Remove-Item -Recurse -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Neuron"
-# then delete the "neuron" entry from each client config (claude_desktop_config.json, mcp.json, opencode.json)
+# app only: install dir + venv/deps, Start-Menu, MCP de-registration from all 6 clients
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
+
+# preview a FULL wipe without changing anything
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -All -DryRun
+
+# full wipe: app + memory data + .env secrets + model cache
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -All
 ```
+
+Flags: `-Data` (memory store), `-Secrets` (scrub `.env`), `-Cache` (fastembed model
+cache), `-All` (= all three), `-DryRun`, `-Yes` (no prompts). For a v4 install pass
+`-Slug neuron` (or set `NEURON_SLUG`).
+
+**Everything an install can leave behind** (so you can remove it all yourself if you
+prefer): install dir + venv `%LOCALAPPDATA%\Programs\neuron5`; **memory store
+`%LOCALAPPDATA%\neuron5\graphs`** (separate from the install so reinstalls don't wipe
+it — the classic thing manual uninstalls miss); repo `graphs\*.db`; `.env` (Turso
+token + API keys, in cleartext); the **fastembed/HuggingFace model cache** (~80MB,
+under `%LOCALAPPDATA%\Temp\fastembed_cache` and `~\.cache\huggingface`); the Start-Menu
+shortcut; the `neuron5` entry in each of the 6 client configs (Claude Desktop, Claude
+Code, Cursor, VS Code, OpenCode, Zed). On-demand fallback tools (Rust, MSVC Build Tools,
+`uv`, `cloudflared`) and your Turso **cloud** DB are never removed automatically.
