@@ -1790,8 +1790,13 @@ function Remove-InstallDir {
     Write-Host "  [!] Some files are locked - a Neuron process is likely still running." -ForegroundColor DarkYellow
     $procs = @()
     try {
-        $procs = Get-Process -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Path -and $_.Path.ToLower().StartsWith($target.ToLower()) }
+        # Access $_.Path inside try/catch: on Windows PowerShell 5.1 the property
+        # accessor throws Win32Exception for system processes even with the
+        # outer -ErrorAction SilentlyContinue, dumping red errors mid-uninstall.
+        $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            try { $_.Path -and $_.Path.ToLower().StartsWith($target.ToLower()) }
+            catch { $false }
+        }
     } catch {}
     if ($procs.Count -gt 0) {
         Write-Host ("      Holding it open: " + (($procs | ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join ", ")) -ForegroundColor DarkYellow
@@ -1986,7 +1991,7 @@ function Invoke-CleanUninstall {
         $stores += (Join-Path $Repo "graphs")            # repo copy
         foreach ($s in ($stores | Select-Object -Unique)) {
             if (Test-Path $s) {
-                Get-ChildItem $s -Filter "*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+                Get-ChildItem -LiteralPath $s -Filter "*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
                 Write-Host "  [OK] Cleared memory graphs in $s" -ForegroundColor Green
             }
         }
@@ -2018,10 +2023,10 @@ function Invoke-CleanUninstall {
     Write-Host "    - This source repo, Turso cloud DB, on-demand system tools." -ForegroundColor DarkGray
 
     Write-Host "`n  Done. Neuron has been uninstalled." -ForegroundColor Green
+    Write-Host "  (Any red lines above are informational - the run completed.)" -ForegroundColor DarkGray
+    Pause-Any
     if (Confirm-YesNo "Reinstall a fresh copy now (prerequisites -> PyTurso -> Neuron)?") {
         Invoke-InstallEverything
-    } else {
-        Pause-Any
     }
 }
 
@@ -2045,7 +2050,8 @@ function Get-NeuronServerProcs {
         try {
             $root = $InstallDir.ToLower()
             $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-                $_.Id -ne $me -and $_.Path -and $_.Path.ToLower().StartsWith($root)
+                try { $_.Id -ne $me -and $_.Path -and $_.Path.ToLower().StartsWith($root) }
+                catch { $false }
             } | ForEach-Object { [pscustomobject]@{ ProcessId = $_.Id; CommandLine = $_.Path } })
         } catch {}
     }
