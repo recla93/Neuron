@@ -33,6 +33,17 @@ if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) {
 $ErrorActionPreference = "Continue"
 $issues = @()
 $SrcDir = Split-Path -Parent $PSScriptRoot
+# Single source of truth for where Neuron is actually INSTALLED (this used to be
+# the one script never wired to it - it always checked a dev venv under the repo,
+# $SrcDir\.venv, which a normal end-user install never creates (install.ps1 puts
+# the real venv under %LOCALAPPDATA%\Programs\<slug>\.venv). Result: check.ps1
+# reported ".venv"/mcp/fastembed/pyturso all missing right after a successful
+# install, because it was looking in the wrong place and silently falling back
+# to the bare system "python". Prefer the installed venv; fall back to the repo
+# dev venv (for a from-source checkout); last resort is the bare "python" on PATH.
+. (Join-Path $PSScriptRoot "_neuron_paths.ps1")
+$NP = Get-NeuronPaths
+$InstallDir = $NP.InstallDir
 
 function Check {
     param([string]$Label, [scriptblock]$Condition, [scriptblock]$RepairAction = $null)
@@ -56,8 +67,10 @@ Write-Host ""
 # ---- 1. Python ----
 Write-Host "1. Python runtime" -ForegroundColor Yellow
 Check -Label "Python 3.10+" -Condition { python -c "import sys; exit(0 if sys.version_info >= (3,10) else 1)" 2>$null; $LASTEXITCODE -eq 0 }
-Check -Label ".venv" -Condition { Test-Path "$SrcDir\.venv\Scripts\python.exe" }
-$py = if (Test-Path "$SrcDir\.venv\Scripts\python.exe") { "$SrcDir\.venv\Scripts\python.exe" } else { "python" }
+$InstallVenvPy = "$InstallDir\.venv\Scripts\python.exe"
+$RepoVenvPy    = "$SrcDir\.venv\Scripts\python.exe"
+Check -Label "venv ($InstallDir)" -Condition { Test-Path $InstallVenvPy }
+$py = if (Test-Path $InstallVenvPy) { $InstallVenvPy } elseif (Test-Path $RepoVenvPy) { $RepoVenvPy } else { "python" }
 
 # ---- 2. Python dependencies ----
 # Checked FIRST on purpose: if pyturso imports, the Rust/MSVC toolchain is
@@ -66,7 +79,7 @@ Write-Host "`n2. Python dependencies" -ForegroundColor Yellow
 
 # pip lives in the venv; use `-m pip` so it works even if the pip.exe launcher
 # is missing (e.g. a uv-created venv). Falls back to the base python's pip.
-$pipExe = "$SrcDir\.venv\Scripts\pip.exe"
+$pipExe = if (Test-Path $InstallVenvPy) { "$InstallDir\.venv\Scripts\pip.exe" } else { "$SrcDir\.venv\Scripts\pip.exe" }
 function Invoke-Pip { param([string[]]$PipArgs)
     if (Test-Path $py) { & $py -m pip @PipArgs 2>$null }
     elseif (Test-Path $pipExe) { & $pipExe @PipArgs 2>$null }
