@@ -372,13 +372,47 @@ $mcpEntryStd = @{ command = $runCmd; args = @("-m","neuron") }   # module stays 
 function Register-Mcp {
     param([string]$App, [string]$Path, [object]$Entry, [string]$Key)
     if (-not (Test-Path $Path)) { Write-Host "   [ ] $App - config not found" -ForegroundColor DarkYellow; return }
-    try { $cfg = Get-Content $Path -Raw | ConvertFrom-Json -ErrorAction Stop }
-    catch { Write-Host "   [!] $App - not plain JSON; add '$Key' by hand ($Path)" -ForegroundColor Red; return }
-    Copy-Item $Path "$Path.neuron-bak" -Force -ErrorAction SilentlyContinue
+
+    # 0-byte / whitespace-only file: nothing to merge into, but that is NOT the
+    # same as "invalid JSON". Feeding an empty string to ConvertFrom-Json is
+    # inconsistent across PowerShell versions - some throw, some silently return
+    # $null - and a silent $null used to sail through untouched, get piped into
+    # ConvertTo-Json, and overwrite the file with the literal text "null". Start
+    # from a fresh object instead so an empty file is treated like "no config yet".
+    $raw = Get-Content $Path -Raw -ErrorAction SilentlyContinue
+    if (-not $raw -or -not $raw.Trim()) {
+        $cfg = New-Object psobject
+    } else {
+        try { $cfg = $raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { Write-Host "   [!] $App - not plain JSON; add '$Key' by hand ($Path)" -ForegroundColor Red; return }
+        if ($null -eq $cfg) {
+            # Parsed fine but isn't an object (e.g. the file already contains the
+            # literal `null`, or a bare array/number) - refuse rather than guess.
+            Write-Host "   [!] $App - config isn't a JSON object; add '$Key' by hand ($Path)" -ForegroundColor Red
+            return
+        }
+    }
+
+    $backup = "$Path.neuron-bak"
+    Copy-Item $Path $backup -Force -ErrorAction SilentlyContinue
+
     if (-not $cfg.mcpServers) { $cfg | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue (New-Object PSObject) -Force }
     $cfg.mcpServers | Add-Member -Force -MemberType NoteProperty -Name $Key -Value $Entry
-    ($cfg | ConvertTo-Json -Depth 32) | Set-Content $Path -Encoding UTF8
-    Write-Host "   [OK] $App (key '$Key'; backup: $Path.neuron-bak)"
+
+    try { ($cfg | ConvertTo-Json -Depth 32) | Set-Content $Path -Encoding UTF8 -ErrorAction Stop }
+    catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
+
+    # Verify what we just wrote is actually valid JSON; roll back from the
+    # backup rather than leave a client-breaking file in place (mirrors
+    # scripts/configuration.ps1's Save-Json).
+    try { Get-Content $Path -Raw | ConvertFrom-Json -ErrorAction Stop | Out-Null }
+    catch {
+        Copy-Item $backup $Path -Force -ErrorAction SilentlyContinue
+        Write-Host "   [X] $App - write verification failed, restored the previous file ($Path)" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "   [OK] $App (key '$Key'; backup: $backup)"
 }
 
 Register-Mcp -App "Claude Desktop" -Path "$env:APPDATA\Claude\claude_desktop_config.json" -Entry $mcpEntryStd -Key $Slug
