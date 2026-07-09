@@ -445,8 +445,14 @@ function Register-Mcp {
     # real data to the literal string "System.Collections.Hashtable", which
     # parses fine so verification passes but the entry we tried to add can
     # end up missing.
-    try { ($cfg | ConvertTo-Json -Depth 100) | Set-Content $Path -Encoding utf8NoBOM -ErrorAction Stop }
-    catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
+    # UTF-8 without a BOM. `-Encoding utf8NoBOM` is PS 7+ only and errors out on
+    # Windows PowerShell 5.1; [IO.File]::WriteAllText with a UTF8Encoding($false)
+    # produces the same BOM-less bytes on both hosts. Claude Code's JSON.parse
+    # chokes on a leading BOM byte.
+    try {
+        $json = ($cfg | ConvertTo-Json -Depth 100)
+        [System.IO.File]::WriteAllText($Path, [string]$json, [System.Text.UTF8Encoding]::new($false))
+    } catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
 
     # Verify (a) the file is still valid JSON and (b) our entry is actually
     # present on disk after the write. (b) catches PowerShell JSON-roundtrip

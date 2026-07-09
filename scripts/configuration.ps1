@@ -1258,7 +1258,7 @@ function Save-Json {
     $backup = $null
     if (Test-Path $path) { $backup = "$path.neuron-bak"; Copy-Item $path $backup -Force -ErrorAction SilentlyContinue }
     try {
-        $obj | ConvertTo-Json -Depth 100 | Set-Content -Path $path -Encoding utf8NoBOM -ErrorAction Stop
+        Write-Utf8NoBom -Path $path -Content ($obj | ConvertTo-Json -Depth 100)
     } catch {
         Write-Host "  [X] Could not write $path : $_" -ForegroundColor Red
         return $false
@@ -1591,7 +1591,7 @@ function Update-EnvFile {
         } else { $out += $line }
     }
     foreach ($k in $remaining.Keys) { $out += "$k=$($remaining[$k])" }
-    Set-Content -Path $path -Value $out -Encoding utf8NoBOM
+    Write-Utf8NoBom -Path $path -Content $out
 }
 
 # ---------------------------------------------------------------------------
@@ -1940,7 +1940,7 @@ function Scrub-Env {
         return
     }
     Copy-Item -LiteralPath $EnvPath "$EnvPath.neuron-bak" -Force -ErrorAction SilentlyContinue
-    $kept | Set-Content -LiteralPath $EnvPath -Encoding utf8NoBOM
+    Write-Utf8NoBom -Path $EnvPath -Content $kept
     Write-Host "  [OK] Scrubbed $n secret line(s) from .env (backup: $EnvPath.neuron-bak)" -ForegroundColor Green
 }
 

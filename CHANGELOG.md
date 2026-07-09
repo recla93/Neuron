@@ -28,11 +28,19 @@ review pass over every "Add to your AI" path. No re-embed or data migration need
   that `$null` was then re-serialized to the 4-byte string `null`, clobbering
   the file. Empty files now start from a fresh object; a parsed-but-non-object
   result is left untouched with a by-hand instruction.
-- **UTF-8 BOM broke Claude Code's `settings.json`.** Every JSON/`.env` write used
-  `-Encoding UTF8`, which in Windows PowerShell 5.1 prepends a BOM; Claude Code's
-  `JSON.parse` chokes on the leading BOM byte (`SyntaxError: Unexpected token`).
-  Switched every write (`Save-Json`, `Update-EnvFile`, `Scrub-Env`, `Register-Mcp`,
-  and `uninstall.ps1`'s writers) to `-Encoding utf8NoBOM`.
+- **UTF-8 BOM broke Claude Code's `settings.json`, and the "fix" broke installs
+  outright.** Every JSON/`.env` write used `-Encoding UTF8`, which in Windows
+  PowerShell 5.1 prepends a BOM; Claude Code's `JSON.parse` chokes on the leading
+  BOM byte (`SyntaxError: Unexpected token`). The obvious next step is
+  `-Encoding utf8NoBOM`, but that token was added in PowerShell 7 — 5.1
+  (the default host on every stock Windows box) rejects it with "Cannot bind
+  parameter 'Encoding'", so every JSON/`.env` write in `Save-Json`,
+  `Update-EnvFile`, `Scrub-Env`, `Register-Mcp` and `uninstall.ps1` failed
+  silently, which is what turned "install dir not present" and half-cleaned
+  uninstalls into the visible symptoms Luca hit. Every writer now goes through
+  a new `Write-Utf8NoBom` helper backed by
+  `[System.IO.File]::WriteAllText(..., [System.Text.UTF8Encoding]::new($false))` —
+  same bytes on both 5.1 and 7+, no BOM.
 - **`check.ps1` reported a good install as broken.** It looked for the venv under
   the repo (`$SrcDir\.venv`) instead of the real install dir
   (`%LOCALAPPDATA%\Programs\<slug>\.venv`), so `.venv`/mcp/fastembed/pyturso

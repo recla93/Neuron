@@ -97,7 +97,7 @@ function Remove-McpEntry($t) {
     if ($DryRun) { Write-Host "  [dry-run] would de-register from $($t.app)" -ForegroundColor Cyan; return }
     Copy-Item -LiteralPath $t.path "$($t.path).neuron-bak" -Force -ErrorAction SilentlyContinue
     $parent.PSObject.Properties.Remove($leaf)
-    ($cfg | ConvertTo-Json -Depth 32) | Set-Content -LiteralPath $t.path -Encoding utf8NoBOM
+    Write-Utf8NoBom -Path $t.path -Content ($cfg | ConvertTo-Json -Depth 32)
     Write-Host "  [OK] de-registered from $($t.app) (backup: $($t.path).neuron-bak)" -ForegroundColor Green
 }
 
@@ -123,7 +123,7 @@ function Remove-ClientPlugins {
                 else {
                     Copy-Item -LiteralPath $ocPath "$ocPath.neuron-bak" -Force -ErrorAction SilentlyContinue
                     $cfg.plugin = $after
-                    ($cfg | ConvertTo-Json -Depth 32) | Set-Content -LiteralPath $ocPath -Encoding utf8NoBOM
+                    Write-Utf8NoBom -Path $ocPath -Content ($cfg | ConvertTo-Json -Depth 32)
                     Write-Host "  [OK] Removed neuron-handshake entry from OpenCode's opencode.json" -ForegroundColor Green
                 }
                 $any = $true
@@ -160,7 +160,7 @@ function Remove-ClientPlugins {
                 else {
                     Copy-Item -LiteralPath $ccPath "$ccPath.neuron-bak" -Force -ErrorAction SilentlyContinue
                     $cfg.hooks.SessionStart = $newGroups
-                    ($cfg | ConvertTo-Json -Depth 32) | Set-Content -LiteralPath $ccPath -Encoding utf8NoBOM
+                    Write-Utf8NoBom -Path $ccPath -Content ($cfg | ConvertTo-Json -Depth 32)
                     Write-Host "  [OK] Removed Neuron SessionStart hook from Claude Code's settings.json" -ForegroundColor Green
                 }
                 $any = $true
@@ -178,7 +178,7 @@ function Scrub-Env([string]$envPath) {
     if ($n -le 0) { Write-Host "  - .env : no secret lines to scrub" -ForegroundColor DarkGray; return }
     if ($DryRun) { Write-Host "  [dry-run] would scrub $n secret line(s) from $envPath" -ForegroundColor Cyan; return }
     Copy-Item -LiteralPath $envPath "$envPath.neuron-bak" -Force -ErrorAction SilentlyContinue
-    $kept | Set-Content -LiteralPath $envPath -Encoding utf8NoBOM
+    Write-Utf8NoBom -Path $envPath -Content $kept
     Write-Host "  [OK] scrubbed $n secret line(s) from .env (backup: $envPath.neuron-bak)" -ForegroundColor Green
 }
 

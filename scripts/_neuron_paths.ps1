@@ -15,6 +15,34 @@
   (same env the server honors).
 #>
 
+# Write text as UTF-8 WITHOUT a BOM, on every PowerShell host.
+#
+# Why not `Set-Content -Encoding utf8NoBOM`: that token was added in
+# PowerShell 7. Windows PowerShell 5.1 (the default host on every stock
+# Windows box) rejects it with "Cannot bind parameter 'Encoding'. Cannot
+# convert value 'utf8NoBOM' to type ...FileSystemCmdletProviderEncoding",
+# which then bubbles up as "install dir not present" / silent JSON writes
+# in the installer + uninstaller. `[IO.File]::WriteAllText` with a
+# UTF8Encoding($false) argument produces the same bytes on both hosts.
+#
+# `$Content` accepts either a single string (already joined, e.g. a
+# ConvertTo-Json result) or an array (each element becomes one line, plus a
+# trailing newline — matches Set-Content's default array behavior, needed
+# for .env scrubbing).
+function Write-Utf8NoBom {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Content
+    )
+    if ($Content -is [System.Array]) {
+        $text = ($Content -join [Environment]::NewLine) + [Environment]::NewLine
+    } else {
+        $text = [string]$Content
+    }
+    $abs = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path (Get-Location).Path $Path }
+    [System.IO.File]::WriteAllText($abs, $text, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Get-LocalAppData {
     if ($env:LOCALAPPDATA) { return $env:LOCALAPPDATA }
     if ($env:USERPROFILE)  { return (Join-Path $env:USERPROFILE 'AppData\Local') }
