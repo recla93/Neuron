@@ -397,9 +397,25 @@ function Register-Mcp {
     Copy-Item $Path $backup -Force -ErrorAction SilentlyContinue
 
     if (-not $cfg.mcpServers) { $cfg | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue (New-Object PSObject) -Force }
+
+    # Pre-5.0 installs registered under the plain key 'neuron'. If that is still
+    # sitting next to the key we're about to (re)write, the client ends up
+    # running BOTH servers - duplicate tools (mcp__neuron__* and mcp__$Key`__*).
+    # Flag it (never delete silently); Uninstall or hand-editing $Path fixes it.
+    if ($Key -ne 'neuron') {
+        $legacy = $cfg.mcpServers.PSObject.Properties['neuron']
+        if ($legacy) {
+            $legacyCmd = $legacy.Value.command
+            if ($legacyCmd -is [array]) { $legacyCmd = $legacyCmd -join ' ' }
+            Write-Host "   [!] $App also has an older 'neuron' entry (pre-5.0): $legacyCmd" -ForegroundColor DarkYellow
+            Write-Host "       Both will show up as separate MCP servers until you remove one" -ForegroundColor DarkYellow
+            Write-Host "       (by hand from $Path, or via Uninstall)." -ForegroundColor DarkYellow
+        }
+    }
+
     $cfg.mcpServers | Add-Member -Force -MemberType NoteProperty -Name $Key -Value $Entry
 
-    try { ($cfg | ConvertTo-Json -Depth 32) | Set-Content $Path -Encoding UTF8 -ErrorAction Stop }
+    try { ($cfg | ConvertTo-Json -Depth 32) | Set-Content $Path -Encoding utf8NoBOM -ErrorAction Stop }
     catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
 
     # Verify what we just wrote is actually valid JSON; roll back from the

@@ -1030,6 +1030,28 @@ function Set-Prop {
     else { $obj | Add-Member -NotePropertyName $name -NotePropertyValue $value }
 }
 
+# Pre-5.0 installs registered under the plain key 'neuron' (before the v5
+# side-by-side identity 'neuron5' existed). If that key is still sitting next
+# to the one we are about to (re)write, the client ends up with BOTH servers
+# active - duplicate tools (mcp__neuron__* AND mcp__neuron5__*). We never
+# delete it silently (same rule as everywhere else in this installer) - just
+# make it visible with enough detail to act on.
+function Warn-LegacyNeuronKey {
+    param([object]$Container, [string]$App, [string]$Path)
+    if ($Slug -eq 'neuron') { return }
+    $legacy = $Container.PSObject.Properties['neuron']
+    if (-not $legacy) { return }
+    $cmd = $legacy.Value.command
+    if ($cmd -is [array]) { $cmd = $cmd -join ' ' }
+    Write-Host ""
+    Write-Host "  [!] $App also has an older 'neuron' entry (pre-5.0), alongside '$Slug':" -ForegroundColor DarkYellow
+    Write-Host "        command: $cmd" -ForegroundColor DarkGray
+    Write-Host "      Both will show up as separate MCP servers with duplicate tools" -ForegroundColor DarkYellow
+    Write-Host "      until you remove one - by hand from $Path, or via Uninstall (it" -ForegroundColor DarkYellow
+    Write-Host "      only ever touches what you opt into)." -ForegroundColor DarkYellow
+    Write-Host ""
+}
+
 # Deploy the neuron-handshake opencode plugin (clients/opencode-plugin/) to
 # %USERPROFILE%\.config\opencode\plugins\ and register it in $cfg's top-level
 # "plugin" array (an array of absolute path strings — appended, not replaced,
@@ -1141,7 +1163,7 @@ function Save-Json {
     $backup = $null
     if (Test-Path $path) { $backup = "$path.neuron-bak"; Copy-Item $path $backup -Force -ErrorAction SilentlyContinue }
     try {
-        $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $path -Encoding UTF8 -ErrorAction Stop
+        $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $path -Encoding utf8NoBOM -ErrorAction Stop
     } catch {
         Write-Host "  [X] Could not write $path : $_" -ForegroundColor Red
         return
@@ -1243,6 +1265,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
+            Warn-LegacyNeuronKey -Container $servers -App 'Claude Desktop' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'claude-desktop' -Path $path -Vpy $vpy
@@ -1252,6 +1275,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
+            Warn-LegacyNeuronKey -Container $servers -App 'Claude Code' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs; cwd = $InstallDir })
             Save-Json $cfg $path
             Install-ClaudeCodeSessionHook -Vpy $vpy
@@ -1262,6 +1286,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
+            Warn-LegacyNeuronKey -Container $servers -App 'Cursor' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'cursor' -Path $path -Vpy $vpy
@@ -1272,6 +1297,7 @@ function Write-ClientConfig {
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $mcp = Get-OrAddObject $cfg 'mcp'
             $servers = Get-OrAddObject $mcp 'servers'
+            Warn-LegacyNeuronKey -Container $servers -App 'VS Code' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ type = 'stdio'; command = $vpy; args = $nargs })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'vscode' -Path $path -Vpy $vpy
@@ -1281,6 +1307,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $mcp = Get-OrAddObject $cfg 'mcp'
+            Warn-LegacyNeuronKey -Container $mcp -App 'OpenCode' -Path $path
             Set-Prop $mcp $Slug ([pscustomobject]@{ command = @($vpy, '-m', 'neuron'); type = 'local' })
             Install-OpenCodeHandshakePlugin -Cfg $cfg
             Save-Json $cfg $path
@@ -1291,6 +1318,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $cs = Get-OrAddObject $cfg 'context_servers'
+            Warn-LegacyNeuronKey -Container $cs -App 'Zed' -Path $path
             Set-Prop $cs $Slug ([pscustomobject]@{ command = [pscustomobject]@{ path = $vpy; args = $nargs } })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'zed' -Path $path -Vpy $vpy
@@ -1395,7 +1423,7 @@ function Update-EnvFile {
         } else { $out += $line }
     }
     foreach ($k in $remaining.Keys) { $out += "$k=$($remaining[$k])" }
-    Set-Content -Path $path -Value $out -Encoding UTF8
+    Set-Content -Path $path -Value $out -Encoding utf8NoBOM
 }
 
 # ---------------------------------------------------------------------------
@@ -1709,7 +1737,7 @@ function Scrub-Env {
         return
     }
     Copy-Item -LiteralPath $EnvPath "$EnvPath.neuron-bak" -Force -ErrorAction SilentlyContinue
-    $kept | Set-Content -LiteralPath $EnvPath -Encoding UTF8
+    $kept | Set-Content -LiteralPath $EnvPath -Encoding utf8NoBOM
     Write-Host "  [OK] Scrubbed $n secret line(s) from .env (backup: $EnvPath.neuron-bak)" -ForegroundColor Green
 }
 
