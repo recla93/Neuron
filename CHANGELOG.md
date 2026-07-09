@@ -15,6 +15,69 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.0.2] "Synapse" — 2026-07-09
+
+Installer hardening release. All bug fixes, no behavior change to the server or
+memory model — from real-world Windows installs (Luca's field reports) plus a
+review pass over every "Add to your AI" path. No re-embed or data migration needed.
+
+### Fixed
+- **Client configs could be overwritten with the literal `null`.** `Register-Mcp`
+  (`install.ps1`) fed an empty/0-byte `claude_desktop_config.json` / `mcp.json`
+  into `ConvertFrom-Json`, which returns `$null` on some PowerShell versions;
+  that `$null` was then re-serialized to the 4-byte string `null`, clobbering
+  the file. Empty files now start from a fresh object; a parsed-but-non-object
+  result is left untouched with a by-hand instruction.
+- **UTF-8 BOM broke Claude Code's `settings.json`.** Every JSON/`.env` write used
+  `-Encoding UTF8`, which in Windows PowerShell 5.1 prepends a BOM; Claude Code's
+  `JSON.parse` chokes on the leading BOM byte (`SyntaxError: Unexpected token`).
+  Switched every write (`Save-Json`, `Update-EnvFile`, `Scrub-Env`, `Register-Mcp`,
+  and `uninstall.ps1`'s writers) to `-Encoding utf8NoBOM`.
+- **`check.ps1` reported a good install as broken.** It looked for the venv under
+  the repo (`$SrcDir\.venv`) instead of the real install dir
+  (`%LOCALAPPDATA%\Programs\<slug>\.venv`), so `.venv`/mcp/fastembed/pyturso
+  all showed missing right after a clean install. Now resolves the install dir
+  via `_neuron_paths.ps1` like every other script.
+- **Microsoft Store Python silently broke installs.** The Store build runs under a
+  virtualized filesystem, so a venv created under the install dir can be redirected
+  into the package's `LocalCache`, invisible to every other process ("installs fine,
+  then nothing finds its own folders"). `install.ps1`/`check.ps1` now detect a
+  `...\WindowsApps\...` interpreter and refuse it with a clear remedy; uninstall
+  cleans up any leftover Store-Python shadow copy of the install.
+- **Background processes failed to start** (`bridge`, cloudflared tunnel, manual
+  server start). `Start-Process -RedirectStandardInput 'NUL'` doesn't understand
+  the Windows `NUL` device — it resolves `NUL` as a relative filename and throws
+  `FileNotFoundException`. Now redirects stdin from a real empty file under
+  `%TEMP%\neuron5` (same immediate-EOF effect, works on every host).
+- **`Save-Json` could report success after a silent rollback.** It didn't return a
+  status and only verified "is it valid JSON", not "did our entry survive". Claude
+  Code's deep `~/.claude.json` was truncated by `ConvertTo-Json -Depth 20` (real
+  data → the literal `System.Collections.Hashtable`) — still valid JSON, so verify
+  passed, but the `mcpServers` entry was gone. Depth raised to 100; `Save-Json`
+  now returns `$true`/`$false`, logs the exact failure reason, and saves the failed
+  output to `<path>.neuron-failed-write`. New `Assert-JsonKey` re-reads the file
+  after every write and confirms the entry is really on disk.
+- **Plugin/hook installers didn't verify where they landed.** The OpenCode plugin
+  dir is now derived from `opencode.json`'s location (correct on non-standard
+  installs) instead of hardcoded; both installers verify the file exists at its
+  target after copy and that the config entry survived the JSON round-trip, and
+  return a real success/failure status.
+- **"Add to your AI" always showed a green `[DONE]`** even when the registration
+  failed. All six client branches now aggregate every step's real result (MCP
+  write + on-disk verification + plugin/hook install) and switch the banner to a
+  clear failure message with manual copy-paste steps when anything didn't complete.
+- **Uninstall printed a wall of red `Access denied` errors.** Enumerating processes
+  to find who holds the install dir open threw `Win32Exception` on every
+  system process the user can't inspect; `-ErrorAction SilentlyContinue` on
+  `Get-Process` doesn't cover the later `$_.Path` access. Wrapped the property
+  access in a per-item `try/catch`, and moved the pause before the reinstall
+  prompt so nothing scrolls away.
+- **Duplicate v4+v5 registrations are now flagged.** Upgrading from the old
+  `neuron` slug to `neuron5` left both entries registered side by side (duplicate
+  `mcp__neuron__*` and `mcp__neuron5__*` tools); the installer detects a leftover
+  `neuron` entry and points at how to remove it (never deletes automatically).
+- **Signpost trimmed** to stay under the 1000-char CI budget (`SIGNPOST_BASE`).
+
 ## [5.0.1] "Synapse" — 2026-07-09
 
 ### Changed

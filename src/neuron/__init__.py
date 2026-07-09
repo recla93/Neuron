@@ -9,4 +9,4 @@ _load_dotenv_once()
 
 # Neuron 5 "Synapse". Keep this line clean (value only, no trailing comment) —
 # naive parsers in deploy.ps1 read it verbatim.
-__version__ = "5.0.1"
+__version__ = "5.0.2"
