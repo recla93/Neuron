@@ -153,6 +153,31 @@ $parts  = $verOut.Trim().Split()
 $maj = [int]$parts[0]; $min = [int]$parts[1]
 $basePy = (python -c "import sys; print(sys.executable)").Trim()   # the interpreter we validated
 Write-Host "   Detected Python $maj.$min : $basePy"
+
+# The Microsoft Store build of Python (the "python" alias Windows offers when no
+# real interpreter is on PATH) is not fit for this install: it runs under a
+# per-package virtualized filesystem, so writes that look like they land under
+# $DestDir/the venv from ITS point of view can be invisible or redirected when
+# any other process (this script's own later steps, the MCP client launching
+# venvPy, etc.) looks at the same path - "installs fine, then nothing can find
+# its own folders". There is no reliable way to "force a destination folder"
+# around that; the fix is to not build on it at all.
+if ($basePy -like '*\WindowsApps\*') {
+    Write-Host "ERROR: this is the Microsoft Store build of Python:" -ForegroundColor Red
+    Write-Host "       $basePy" -ForegroundColor Red
+    Write-Host "       It runs in a virtualized filesystem sandbox that silently breaks" -ForegroundColor Red
+    Write-Host "       venvs and installed packages (files written by it can be invisible" -ForegroundColor Red
+    Write-Host "       to every other program, including Neuron itself once launched)." -ForegroundColor Red
+    Write-Host "" -ForegroundColor Red
+    Write-Host "       Fix (pick one):" -ForegroundColor Yellow
+    Write-Host "       1) Install real Python 3.10-3.14 from https://python.org/downloads" -ForegroundColor Yellow
+    Write-Host "          (check 'Add python.exe to PATH' during setup), then re-run this" -ForegroundColor Yellow
+    Write-Host "          installer in a NEW terminal window." -ForegroundColor Yellow
+    Write-Host "       2) If you already have a real Python installed elsewhere, disable the" -ForegroundColor Yellow
+    Write-Host "          Store alias: Settings > Apps > Advanced app settings >" -ForegroundColor Yellow
+    Write-Host "          App execution aliases > turn OFF 'python.exe' and 'python3.exe'." -ForegroundColor Yellow
+    exit 1
+}
 if ($maj -lt 3 -or ($maj -eq 3 -and $min -lt 10)) {
     Write-Host "ERROR: Python $maj.$min is too old (need >= 3.10)." -ForegroundColor Red; exit 1
 }

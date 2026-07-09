@@ -67,6 +67,17 @@ Write-Host ""
 # ---- 1. Python ----
 Write-Host "1. Python runtime" -ForegroundColor Yellow
 Check -Label "Python 3.10+" -Condition { python -c "import sys; exit(0 if sys.version_info >= (3,10) else 1)" 2>$null; $LASTEXITCODE -eq 0 }
+Check -Label "not the Microsoft Store Python" -Condition {
+    $realPy = (python -c "import sys; print(sys.executable)" 2>$null)
+    -not ($realPy -like '*\WindowsApps\*')
+} -RepairAction {
+    Write-Host "     The Store build runs in a virtualized filesystem sandbox that silently" -ForegroundColor Yellow
+    Write-Host "     breaks venvs (files it writes can be invisible to every other program)." -ForegroundColor Yellow
+    Write-Host "     Install real Python 3.10-3.14 from https://python.org/downloads (check" -ForegroundColor Yellow
+    Write-Host "     'Add python.exe to PATH'), or disable the alias: Settings > Apps >" -ForegroundColor Yellow
+    Write-Host "     Advanced app settings > App execution aliases > turn OFF python.exe." -ForegroundColor Yellow
+    Write-Host "     Not auto-fixable - no repair action taken." -ForegroundColor DarkGray
+}
 $InstallVenvPy = "$InstallDir\.venv\Scripts\python.exe"
 $RepoVenvPy    = "$SrcDir\.venv\Scripts\python.exe"
 Check -Label "venv ($InstallDir)" -Condition { Test-Path $InstallVenvPy }

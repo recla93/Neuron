@@ -64,6 +64,25 @@ function Remove-Guarded([string]$path, [string]$mustContain, [string]$label) {
     Write-Host "  [OK] removed $label : $full" -ForegroundColor Green
 }
 
+# A Microsoft Store Python virtualizes its filesystem: a venv "created" under
+# $P.InstallDir can end up silently redirected into that package's own
+# LocalCache instead, invisible from a normal view of the install dir - a
+# common cause of "installed but Neuron can't find its own folders" corruption.
+# Only ever touches paths under our own install slug, inside the Python
+# package's LocalCache - never anything else in %LOCALAPPDATA%\Packages.
+function Remove-StorePythonShadowCopy([string]$Slug) {
+    $local = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { "$env:USERPROFILE\AppData\Local" }
+    $packagesDir = Join-Path $local "Packages"
+    if (-not (Test-Path $packagesDir)) { return }
+    $pyPackages = Get-ChildItem -LiteralPath $packagesDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "*PythonSoftwareFoundation.Python*" }
+    if (-not $pyPackages) { return }
+    foreach ($pkg in $pyPackages) {
+        $shadow = Join-Path $pkg.FullName "LocalCache\Local\Programs\$Slug"
+        Remove-Guarded $shadow $Slug 'Store-Python shadow copy'
+    }
+}
+
 function Remove-McpEntry($t) {
     if (-not (Test-Path -LiteralPath $t.path)) { return }
     try { $cfg = Get-Content -LiteralPath $t.path -Raw | ConvertFrom-Json -ErrorAction Stop }
@@ -184,6 +203,7 @@ Remove-Guarded $P.InstallDir 'Programs' 'install dir'
 Remove-Guarded $P.StartMenu  'Start Menu' 'Start-Menu shortcut'
 foreach ($t in $P.RegistrationTargets) { Remove-McpEntry $t }
 Remove-ClientPlugins
+Remove-StorePythonShadowCopy $P.Slug
 
 # --- data (opt-in) ----------------------------------------------------------
 if ($Data -and (Confirm-Step "Delete your memory data? This cannot be undone.")) {

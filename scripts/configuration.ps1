@@ -1656,6 +1656,36 @@ function Remove-StartMenuShortcut {
     }
 }
 
+# A Microsoft Store Python (see the "not the Microsoft Store Python" check in
+# install.ps1/check.ps1) runs under a per-package virtualized filesystem: a
+# venv "created" under $InstallDir can actually be silently redirected into
+# that package's own LocalCache, invisible from a normal Explorer/PowerShell
+# view of $InstallDir. Remove-InstallDir alone can't clean that up because it
+# is a DIFFERENT real path. Only ever touches paths that contain our own
+# install slug, under the Python package's own LocalCache - never anything
+# else in %LOCALAPPDATA%\Packages (that folder holds unrelated app data for
+# the whole system).
+function Remove-StorePythonShadowCopy {
+    $local = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { "$env:USERPROFILE\AppData\Local" }
+    $packagesDir = Join-Path $local "Packages"
+    if (-not (Test-Path $packagesDir)) { return }
+    $pyPackages = Get-ChildItem -LiteralPath $packagesDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "*PythonSoftwareFoundation.Python*" }
+    if (-not $pyPackages) { return }
+    $found = $false
+    foreach ($pkg in $pyPackages) {
+        $shadow = Join-Path $pkg.FullName "LocalCache\Local\Programs\$Slug"
+        if (Test-Path $shadow) {
+            $found = $true
+            Write-Host "  [!] Found a Store-Python-virtualized copy of the install: $shadow" -ForegroundColor DarkYellow
+            Remove-Item -LiteralPath $shadow -Recurse -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path $shadow)) { Write-Host "  [OK] Removed $shadow" -ForegroundColor Green }
+            else { Write-Host "  [X] Could not fully remove $shadow - delete it by hand." -ForegroundColor Red }
+        }
+    }
+    if (-not $found) { Write-Host "  (No Store-Python shadow copy found - nothing to clean up here.)" -ForegroundColor DarkGray }
+}
+
 # Undo Install-OpenCodeHandshakePlugin / Install-ClaudeCodeSessionHook (see
 # Write-ClientConfig): removes the OpenCode plugin file + its opencode.json
 # registration, and the Neuron entries from Claude Code's SessionStart hooks -
@@ -1774,6 +1804,7 @@ function Invoke-CleanUninstall {
     if ($deregPlugins) { Remove-ClientPlugins }
     Remove-StartMenuShortcut
     Remove-InstallDir
+    Remove-StorePythonShadowCopy
 
     if ($wipeData) {
         # The real memory store lives OUTSIDE the repo/install dir (see server.py
