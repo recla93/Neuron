@@ -1317,18 +1317,31 @@ function Assert-JsonKey {
 # by hand on another machine, and (c) know how to verify it. No API key is ever
 # needed for a local MCP server - that's called out explicitly.
 function Show-ClientTutorial {
-    param([string]$App, [string]$Path, [string]$Vpy)
+    # $Ok = $true only when the MCP registration AND the plugin/hook (where
+    # applicable) BOTH succeeded end-to-end (Save-Json returned true, the
+    # entry survived a re-read from disk, the plugin file is at its target,
+    # etc.). $false switches the header to a clear failure banner and points
+    # at the copy-paste steps below so the user has a manual fallback -
+    # rather than lying about a green [DONE] on top of a failed run.
+    param([string]$App, [string]$Path, [string]$Vpy, [bool]$Ok = $true)
     $folder = Split-Path -Parent $Path
     $file   = Split-Path -Leaf   $Path
     $vj     = $Vpy.Replace('\', '\\')   # backslashes doubled for valid JSON
 
     Write-Host ""
-    Write-Host "  ============================================================" -ForegroundColor Green
-    Write-Host "  [DONE] Neuron was added to your config AUTOMATICALLY." -ForegroundColor Green
-    Write-Host "         Just RESTART the app. No API key needed (runs locally)." -ForegroundColor Green
-    Write-Host "  ============================================================" -ForegroundColor Green
+    if ($Ok) {
+        Write-Host "  ============================================================" -ForegroundColor Green
+        Write-Host "  [DONE] Neuron was added to your config AUTOMATICALLY." -ForegroundColor Green
+        Write-Host "         Just RESTART the app. No API key needed (runs locally)." -ForegroundColor Green
+        Write-Host "  ============================================================" -ForegroundColor Green
+    } else {
+        Write-Host "  ============================================================" -ForegroundColor Red
+        Write-Host "  [!] Automatic registration DID NOT complete cleanly." -ForegroundColor Red
+        Write-Host "      Use the copy-paste steps below to finish by hand, then RESTART the app." -ForegroundColor Red
+        Write-Host "  ============================================================" -ForegroundColor Red
+    }
     Write-Host ""
-    Write-Host "  Reference only - how to do the same by hand / on another machine:" -ForegroundColor DarkGray
+    Write-Host "  Reference (how to do the same by hand / on another machine):" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  1) Open this folder:" -ForegroundColor Yellow
     Write-Host "       $folder" -ForegroundColor White
@@ -1400,9 +1413,9 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Warn-LegacyNeuronKey -Container $servers -App 'Claude Desktop' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
-            $ok = Save-Json $cfg $path
-            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Claude Desktop') }
-            Show-ClientTutorial -App 'claude-desktop' -Path $path -Vpy $vpy
+            $saved   = Save-Json $cfg $path
+            $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Claude Desktop' } else { $false }
+            Show-ClientTutorial -App 'claude-desktop' -Path $path -Vpy $vpy -Ok ($saved -and $verified)
         }
         'claude-code' {
             $path = "$env:USERPROFILE\.claude.json"
@@ -1411,10 +1424,10 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Warn-LegacyNeuronKey -Container $servers -App 'Claude Code' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs; cwd = $InstallDir })
-            $ok = Save-Json $cfg $path
-            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Claude Code') }
-            [void](Install-ClaudeCodeSessionHook -Vpy $vpy)
-            Show-ClientTutorial -App 'claude-code' -Path $path -Vpy $vpy
+            $saved    = Save-Json $cfg $path
+            $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Claude Code' } else { $false }
+            $hookOk   = Install-ClaudeCodeSessionHook -Vpy $vpy
+            Show-ClientTutorial -App 'claude-code' -Path $path -Vpy $vpy -Ok ($saved -and $verified -and $hookOk)
         }
         'cursor' {
             $path = "$env:USERPROFILE\.cursor\mcp.json"
@@ -1423,9 +1436,9 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Warn-LegacyNeuronKey -Container $servers -App 'Cursor' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
-            $ok = Save-Json $cfg $path
-            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Cursor') }
-            Show-ClientTutorial -App 'cursor' -Path $path -Vpy $vpy
+            $saved    = Save-Json $cfg $path
+            $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Cursor' } else { $false }
+            Show-ClientTutorial -App 'cursor' -Path $path -Vpy $vpy -Ok ($saved -and $verified)
         }
         'vscode' {
             $path = "$env:APPDATA\Code\User\settings.json"
@@ -1435,9 +1448,9 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $mcp 'servers'
             Warn-LegacyNeuronKey -Container $servers -App 'VS Code' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ type = 'stdio'; command = $vpy; args = $nargs })
-            $ok = Save-Json $cfg $path
-            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcp','servers', $Slug) -Label 'VS Code') }
-            Show-ClientTutorial -App 'vscode' -Path $path -Vpy $vpy
+            $saved    = Save-Json $cfg $path
+            $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('mcp','servers', $Slug) -Label 'VS Code' } else { $false }
+            Show-ClientTutorial -App 'vscode' -Path $path -Vpy $vpy -Ok ($saved -and $verified)
         }
         'opencode' {
             $path = "$env:USERPROFILE\.config\opencode\opencode.json"
@@ -1446,10 +1459,26 @@ function Write-ClientConfig {
             $mcp = Get-OrAddObject $cfg 'mcp'
             Warn-LegacyNeuronKey -Container $mcp -App 'OpenCode' -Path $path
             Set-Prop $mcp $Slug ([pscustomobject]@{ command = @($vpy, '-m', 'neuron'); type = 'local' })
-            [void](Install-OpenCodeHandshakePlugin -Cfg $cfg -ConfigPath $path)
-            $ok = Save-Json $cfg $path
-            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcp', $Slug) -Label 'OpenCode') }
-            Show-ClientTutorial -App 'opencode' -Path $path -Vpy $vpy
+            $pluginOk = Install-OpenCodeHandshakePlugin -Cfg $cfg -ConfigPath $path
+            $saved    = Save-Json $cfg $path
+            $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('mcp', $Slug) -Label 'OpenCode' } else { $false }
+            # Also re-verify the plugin entry survived the JSON roundtrip - the
+            # in-memory $Cfg check inside Install-OpenCodeHandshakePlugin catches
+            # the mutation itself; this catches the same silent-truncation class
+            # that dropped the mcpServers entry in Luca's Claude Code report.
+            $pluginOnDisk = $false
+            if ($saved) {
+                try {
+                    $reread = Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    $pluginList = @($reread.plugin)
+                    $pluginOnDisk = @($pluginList | Where-Object { $_ -like '*neuron-handshake.mjs' }).Count -gt 0
+                    if (-not $pluginOnDisk) {
+                        Write-Host "  [X] OpenCode - plugin entry MISSING from plugin[] on disk after write." -ForegroundColor Red
+                        Write-Host "      Silent JSON-roundtrip data loss; add the path by hand." -ForegroundColor Red
+                    }
+                } catch { $pluginOnDisk = $false }
+            }
+            Show-ClientTutorial -App 'opencode' -Path $path -Vpy $vpy -Ok ($saved -and $verified -and $pluginOk -and $pluginOnDisk)
         }
         'zed' {
             $path = "$env:APPDATA\Zed\settings.json"
@@ -1458,9 +1487,9 @@ function Write-ClientConfig {
             $cs = Get-OrAddObject $cfg 'context_servers'
             Warn-LegacyNeuronKey -Container $cs -App 'Zed' -Path $path
             Set-Prop $cs $Slug ([pscustomobject]@{ command = [pscustomobject]@{ path = $vpy; args = $nargs } })
-            $ok = Save-Json $cfg $path
-            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('context_servers', $Slug) -Label 'Zed') }
-            Show-ClientTutorial -App 'zed' -Path $path -Vpy $vpy
+            $saved    = Save-Json $cfg $path
+            $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('context_servers', $Slug) -Label 'Zed' } else { $false }
+            Show-ClientTutorial -App 'zed' -Path $path -Vpy $vpy -Ok ($saved -and $verified)
         }
     }
 }
