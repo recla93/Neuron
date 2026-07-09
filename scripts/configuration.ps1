@@ -69,6 +69,23 @@ $InstallVenvPy = "$InstallDir\.venv\Scripts\python.exe"
 $RepoVenvPy    = "$Repo\.venv\Scripts\python.exe"
 $PyTursoPin = "pyturso==0.6.1"
 
+# Start-Process -RedirectStandardInput does NOT understand the Windows "NUL"
+# device the way cmd.exe does - it resolves whatever string you pass through
+# .NET's Path.GetFullPath, which treats "NUL" as a relative filename under
+# the current working directory and then fails with FileNotFoundException
+# (bridge/tunnel/manual-Start all failed on machines whose PowerShell host
+# lands them in a folder without a real "NUL" file - i.e. everyone).
+# Workaround: keep a tiny empty file next to the install and point stdin at
+# THAT. Same effect (immediate EOF), works on every host.
+function Get-NullDevicePath {
+    $dir = Join-Path $env:TEMP "neuron5"
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $f = Join-Path $dir "empty-stdin"
+    if (-not (Test-Path $f)) { [IO.File]::WriteAllBytes($f, @()) }
+    return $f
+}
+$NullStdin = Get-NullDevicePath
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -658,7 +675,7 @@ function Start-Tunnel {
         $script:TunnelProc = Start-Process -FilePath $cf `
             -ArgumentList @("tunnel", "--no-autoupdate", "--url", $target) `
             -PassThru -WindowStyle Hidden `
-            -RedirectStandardInput  'NUL' `
+            -RedirectStandardInput  $NullStdin `
             -RedirectStandardOutput $script:TunnelLog `
             -RedirectStandardError  "$($script:TunnelLog).err"
     } catch {
@@ -917,7 +934,7 @@ function Invoke-Bridge {
         $bridgeArgs = "`"$ScriptDir\bridge.py`" --port $port --host $bhost"
         $script:BridgeProc = Start-Process -FilePath $py -ArgumentList $bridgeArgs `
             -WorkingDirectory $Repo -PassThru -WindowStyle Hidden `
-            -RedirectStandardInput  'NUL' `
+            -RedirectStandardInput  $NullStdin `
             -RedirectStandardOutput $script:BridgeLog `
             -RedirectStandardError  $script:BridgeErr
     } catch {
@@ -1156,6 +1173,17 @@ function Get-OrAddObject {
     return $obj.$name
 }
 
+# Serialize + write $obj to $path atomically-ish: back it up first, write, then
+# read back and verify. Returns $true on success, $false if the file was rolled
+# back or write failed - so the CALLER can react instead of silently proceeding
+# in "success". Depth is 100 (Claude Code's ~/.claude.json is deeply nested
+# GrowthBook flags + per-project state; 20 truncated real data to the literal
+# string "System.Collections.Hashtable", which parses fine so the verify passed
+# on a *broken* file, but if it ever produced malformed JSON it rolled back
+# silently and the caller reported success). On rollback we ALSO write the
+# failed output to <path>.neuron-failed-write and print the exact reason, so
+# the user isn't left with a "restored, no changes" message with nothing to
+# investigate.
 function Save-Json {
     param([object]$obj, [string]$path)
     $dir = Split-Path -Parent $path
@@ -1163,20 +1191,58 @@ function Save-Json {
     $backup = $null
     if (Test-Path $path) { $backup = "$path.neuron-bak"; Copy-Item $path $backup -Force -ErrorAction SilentlyContinue }
     try {
-        $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $path -Encoding utf8NoBOM -ErrorAction Stop
+        $obj | ConvertTo-Json -Depth 100 | Set-Content -Path $path -Encoding utf8NoBOM -ErrorAction Stop
     } catch {
         Write-Host "  [X] Could not write $path : $_" -ForegroundColor Red
-        return
+        return $false
     }
-    # Verify what we wrote is valid JSON; roll back from the backup if not.
-    try { Get-Content $path -Raw | ConvertFrom-Json | Out-Null }
+    # Verify what we wrote is valid JSON; roll back from the backup if not, and
+    # tell the user WHY (previous versions just said "verification failed" with
+    # no reason - unhelpful when the caller then reports success anyway).
+    try { Get-Content $path -Raw | ConvertFrom-Json -ErrorAction Stop | Out-Null }
     catch {
+        $verifyErr = $_.Exception.Message
+        $failCopy = "$path.neuron-failed-write"
+        try { Copy-Item $path $failCopy -Force -ErrorAction SilentlyContinue } catch {}
         if ($backup) { Copy-Item $backup $path -Force -ErrorAction SilentlyContinue }
-        Write-Host "  [X] Write verification failed - restored your original file. No changes made." -ForegroundColor Red
-        return
+        Write-Host "  [X] Write verification failed - restored your original file." -ForegroundColor Red
+        Write-Host "      Reason: $verifyErr" -ForegroundColor Red
+        Write-Host "      Failed output saved for inspection: $failCopy" -ForegroundColor DarkYellow
+        return $false
     }
     Write-Host "  [OK] Wrote $path" -ForegroundColor Green
     Write-Host "       (previous version, if any, saved as *.neuron-bak)" -ForegroundColor DarkGray
+    return $true
+}
+
+# Post-write assertion for MCP registration: after Save-Json succeeds, RE-READ
+# the file from disk and confirm the entry we intended to write is actually
+# there. Catches the whole class of PowerShell JSON-roundtrip failures where
+# ConvertTo-Json produces syntactically-valid output that is missing our
+# addition (e.g. Add-Member on the wrong object, a nested key stripped by a
+# depth truncation that verify-as-JSON doesn't catch). Returns $true when the
+# entry is present, $false otherwise - and prints exactly what it looked for.
+function Assert-JsonKey {
+    param([string]$Path, [string[]]$Keys, [string]$Label)
+    try {
+        $cfg = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-Host "  [X] $Label - could not re-read $Path to verify: $_" -ForegroundColor Red
+        return $false
+    }
+    $cur = $cfg
+    foreach ($k in $Keys) {
+        if ($null -eq $cur -or -not $cur.PSObject.Properties[$k]) {
+            $keyPath = ($Keys -join ".")
+            Write-Host "  [X] $Label - Save-Json returned OK but '$keyPath' is MISSING from" -ForegroundColor Red
+            Write-Host "      $Path after the write. This is the silent-rollback bug pattern;" -ForegroundColor Red
+            Write-Host "      the file on disk does not contain what we tried to add. Add it" -ForegroundColor Red
+            Write-Host "      by hand, or re-run after inspecting $Path.neuron-bak." -ForegroundColor Red
+            return $false
+        }
+        $cur = $cur.$k
+    }
+    return $true
 }
 
 # Detailed, copy-paste tutorial per client. Printed AFTER we auto-write the
@@ -1267,7 +1333,8 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Warn-LegacyNeuronKey -Container $servers -App 'Claude Desktop' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
-            Save-Json $cfg $path
+            $ok = Save-Json $cfg $path
+            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Claude Desktop') }
             Show-ClientTutorial -App 'claude-desktop' -Path $path -Vpy $vpy
         }
         'claude-code' {
@@ -1277,7 +1344,8 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Warn-LegacyNeuronKey -Container $servers -App 'Claude Code' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs; cwd = $InstallDir })
-            Save-Json $cfg $path
+            $ok = Save-Json $cfg $path
+            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Claude Code') }
             Install-ClaudeCodeSessionHook -Vpy $vpy
             Show-ClientTutorial -App 'claude-code' -Path $path -Vpy $vpy
         }
@@ -1288,7 +1356,8 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $cfg 'mcpServers'
             Warn-LegacyNeuronKey -Container $servers -App 'Cursor' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
-            Save-Json $cfg $path
+            $ok = Save-Json $cfg $path
+            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Cursor') }
             Show-ClientTutorial -App 'cursor' -Path $path -Vpy $vpy
         }
         'vscode' {
@@ -1299,7 +1368,8 @@ function Write-ClientConfig {
             $servers = Get-OrAddObject $mcp 'servers'
             Warn-LegacyNeuronKey -Container $servers -App 'VS Code' -Path $path
             Set-Prop $servers $Slug ([pscustomobject]@{ type = 'stdio'; command = $vpy; args = $nargs })
-            Save-Json $cfg $path
+            $ok = Save-Json $cfg $path
+            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcp','servers', $Slug) -Label 'VS Code') }
             Show-ClientTutorial -App 'vscode' -Path $path -Vpy $vpy
         }
         'opencode' {
@@ -1310,7 +1380,8 @@ function Write-ClientConfig {
             Warn-LegacyNeuronKey -Container $mcp -App 'OpenCode' -Path $path
             Set-Prop $mcp $Slug ([pscustomobject]@{ command = @($vpy, '-m', 'neuron'); type = 'local' })
             Install-OpenCodeHandshakePlugin -Cfg $cfg
-            Save-Json $cfg $path
+            $ok = Save-Json $cfg $path
+            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcp', $Slug) -Label 'OpenCode') }
             Show-ClientTutorial -App 'opencode' -Path $path -Vpy $vpy
         }
         'zed' {
@@ -1320,7 +1391,8 @@ function Write-ClientConfig {
             $cs = Get-OrAddObject $cfg 'context_servers'
             Warn-LegacyNeuronKey -Container $cs -App 'Zed' -Path $path
             Set-Prop $cs $Slug ([pscustomobject]@{ command = [pscustomobject]@{ path = $vpy; args = $nargs } })
-            Save-Json $cfg $path
+            $ok = Save-Json $cfg $path
+            if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('context_servers', $Slug) -Label 'Zed') }
             Show-ClientTutorial -App 'zed' -Path $path -Vpy $vpy
         }
     }
@@ -1967,7 +2039,7 @@ function Invoke-StartServer {
         # (there's no real client on the other end) and still proves it boots.
         $p = Start-Process -FilePath $InstallVenvPy -ArgumentList @('-m', 'neuron') `
              -WorkingDirectory $InstallDir `
-             -RedirectStandardInput  'NUL' `
+             -RedirectStandardInput  $NullStdin `
              -RedirectStandardOutput $log `
              -RedirectStandardError  $logErr `
              -WindowStyle Hidden -PassThru

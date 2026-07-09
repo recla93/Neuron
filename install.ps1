@@ -440,16 +440,38 @@ function Register-Mcp {
 
     $cfg.mcpServers | Add-Member -Force -MemberType NoteProperty -Name $Key -Value $Entry
 
-    try { ($cfg | ConvertTo-Json -Depth 32) | Set-Content $Path -Encoding utf8NoBOM -ErrorAction Stop }
+    # Depth 100 (was 32): Claude Codes ~/.claude.json can be deeply nested
+    # (GrowthBook flags + per-project state), and a too-low depth truncates
+    # real data to the literal string "System.Collections.Hashtable", which
+    # parses fine so verification passes but the entry we tried to add can
+    # end up missing.
+    try { ($cfg | ConvertTo-Json -Depth 100) | Set-Content $Path -Encoding utf8NoBOM -ErrorAction Stop }
     catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
 
-    # Verify what we just wrote is actually valid JSON; roll back from the
-    # backup rather than leave a client-breaking file in place (mirrors
-    # scripts/configuration.ps1's Save-Json).
-    try { Get-Content $Path -Raw | ConvertFrom-Json -ErrorAction Stop | Out-Null }
-    catch {
+    # Verify (a) the file is still valid JSON and (b) our entry is actually
+    # present on disk after the write. (b) catches PowerShell JSON-roundtrip
+    # failures that dont produce invalid JSON but strip our addition -
+    # previously reported "OK" while leaving the client with no MCP entry.
+    $verifyOk = $true
+    $verifyErr = ""
+    try {
+        $reread = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if (-not $reread.mcpServers -or -not $reread.mcpServers.PSObject.Properties[$Key]) {
+            $verifyOk = $false
+            $verifyErr = "mcpServers.$Key is missing from $Path after the write (silent JSON-roundtrip data loss)."
+        }
+    } catch {
+        $verifyOk = $false
+        $verifyErr = $_.Exception.Message
+    }
+    if (-not $verifyOk) {
+        $failCopy = "$Path.neuron-failed-write"
+        try { Copy-Item $Path $failCopy -Force -ErrorAction SilentlyContinue } catch {}
         Copy-Item $backup $Path -Force -ErrorAction SilentlyContinue
-        Write-Host "   [X] $App - write verification failed, restored the previous file ($Path)" -ForegroundColor Red
+        Write-Host "   [X] $App - write verification failed, restored the previous file." -ForegroundColor Red
+        Write-Host "       Reason: $verifyErr" -ForegroundColor Red
+        Write-Host "       Failed output saved for inspection: $failCopy" -ForegroundColor DarkYellow
+        Write-Host "       Add the entry by hand, or re-run scripts\configuration.ps1 (Add to your AI)." -ForegroundColor DarkYellow
         return
     }
 
