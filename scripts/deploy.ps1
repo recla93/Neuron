@@ -166,7 +166,15 @@ if ($LASTEXITCODE -ne 0) { Write-Host "  [FAIL] import neuron.server" -Foregroun
 else { Write-Host "  [OK] import neuron.server" -ForegroundColor Green }
 
 if ($RunTests) {
+    # 2>$null on a native command turns its stderr into PowerShell error
+    # records; with $ErrorActionPreference = "Stop" (set at top of this script)
+    # those become TERMINATING, so a venv without pytest killed the whole
+    # deploy instead of hitting the graceful [SKIP] branch below. Swap to
+    # Continue just for this probe, then restore.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & $venvPy -c "import pytest" 2>$null
+    $ErrorActionPreference = $prevEAP
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [SKIP] pytest isn't installed in the install venv (production install)." -ForegroundColor DarkYellow
         Write-Host "         Run the suite from the repo dev venv instead: python -m pytest -q" -ForegroundColor DarkGray

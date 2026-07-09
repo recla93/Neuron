@@ -59,7 +59,13 @@ config.json
 # Garbage
 .fuse_hidden*
 *.bak
+*.neuron-bak
 .mount_probe.txt
+
+# Scratch/junk from local work sessions (ad-hoc check/test scripts and their
+# output) - collected here to be reviewed and deleted, never meant to be
+# committed even before that happens.
+_to_delete/
 
 # Graphify output
 graphify-out/

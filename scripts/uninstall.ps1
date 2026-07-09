@@ -82,6 +82,75 @@ function Remove-McpEntry($t) {
     Write-Host "  [OK] de-registered from $($t.app) (backup: $($t.path).neuron-bak)" -ForegroundColor Green
 }
 
+# Undo Install-OpenCodeHandshakePlugin / Install-ClaudeCodeSessionHook (see
+# scripts\neuron5-config.ps1): removes the OpenCode plugin file + its
+# opencode.json registration, and the Neuron entries from Claude Code's
+# SessionStart hooks - without touching any other plugin/hook the user has
+# configured (ponytail, third-party PreToolUse hooks, ...). Paths are
+# $env:USERPROFILE-based, so this is correct on any Windows account.
+function Remove-ClientPlugins {
+    $any = $false
+
+    $ocPath       = "$env:USERPROFILE\.config\opencode\opencode.json"
+    $ocPluginFile = "$env:USERPROFILE\.config\opencode\plugins\neuron-handshake.mjs"
+    if (Test-Path -LiteralPath $ocPath) {
+        try { $cfg = Get-Content -LiteralPath $ocPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { $cfg = $null }
+        if ($cfg -and $cfg.PSObject.Properties['plugin'] -and $null -ne $cfg.plugin) {
+            $before = @($cfg.plugin)
+            $after  = @($before | Where-Object { $_ -ne $ocPluginFile })
+            if ($after.Count -ne $before.Count) {
+                if ($DryRun) { Write-Host "  [dry-run] would remove neuron-handshake from OpenCode's plugin[]" -ForegroundColor Cyan }
+                else {
+                    Copy-Item -LiteralPath $ocPath "$ocPath.neuron-bak" -Force -ErrorAction SilentlyContinue
+                    $cfg.plugin = $after
+                    ($cfg | ConvertTo-Json -Depth 32) | Set-Content -LiteralPath $ocPath -Encoding UTF8
+                    Write-Host "  [OK] Removed neuron-handshake entry from OpenCode's opencode.json" -ForegroundColor Green
+                }
+                $any = $true
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $ocPluginFile) {
+        if ($DryRun) { Write-Host "  [dry-run] would delete $ocPluginFile" -ForegroundColor Cyan }
+        else {
+            Remove-Item -LiteralPath $ocPluginFile -Force -ErrorAction SilentlyContinue
+            Write-Host "  [OK] Deleted $ocPluginFile" -ForegroundColor Green
+        }
+        $any = $true
+    }
+
+    $ccPath = "$env:USERPROFILE\.claude\settings.json"
+    if (Test-Path -LiteralPath $ccPath) {
+        try { $cfg = Get-Content -LiteralPath $ccPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { $cfg = $null }
+        if ($cfg -and $cfg.PSObject.Properties['hooks'] -and $cfg.hooks -and
+            $cfg.hooks.PSObject.Properties['SessionStart'] -and $null -ne $cfg.hooks.SessionStart) {
+            $changed   = $false
+            $newGroups = @()
+            foreach ($g in @($cfg.hooks.SessionStart)) {
+                $beforeHooks = @($g.hooks)
+                $afterHooks  = @($beforeHooks | Where-Object {
+                    -not ($_.command -and $_.command -match [regex]::Escape('neuron_sessionstart_hook.py'))
+                })
+                if ($afterHooks.Count -ne $beforeHooks.Count) { $changed = $true }
+                if ($afterHooks.Count -gt 0) { $g.hooks = $afterHooks; $newGroups += $g }
+            }
+            if ($changed) {
+                if ($DryRun) { Write-Host "  [dry-run] would remove Neuron SessionStart hook from Claude Code's settings.json" -ForegroundColor Cyan }
+                else {
+                    Copy-Item -LiteralPath $ccPath "$ccPath.neuron-bak" -Force -ErrorAction SilentlyContinue
+                    $cfg.hooks.SessionStart = $newGroups
+                    ($cfg | ConvertTo-Json -Depth 32) | Set-Content -LiteralPath $ccPath -Encoding UTF8
+                    Write-Host "  [OK] Removed Neuron SessionStart hook from Claude Code's settings.json" -ForegroundColor Green
+                }
+                $any = $true
+            }
+        }
+    }
+    if (-not $any) { Write-Host "  - client plugins/hooks : none found" -ForegroundColor DarkGray }
+}
+
 function Scrub-Env([string]$envPath) {
     if (-not (Test-Path -LiteralPath $envPath)) { Write-Host "  - .env : not present" -ForegroundColor DarkGray; return }
     $lines = Get-Content -LiteralPath $envPath
@@ -101,6 +170,7 @@ Write-Host "  Will remove (base):" -ForegroundColor Gray
 Write-Host "    - install dir : $($P.InstallDir)"
 Write-Host "    - Start Menu  : $($P.StartMenu)"
 Write-Host "    - MCP entries : $(( $P.RegistrationTargets | ForEach-Object { $_.app }) -join ', ')"
+Write-Host "    - client plugins/hooks : OpenCode handshake plugin, Claude Code SessionStart hook (if present)"
 if ($Data)    { Write-Host "    - DATA        : $($P.StoreDir) (+ legacy neuron\graphs, repo graphs\*.db)  IRREVERSIBLE" -ForegroundColor Red }
 if ($Secrets) { Write-Host "    - SECRETS     : scrub $Repo\.env (Turso token + API keys)" -ForegroundColor Red }
 if ($Cache)   { Write-Host "    - CACHE       : $(( $P.ModelCaches ) -join '; ')" -ForegroundColor Red }
@@ -113,6 +183,7 @@ if (-not $DryRun) { Stop-NeuronServices -InstallDir $P.InstallDir -Yes:$Yes }  #
 Remove-Guarded $P.InstallDir 'Programs' 'install dir'
 Remove-Guarded $P.StartMenu  'Start Menu' 'Start-Menu shortcut'
 foreach ($t in $P.RegistrationTargets) { Remove-McpEntry $t }
+Remove-ClientPlugins
 
 # --- data (opt-in) ----------------------------------------------------------
 if ($Data -and (Confirm-Step "Delete your memory data? This cannot be undone.")) {

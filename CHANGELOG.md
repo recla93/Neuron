@@ -15,12 +15,13 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
-## [5.0.0] "Synapse" — in development (`feat/neuron-bomb`)
+## [5.0.0] "Synapse" — 2026-07-09
 
 The "brain" release: Neuron stops being a tagged store and becomes an associative
 memory — Hebbian link reinforcement, salience-aware ranking, spreading activation.
 MAJOR because the default embedding model changes (existing stores must re-embed).
-Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and tags `v5.0.0`.
+Merged from `feat/neuron-bomb` into `master`; the pre-merge 4.0.0 "Stimulus" line is
+preserved on the `4.x` branch.
 
 ### Added
 - **Sleep-mode + pre-staging** (E3.3/E3.4): when a context is loaded after being idle >30 min, Neuron
@@ -53,6 +54,34 @@ Developed on `feat/neuron-bomb`; `master` stays on 4.0.0 until this merges and t
 - **Consolidation**: `Graph.consolidate()` merges near-duplicate nodes (cosine > 0.85) and drops
   orphans into a recoverable `_graveyard`; MCP tool + `neuron consolidate` CLI + `NS_CONSOLIDATE_AUTO` (E1).
 - Cheap vector fallback: missing vectors embedded once, cached and persisted (E1.1).
+- **Auto-handshake for AI clients** (installer): OpenCode gets a plugin
+  (`experimental.chat.system.transform`) and Claude Code a `SessionStart` hook —
+  both push Neuron's opening instructions into context on every turn/session
+  automatically, instead of relying on the model to remember to call `help`.
+  Installed/removed per-client from `Neuron5Config.bat`; other clients keep the
+  existing server-side `instructions` handshake.
+- **Start/Stop MCP server** menu in the installer, plus a fully granular
+  uninstall: five independent opt-in toggles (MCP de-registration, client
+  plugins/hooks, data wipe, secret scrub, cache wipe) instead of two blanket
+  yes/no prompts, with an explicit "left in place" summary. Registration and
+  removal paths are resolved from `%USERPROFILE%`/`%LOCALAPPDATA%`, so both
+  work identically on any Windows account.
+- **Embedding-model switcher** in the installer: pick the multilingual default
+  (~380MB) or a lightweight English-only fallback (~90MB) from a menu. Writes
+  `NS_EMBED_MODEL` directly into each already-registered client's MCP entry
+  (not just `.env`, which most clients never read), offers a pre-warm and an
+  optional `scripts/reembed.py --all` run so existing data stays searchable
+  after the switch.
+
+### Fixed
+- **Installer manual "Start" froze the config menu**: `Invoke-StartServer`
+  launched Neuron without redirecting its stdin, so the detached MCP process
+  (which blocks reading stdin waiting for a client) ended up sharing the
+  console's input with the interactive menu — every keystroke went to the
+  child instead of the menu's `ReadKey`. Fixed by redirecting the child's
+  stdin to the null device (`-RedirectStandardInput 'NUL'`), applied
+  defensively to the other two background-process launch sites too
+  (cloudflared tunnel, bridge).
 
 ### Changed
 - **Default `NS_EMBED_MODEL` → `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`**

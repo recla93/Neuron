@@ -62,22 +62,37 @@ def test_packaged_skill_matches_root(parts):
 
 def test_signpost_present_and_compact():
     pytest.importorskip("mcp")
-    from neuron.server import SIGNPOST
-    assert SIGNPOST and SIGNPOST.strip()
+    from neuron.server import SIGNPOST_BASE, _build_signpost
+    assert SIGNPOST_BASE and SIGNPOST_BASE.strip()
     # Token economy: the always-on signpost must stay small (~150 tokens ~= 900 chars).
-    assert len(SIGNPOST) < 1000, f"signpost too long: {len(SIGNPOST)} chars"
+    assert len(_build_signpost()) < 1000, f"signpost too long: {len(_build_signpost())} chars"
     # It must state the loop and point at the door (the `skill` tool, which the
     # model can actually call — resources aren't reliably model-followable).
-    assert "pre_turn" in SIGNPOST and "store_turn" in SIGNPOST
-    assert "skill(name='auto-context')" in SIGNPOST
+    assert "pre_turn" in SIGNPOST_BASE and "store_turn" in SIGNPOST_BASE
+    assert "skill(name='auto-context')" in SIGNPOST_BASE
 
 
 def test_signpost_wired_into_init_options():
-    """main() passes SIGNPOST as InitializationOptions.instructions."""
+    """main() passes the dynamic signpost as InitializationOptions.instructions."""
     pytest.importorskip("mcp")
     import inspect
     import neuron.server as srv
-    assert "instructions=SIGNPOST" in inspect.getsource(srv.main)
+    assert "instructions=_build_signpost()" in inspect.getsource(srv.main)
+
+
+def test_loop_hint_appended_to_plaintext_but_not_json():
+    """call_tool wrapper (E2.5b) nudges plain-text tool outputs back onto the
+    loop, but must never corrupt a JSON payload (export/consolidate/...)."""
+    pytest.importorskip("mcp")
+    import json
+    from neuron.server import call_tool, _LOOP_HINT
+
+    reset = asyncio.run(call_tool("reset", {}))          # plain text -> gets the nudge
+    assert reset[0].text.endswith(_LOOP_HINT)
+
+    export = asyncio.run(call_tool("export", {}))         # JSON -> stays parseable
+    assert _LOOP_HINT not in export[0].text
+    json.loads(export[0].text)
 
 
 # ---------------------------------------------------------------------------

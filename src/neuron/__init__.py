@@ -9,4 +9,4 @@ _load_dotenv_once()
 
 # Neuron 5 "Synapse" (feat/neuron-bomb); master stays 4.0.0. Keep this line clean
 # (value only, no trailing comment) — naive parsers in deploy.ps1 read it verbatim.
-__version__ = "5.0.0.dev0"
+__version__ = "5.0.0"
