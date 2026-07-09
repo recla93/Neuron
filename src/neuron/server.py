@@ -1110,11 +1110,10 @@ SIGNPOST_BASE = (
     "(do not announce the tool).\n"
     "3. AFTER replying: call store_turn(topic, keywords, links) to persist "
     "what is new — curate concept nouns, not verbs; typed links; never a "
-    "self-link. Use auto(text) only as a cheap fallback.\n"
+    "self-link.\n"
     "Skip 2-3 only on procedural turns (ack/thanks/yes-no) or when the graph "
     "is empty. Step 1 still applies even then.\n"
-    "Full playbook on demand: call skill(name='auto-context') (also 'curated', "
-    "'base', 'full')."
+    "Full playbook on demand: call skill(name='auto-context')."
 )
 
 
