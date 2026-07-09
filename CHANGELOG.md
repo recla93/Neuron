@@ -21,7 +21,7 @@ _Next up, after 4.0.0 ships:_
 - An optional local-LLM (Ollama) validator layer on top of the 0-token heuristic,
   configurable from `Configuration.bat`.
 
-## [4.0.0] — unreleased (release target after a full fix + test pass)
+## [4.0.0] "Stimulus" — 2026-07-09
 
 The first 4.x release: a stabilization and installer overhaul built on the 3.3.x
 codebase. MAJOR because default data locations and shipped behavior changed
