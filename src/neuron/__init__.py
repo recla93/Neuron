@@ -7,6 +7,6 @@ from neuron._env import load_dotenv_once as _load_dotenv_once
 
 _load_dotenv_once()
 
-# Neuron 5 "Synapse" (feat/neuron-bomb); master stays 4.0.0. Keep this line clean
-# (value only, no trailing comment) — naive parsers in deploy.ps1 read it verbatim.
-__version__ = "5.0.0"
+# Neuron 5 "Synapse". Keep this line clean (value only, no trailing comment) —
+# naive parsers in deploy.ps1 read it verbatim.
+__version__ = "5.0.1"

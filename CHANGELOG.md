@@ -15,6 +15,17 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.0.1] "Synapse" — 2026-07-09
+
+### Changed
+- Single configuration launcher. The transitional side-by-side setup shipped in
+  5.0.0 (`Neuron5Config.bat` + `scripts/neuron5-config.ps1` as v5-only twins of
+  the v4 launcher) is collapsed: the v4 `Configuration.bat` /
+  `scripts/configuration.ps1` are removed, and the v5 launcher takes those
+  canonical names. Behavior and MCP registration key (`neuron5`) are unchanged;
+  README/INSTALL/DEVELOPER already point at `Configuration.bat`, so
+  double-clicking it now runs the v5 configurator directly.
+
 ## [5.0.0] "Synapse" — 2026-07-09
 
 The "brain" release: Neuron stops being a tagged store and becomes an associative

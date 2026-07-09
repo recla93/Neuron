@@ -1,14 +1,19 @@
 ﻿<#
 .SYNOPSIS
-    Neuron - Configuration Center (interactive, arrow-key menu).
+    Neuron5 "Synapse" - Configuration Center (interactive, arrow-key menu).
 .DESCRIPTION
-    One place to fully set up and drive Neuron on Windows:
+    Wired to the v5 "Synapse" slug throughout via _neuron_paths.ps1's
+    Get-NeuronPaths - install dir under %LOCALAPPDATA%\Programs\neuron5, MCP
+    registration key 'neuron5', dedicated Start Menu folder, and an uninstall
+    safety guard that refuses to touch a coexisting v4 install by mistake.
+
+    One place to fully set up and drive Neuron5 on Windows:
 
       1. Check my system            (scripts\check.ps1)
       2. Install prerequisites      (Python + venv + pip/uv)   <- BEFORE Turso
       3. Install PyTurso engine     (vendored win_amd64 wheel, no compiler)
-      4. Install full Neuron        (neuron wheel + verify)
-      5. Add Neuron to your AI      (writes the MCP config for your app)
+      4. Install full Neuron5       (neuron wheel + verify)
+      5. Add Neuron5 to your AI     (writes the MCP config for your app, key 'neuron5')
       6. Bridge & Cloud Turso       (connect_turso.py / bridge.py / cloud check)
       7. Run the test suite         (scripts\run_tests.ps1)
       8. Live Log Console           (scripts\neuron_console.py --watch)
@@ -56,7 +61,10 @@ $env:PYTHONIOENCODING = "utf-8"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path   # ...\scripts
 $Repo       = Split-Path -Parent $ScriptDir                     # repo root
 $Vendor     = Join-Path $Repo "vendor"                          # prebuilt pyturso wheels
-$InstallDir = "$env:LOCALAPPDATA\Programs\neuron"               # deployed MCP server
+. (Join-Path $ScriptDir "_neuron_paths.ps1")
+$Slug       = "neuron5"                                         # v5 "Synapse" identity - this menu is neuron5-only
+$NP         = Get-NeuronPaths -Slug $Slug
+$InstallDir = $NP.InstallDir                                    # deployed MCP server (neuron5)
 $InstallVenvPy = "$InstallDir\.venv\Scripts\python.exe"
 $RepoVenvPy    = "$Repo\.venv\Scripts\python.exe"
 $PyTursoPin = "pyturso==0.6.1"
@@ -78,7 +86,7 @@ function Show-Banner {
     Write-Host '  | \| | __| | | | _ \/ _ \| \| |' -ForegroundColor Cyan
     Write-Host '  | .  | _|| |_| |   / (_) | .  |' -ForegroundColor Cyan
     Write-Host '  |_|\_|___|\___/|_|_\\___/|_|\_|' -ForegroundColor Cyan
-    Write-Host '  Configuration Center  -  semantic memory for your AI' -ForegroundColor DarkCyan
+    Write-Host '  Configuration Center (neuron5 / Synapse)  -  semantic memory for your AI' -ForegroundColor DarkCyan
     Write-Host '  ---------------------------------------------------------------' -ForegroundColor DarkGray
 }
 
@@ -361,13 +369,22 @@ function Invoke-Neuron {
 # is mandatory (every graph/vector op needs it); only the *download timing* is
 # deferred. Fully skippable and offline-safe.
 function Invoke-ModelPrewarm {
-    param([string]$py)
-    if (-not (Confirm-YesNo "Pre-download the ~80MB embedding model now? (recommended - makes first use instant; skip if offline)")) {
+    param(
+        [string]$py,
+        [string]$ModelId   = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        [string]$SizeLabel = "~380MB multilingual"
+    )
+    if (-not (Confirm-YesNo "Pre-download the $SizeLabel embedding model now? (recommended - makes first use instant; skip if offline)")) {
         Write-Host "  Skipped - the model will download automatically on first use." -ForegroundColor DarkYellow
         return
     }
-    Write-Host "`n  Downloading the embedding model (~80MB, one-time). This can take a minute..." -ForegroundColor Yellow
-    $code = "from fastembed import TextEmbedding; e=TextEmbedding('sentence-transformers/all-MiniLM-L6-v2'); list(e.embed(['warm up'])); print('OK')"
+    Write-Host "`n  Downloading the embedding model ($SizeLabel, one-time). This can take a minute..." -ForegroundColor Yellow
+    # Warm the SAME model server.py will actually load (NS_EMBED_MODEL, or the
+    # explicit $ModelId passed by the caller) - the old hardcoded
+    # all-MiniLM-L6-v2 here warmed a different, smaller, English-only model
+    # than the multilingual default server.py loads at runtime, silently
+    # warming the wrong cache entry.
+    $code = "import os; from fastembed import TextEmbedding; m=os.environ.get('NS_EMBED_MODEL', r'$ModelId'); e=TextEmbedding(m); list(e.embed(['warm up'])); print('OK', m)"
     # Run from the install dir (a known-good cwd, same as the server) and CAPTURE
     # output so a Python traceback never dumps a scary wall of text at the user.
     Push-Location $InstallDir
@@ -641,6 +658,7 @@ function Start-Tunnel {
         $script:TunnelProc = Start-Process -FilePath $cf `
             -ArgumentList @("tunnel", "--no-autoupdate", "--url", $target) `
             -PassThru -WindowStyle Hidden `
+            -RedirectStandardInput  'NUL' `
             -RedirectStandardOutput $script:TunnelLog `
             -RedirectStandardError  "$($script:TunnelLog).err"
     } catch {
@@ -899,6 +917,7 @@ function Invoke-Bridge {
         $bridgeArgs = "`"$ScriptDir\bridge.py`" --port $port --host $bhost"
         $script:BridgeProc = Start-Process -FilePath $py -ArgumentList $bridgeArgs `
             -WorkingDirectory $Repo -PassThru -WindowStyle Hidden `
+            -RedirectStandardInput  'NUL' `
             -RedirectStandardOutput $script:BridgeLog `
             -RedirectStandardError  $script:BridgeErr
     } catch {
@@ -999,9 +1018,9 @@ function Show-CannotMerge {
     Write-Host "  [!] Your config already exists but isn't plain JSON (it may use" -ForegroundColor DarkYellow
     Write-Host "      // comments or trailing commas): $Path" -ForegroundColor DarkYellow
     Write-Host "      To avoid wiping your settings, I did NOT modify it." -ForegroundColor DarkYellow
-    Write-Host "      Add this 'neuron' entry to the MCP servers section by hand:" -ForegroundColor Cyan
+    Write-Host "      Add this '$Slug' entry to the MCP servers section by hand:" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "        `"neuron`": { `"command`": `"$Vpy`", `"args`": [`"-m`", `"neuron`"] }" -ForegroundColor Gray
+    Write-Host "        `"$Slug`": { `"command`": `"$Vpy`", `"args`": [`"-m`", `"neuron`"] }" -ForegroundColor Gray
     Write-Host ""
 }
 
@@ -1009,6 +1028,101 @@ function Set-Prop {
     param([object]$obj, [string]$name, [object]$value)
     if ($obj.PSObject.Properties[$name]) { $obj.$name = $value }
     else { $obj | Add-Member -NotePropertyName $name -NotePropertyValue $value }
+}
+
+# Deploy the neuron-handshake opencode plugin (clients/opencode-plugin/) to
+# %USERPROFILE%\.config\opencode\plugins\ and register it in $cfg's top-level
+# "plugin" array (an array of absolute path strings — appended, not replaced,
+# so other plugins like an existing "ponytail" entry are left untouched).
+# $cfg is the in-memory opencode.json object; caller still runs Save-Json.
+function Install-OpenCodeHandshakePlugin {
+    param([object]$Cfg)
+    $repoRoot  = Split-Path -Parent $PSScriptRoot
+    $srcPlugin = Join-Path $repoRoot "clients\opencode-plugin\neuron-handshake.mjs"
+    if (-not (Test-Path $srcPlugin)) {
+        Write-Host "  [!] neuron-handshake.mjs not found in repo - skipping opencode plugin install." -ForegroundColor DarkYellow
+        return
+    }
+    $pluginDir = "$env:USERPROFILE\.config\opencode\plugins"
+    $dstPlugin = Join-Path $pluginDir "neuron-handshake.mjs"
+    try {
+        if (-not (Test-Path $pluginDir)) { New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null }
+        Copy-Item $srcPlugin $dstPlugin -Force
+    } catch {
+        Write-Host "  [!] Could not copy neuron-handshake.mjs to $pluginDir : $_" -ForegroundColor DarkYellow
+        return
+    }
+    $plugins = @()
+    if ($Cfg.PSObject.Properties['plugin'] -and $null -ne $Cfg.plugin) {
+        $plugins = @($Cfg.plugin)
+    }
+    if ($plugins -notcontains $dstPlugin) {
+        $plugins += $dstPlugin
+        Set-Prop $Cfg 'plugin' $plugins
+    }
+    Write-Host "  [OK] neuron-handshake plugin deployed to $dstPlugin" -ForegroundColor Green
+}
+
+# Deploy the neuron_sessionstart_hook.py script (clients/claude-code-hook/) and
+# register it in ~/.claude/settings.json under hooks.SessionStart, for all
+# four documented matchers (startup/resume/clear/compact) so the handshake
+# reminder reaches context however the session began. This is a second,
+# independent delivery path alongside the MCP `instructions` field - Claude
+# Code's SessionStart hook is a real, host-guaranteed mechanism (unlike
+# `instructions`, which every MCP client is free to ignore).
+# Merges into any existing settings.json rather than overwriting: other tools'
+# hooks for the same or different matchers are preserved; re-running this is
+# idempotent (dedup by the hook's own command string).
+function Install-ClaudeCodeSessionHook {
+    param([string]$Vpy)
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $srcHook  = Join-Path $repoRoot "clients\claude-code-hook\neuron_sessionstart_hook.py"
+    if (-not (Test-Path $srcHook)) {
+        Write-Host "  [!] neuron_sessionstart_hook.py not found in repo - skipping Claude Code hook install." -ForegroundColor DarkYellow
+        return
+    }
+    $hookDir  = Join-Path $InstallDir "hooks"
+    $dstHook  = Join-Path $hookDir "neuron_sessionstart_hook.py"
+    try {
+        if (-not (Test-Path $hookDir)) { New-Item -ItemType Directory -Path $hookDir -Force | Out-Null }
+        Copy-Item $srcHook $dstHook -Force
+    } catch {
+        Write-Host "  [!] Could not copy neuron_sessionstart_hook.py to $hookDir : $_" -ForegroundColor DarkYellow
+        return
+    }
+    # Prefer the real venv python if it exists; fall back to a bare "python" so
+    # the hook entry is still written (and works once Neuron is installed).
+    $hookPython = if (Test-Path $Vpy) { $Vpy } else { "python" }
+    $hookCommand = "`"$hookPython`" `"$dstHook`""
+
+    $settingsPath = "$env:USERPROFILE\.claude\settings.json"
+    $settings = Load-Json $settingsPath
+    if ($null -eq $settings) { $settings = New-Object psobject }
+    $hooks = Get-OrAddObject $settings 'hooks'
+
+    $sessionStart = @()
+    if ($hooks.PSObject.Properties['SessionStart'] -and $null -ne $hooks.SessionStart) {
+        $sessionStart = @($hooks.SessionStart)
+    }
+    foreach ($matcher in @('startup', 'resume', 'clear', 'compact')) {
+        $group = $sessionStart | Where-Object { $_.matcher -eq $matcher } | Select-Object -First 1
+        if ($null -eq $group) {
+            $sessionStart += [pscustomobject]@{
+                matcher = $matcher
+                hooks   = @([pscustomobject]@{ type = 'command'; command = $hookCommand; timeout = 30 })
+            }
+        } else {
+            $existingHooks = @($group.hooks)
+            $already = $existingHooks | Where-Object { $_.command -eq $hookCommand }
+            if (-not $already) {
+                $existingHooks += [pscustomobject]@{ type = 'command'; command = $hookCommand; timeout = 30 }
+                Set-Prop $group 'hooks' $existingHooks
+            }
+        }
+    }
+    Set-Prop $hooks 'SessionStart' $sessionStart
+    Save-Json $settings $settingsPath
+    Write-Host "  [OK] Claude Code SessionStart hook registered ($settingsPath)" -ForegroundColor Green
 }
 
 # Ensure obj.<name> exists as an object and return it.
@@ -1065,7 +1179,7 @@ function Show-ClientTutorial {
     Write-Host "       $folder" -ForegroundColor White
     Write-Host "  2) Open (or create) this file:" -ForegroundColor Yellow
     Write-Host "       $file" -ForegroundColor White
-    Write-Host "  3) Add the 'neuron' entry shown below (merge into what's there)." -ForegroundColor Yellow
+    Write-Host "  3) Add the '$Slug' entry shown below (merge into what's there)." -ForegroundColor Yellow
     Write-Host ""
 
     switch ($App) {
@@ -1077,7 +1191,7 @@ function Show-ClientTutorial {
             Write-Host ""
             Write-Host "     {" -ForegroundColor White
             Write-Host "       `"mcpServers`": {" -ForegroundColor White
-            Write-Host "         `"neuron`": { `"command`": `"$vj`", `"args`": [`"-m`", `"neuron`"] }" -ForegroundColor White
+            Write-Host "         `"$Slug`": { `"command`": `"$vj`", `"args`": [`"-m`", `"neuron`"] }" -ForegroundColor White
             Write-Host "       }" -ForegroundColor White
             Write-Host "     }" -ForegroundColor White
             Write-Host ""
@@ -1086,26 +1200,26 @@ function Show-ClientTutorial {
         }
         'claude-code' {
             Write-Host "     EASIEST - just run this command in a terminal:" -ForegroundColor Gray
-            Write-Host "       claude mcp add neuron -- `"$Vpy`" -m neuron" -ForegroundColor White
+            Write-Host "       claude mcp add $Slug -- `"$Vpy`" -m neuron" -ForegroundColor White
             Write-Host "     Or edit the file by hand ($file) and add:" -ForegroundColor Gray
-            Write-Host "       `"mcpServers`": { `"neuron`": { `"command`": `"$vj`", `"args`": [`"-m`",`"neuron`"], `"cwd`": `"$($InstallDir.Replace('\','\\'))`" } }" -ForegroundColor White
-            Write-Host "  4) Verify with:  claude mcp list   (neuron should be listed)" -ForegroundColor Yellow
+            Write-Host "       `"mcpServers`": { `"$Slug`": { `"command`": `"$vj`", `"args`": [`"-m`",`"neuron`"], `"cwd`": `"$($InstallDir.Replace('\','\\'))`" } }" -ForegroundColor White
+            Write-Host "  4) Verify with:  claude mcp list   ($Slug should be listed)" -ForegroundColor Yellow
         }
         'cursor' {
-            Write-Host "     `"mcpServers`": { `"neuron`": { `"command`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } }" -ForegroundColor White
-            Write-Host "  4) Cursor -> Settings -> MCP: toggle 'neuron' ON, then restart Cursor." -ForegroundColor Yellow
+            Write-Host "     `"mcpServers`": { `"$Slug`": { `"command`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } }" -ForegroundColor White
+            Write-Host "  4) Cursor -> Settings -> MCP: toggle '$Slug' ON, then restart Cursor." -ForegroundColor Yellow
         }
         'vscode' {
-            Write-Host "     `"mcp`": { `"servers`": { `"neuron`": { `"type`":`"stdio`", `"command`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } } }" -ForegroundColor White
+            Write-Host "     `"mcp`": { `"servers`": { `"$Slug`": { `"type`":`"stdio`", `"command`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } } }" -ForegroundColor White
             Write-Host "  4) Restart VS Code. Needs an MCP client: Copilot agent mode or the" -ForegroundColor Yellow
             Write-Host "     'Continue' extension. Open it and Neuron's tools appear." -ForegroundColor Gray
         }
         'opencode' {
-            Write-Host "     `"mcp`": { `"neuron`": { `"command`": [`"$vj`",`"-m`",`"neuron`"], `"type`":`"local`" } }" -ForegroundColor White
+            Write-Host "     `"mcp`": { `"$Slug`": { `"command`": [`"$vj`",`"-m`",`"neuron`"], `"type`":`"local`" } }" -ForegroundColor White
             Write-Host "  4) Restart OpenCode." -ForegroundColor Yellow
         }
         'zed' {
-            Write-Host "     `"context_servers`": { `"neuron`": { `"command`": { `"path`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } } }" -ForegroundColor White
+            Write-Host "     `"context_servers`": { `"$Slug`": { `"command`": { `"path`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } } }" -ForegroundColor White
             Write-Host "  4) Restart Zed." -ForegroundColor Yellow
         }
     }
@@ -1129,7 +1243,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
-            Set-Prop $servers 'neuron' ([pscustomobject]@{ command = $vpy; args = $nargs })
+            Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'claude-desktop' -Path $path -Vpy $vpy
         }
@@ -1138,8 +1252,9 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
-            Set-Prop $servers 'neuron' ([pscustomobject]@{ command = $vpy; args = $nargs; cwd = $InstallDir })
+            Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs; cwd = $InstallDir })
             Save-Json $cfg $path
+            Install-ClaudeCodeSessionHook -Vpy $vpy
             Show-ClientTutorial -App 'claude-code' -Path $path -Vpy $vpy
         }
         'cursor' {
@@ -1147,7 +1262,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $servers = Get-OrAddObject $cfg 'mcpServers'
-            Set-Prop $servers 'neuron' ([pscustomobject]@{ command = $vpy; args = $nargs })
+            Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'cursor' -Path $path -Vpy $vpy
         }
@@ -1157,7 +1272,7 @@ function Write-ClientConfig {
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $mcp = Get-OrAddObject $cfg 'mcp'
             $servers = Get-OrAddObject $mcp 'servers'
-            Set-Prop $servers 'neuron' ([pscustomobject]@{ type = 'stdio'; command = $vpy; args = $nargs })
+            Set-Prop $servers $Slug ([pscustomobject]@{ type = 'stdio'; command = $vpy; args = $nargs })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'vscode' -Path $path -Vpy $vpy
         }
@@ -1166,7 +1281,8 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $mcp = Get-OrAddObject $cfg 'mcp'
-            Set-Prop $mcp 'neuron' ([pscustomobject]@{ command = @($vpy, '-m', 'neuron'); type = 'local' })
+            Set-Prop $mcp $Slug ([pscustomobject]@{ command = @($vpy, '-m', 'neuron'); type = 'local' })
+            Install-OpenCodeHandshakePlugin -Cfg $cfg
             Save-Json $cfg $path
             Show-ClientTutorial -App 'opencode' -Path $path -Vpy $vpy
         }
@@ -1175,7 +1291,7 @@ function Write-ClientConfig {
             $cfg = Load-Json $path
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $cs = Get-OrAddObject $cfg 'context_servers'
-            Set-Prop $cs 'neuron' ([pscustomobject]@{ command = [pscustomobject]@{ path = $vpy; args = $nargs } })
+            Set-Prop $cs $Slug ([pscustomobject]@{ command = [pscustomobject]@{ path = $vpy; args = $nargs } })
             Save-Json $cfg $path
             Show-ClientTutorial -App 'zed' -Path $path -Vpy $vpy
         }
@@ -1283,6 +1399,139 @@ function Update-EnvFile {
 }
 
 # ---------------------------------------------------------------------------
+# Embedding model switch (multilingual default vs lightweight English-only)
+# ---------------------------------------------------------------------------
+# Two supported NS_EMBED_MODEL values (server.py, ADR-001): both fastembed
+# models, both 384-dim (so DB schema/vector columns don't change), but they
+# produce DIFFERENT, non-comparable vector spaces - switching without
+# re-embedding leaves old and new vectors mixed in the same search.
+$script:EmbedModels = @(
+    [pscustomobject]@{ Id = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+                        Label = '1) Multilingual (default, ~380MB download)'
+                        Size  = '~380MB multilingual'
+                        Desc  = 'Best semantic search across languages (EN/IT/ES/...) - one shared vector space. Bigger one-time download.' },
+    [pscustomobject]@{ Id = 'sentence-transformers/all-MiniLM-L6-v2'
+                        Label = '2) Lightweight (~90MB download, English-only)'
+                        Size  = '~90MB English-only'
+                        Desc  = 'Smaller, faster to download - semantic search quality drops sharply on non-English text.' }
+)
+
+# The one place that currently reflects "what's active": this repo's .env, used
+# by dev/repo-venv runs. Per-client registrations (see below) carry their own
+# copy in each app's config once you switch, so this is a best-effort display
+# value, not the only source of truth - each AI app can in principle differ.
+function Get-CurrentEmbedModel {
+    $envPath = Join-Path $Repo ".env"
+    if (Test-Path $envPath) {
+        $line = Get-Content $envPath | Where-Object { $_ -match '^\s*NS_EMBED_MODEL\s*=' } | Select-Object -Last 1
+        if ($line -and ($line -match '^\s*NS_EMBED_MODEL\s*=\s*(.+)$')) {
+            return $Matches[1].Trim().Trim('''"')
+        }
+    }
+    return $script:EmbedModels[0].Id
+}
+
+# Set NS_EMBED_MODEL as an explicit "env" entry on Neuron's OWN registration in
+# every AI app it's already wired into - NOT just this repo's .env. This matters
+# because the installed server's cwd (where it looks for a .env, see
+# src/neuron/_env.py) is usually the AI app's own working directory, not this
+# repo, so a .env-only change would silently not reach the real running server
+# for most clients. Only touches Neuron's own entry; every other setting in
+# each app's config is left untouched.
+function Set-EmbedModelForRegisteredClients {
+    param([string]$ModelId)
+    $count = 0
+    foreach ($t in $NP.RegistrationTargets) {
+        if (-not (Test-Path $t.path)) { continue }
+        $cfg = Load-Json $t.path
+        if ($null -eq $cfg) {
+            Write-Host "  [!] Skipped $($t.app): its config isn't plain JSON." -ForegroundColor DarkYellow
+            continue
+        }
+        $parent = $cfg
+        $ok = $true
+        for ($i = 0; $i -lt $t.keys.Count - 1; $i++) {
+            $parent = Get-Child $parent $t.keys[$i]
+            if (-not $parent) { $ok = $false; break }
+        }
+        if (-not $ok) { continue }
+        $leaf  = $t.keys[$t.keys.Count - 1]
+        $entry = Get-Child $parent $leaf
+        if (-not $entry) { continue }   # Neuron isn't registered in this app - nothing to update
+        $envBlock = Get-OrAddObject $entry 'env'
+        Set-Prop $envBlock 'NS_EMBED_MODEL' $ModelId
+        Save-Json $cfg $t.path
+        Write-Host "  [OK] $($t.app): NS_EMBED_MODEL set on its Neuron entry" -ForegroundColor Green
+        $count++
+    }
+    if ($count -eq 0) { Write-Host "  (Neuron isn't registered in any AI app yet - nothing to update there.)" -ForegroundColor DarkGray }
+    return $count
+}
+
+function Invoke-EmbedModelMenu {
+    while ($true) {
+        $current = Get-CurrentEmbedModel
+        $currentLabel = ($script:EmbedModels | Where-Object { $_.Id -eq $current } | Select-Object -First 1).Label
+        if (-not $currentLabel) { $currentLabel = $current }
+
+        Clear-Host; Show-Banner
+        $idx = Show-Menu -Title "Embedding model    [active: $currentLabel]" `
+            -Options @($script:EmbedModels[0].Label, $script:EmbedModels[1].Label, "Back") `
+            -Descriptions @($script:EmbedModels[0].Desc, $script:EmbedModels[1].Desc, "")
+        if ($idx -eq -1 -or $idx -eq 2) { return }
+
+        $chosen = $script:EmbedModels[$idx]
+        if ($chosen.Id -eq $current) {
+            Write-Host "`n  That's already the active model." -ForegroundColor DarkGray
+            Pause-Any; continue
+        }
+
+        Clear-Host; Show-Banner
+        Write-Host "`n  Switching to: $($chosen.Label)`n" -ForegroundColor Yellow
+        Write-Host "  This updates NS_EMBED_MODEL for every AI app Neuron is already registered" -ForegroundColor Gray
+        Write-Host "  in, plus this repo's .env (for dev/repo-venv runs)." -ForegroundColor Gray
+        Write-Host "  Existing memory data was embedded with the OLD model - vectors from the two" -ForegroundColor Gray
+        Write-Host "  models aren't comparable, so semantic search stays accurate only if you" -ForegroundColor Gray
+        Write-Host "  re-embed afterwards (offered below)." -ForegroundColor Gray
+        Write-Host ""
+        if (-not (Confirm-YesNo "Proceed with the switch?")) { continue }
+
+        Update-EnvFile @{ NS_EMBED_MODEL = $chosen.Id }
+        Set-EmbedModelForRegisteredClients -ModelId $chosen.Id | Out-Null
+
+        Write-Host ""
+        Invoke-ModelPrewarm -py (Get-ConfigPython) -ModelId $chosen.Id -SizeLabel $chosen.Size
+
+        Write-Host ""
+        if (Confirm-YesNo "Re-embed existing memory data with the new model now (recommended)?") {
+            $reembedPy = Join-Path $Repo "scripts\reembed.py"
+            $py = Get-ConfigPython
+            if (Test-Path $reembedPy) {
+                Write-Host "`n  Re-embedding..." -ForegroundColor Yellow
+                $prevModel = $env:NS_EMBED_MODEL
+                $env:NS_EMBED_MODEL = $chosen.Id
+                try { & $py $reembedPy --all }
+                finally {
+                    if ($null -eq $prevModel) { Remove-Item Env:NS_EMBED_MODEL -ErrorAction SilentlyContinue }
+                    else { $env:NS_EMBED_MODEL = $prevModel }
+                }
+            } else {
+                Write-Host "  [!] scripts\reembed.py not found - skipping." -ForegroundColor DarkYellow
+            }
+        } else {
+            Write-Host "  Skipped - run this later when convenient:" -ForegroundColor DarkGray
+            Write-Host "    set NS_EMBED_MODEL=$($chosen.Id)" -ForegroundColor DarkGray
+            Write-Host "    python scripts\reembed.py --all" -ForegroundColor DarkGray
+        }
+
+        Write-Host "`n  [OK] Now using: $($chosen.Label)" -ForegroundColor Green
+        Write-Host "  Restart any running AI app (or use Start/Stop MCP server -> Stop) so it" -ForegroundColor DarkYellow
+        Write-Host "  picks up the new setting on next launch." -ForegroundColor DarkYellow
+        Pause-Any
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Clean install / Uninstall
 # ---------------------------------------------------------------------------
 function Get-Child { param([object]$obj, [string]$name)
@@ -1296,14 +1545,9 @@ function Remove-Prop { param([object]$obj, [string]$name)
 # The exact places 'Add Neuron to your AI' can write, and where the neuron entry
 # lives in each. Used to cleanly de-register on uninstall.
 function Get-RegistrationTargets {
-    return @(
-        @{ app='Claude Desktop'; path="$env:APPDATA\Claude\claude_desktop_config.json";       keys=@('mcpServers','neuron') },
-        @{ app='Claude Code';    path="$env:USERPROFILE\.claude.json";                          keys=@('mcpServers','neuron') },
-        @{ app='Cursor';         path="$env:USERPROFILE\.cursor\mcp.json";                      keys=@('mcpServers','neuron') },
-        @{ app='VS Code';        path="$env:APPDATA\Code\User\settings.json";                   keys=@('mcp','servers','neuron') },
-        @{ app='OpenCode';       path="$env:USERPROFILE\.config\opencode\opencode.json";        keys=@('mcp','neuron') },
-        @{ app='Zed';            path="$env:APPDATA\Zed\settings.json";                         keys=@('context_servers','neuron') }
-    )
+    # Reuse the single source of truth (_neuron_paths.ps1) instead of a second,
+    # driftable copy of the same app/path/key list - already slug-aware.
+    return $NP.RegistrationTargets
 }
 
 function Remove-McpRegistrations {
@@ -1312,7 +1556,7 @@ function Remove-McpRegistrations {
         if (-not (Test-Path $t.path)) { continue }
         $cfg = Load-Json $t.path
         if ($null -eq $cfg) {
-            Write-Host "  [!] Skipped $($t.app): its config isn't plain JSON - remove 'neuron' by hand." -ForegroundColor DarkYellow
+            Write-Host "  [!] Skipped $($t.app): its config isn't plain JSON - remove '$Slug' by hand." -ForegroundColor DarkYellow
             continue
         }
         $parent = $cfg
@@ -1321,18 +1565,18 @@ function Remove-McpRegistrations {
         if ($parent -and $parent.PSObject.Properties[$leaf]) {
             Remove-Prop $parent $leaf
             Save-Json $cfg $t.path
-            Write-Host "  [OK] Removed 'neuron' from $($t.app)" -ForegroundColor Green
+            Write-Host "  [OK] Removed '$Slug' from $($t.app)" -ForegroundColor Green
             $removed++
         }
     }
-    if ($removed -eq 0) { Write-Host "  (No AI app had a 'neuron' entry to remove.)" -ForegroundColor DarkGray }
+    if ($removed -eq 0) { Write-Host "  (No AI app had a '$Slug' entry to remove.)" -ForegroundColor DarkGray }
 }
 
 # Delete the install dir - but ONLY if the path really is the Neuron install
 # location, so a misconfigured var can never point Remove-Item somewhere unsafe.
 function Remove-InstallDir {
     $target = $InstallDir
-    $safe = $target -and ($target.ToLower().TrimEnd('\').EndsWith('programs\neuron'))
+    $safe = $target -and ($target.ToLower().TrimEnd('\').EndsWith('programs\' + $Slug.ToLower()))
     if (-not $safe) {
         Write-Host "  [X] Refusing to delete '$target' - it doesn't look like the Neuron install dir." -ForegroundColor Red
         return
@@ -1377,36 +1621,129 @@ function Remove-InstallDir {
 }
 
 function Remove-StartMenuShortcut {
-    $sd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Neuron"
+    $sd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$Slug"
     if (Test-Path $sd) {
         Remove-Item -LiteralPath $sd -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "  [OK] Removed Start Menu shortcut" -ForegroundColor Green
     }
 }
 
+# Undo Install-OpenCodeHandshakePlugin / Install-ClaudeCodeSessionHook (see
+# Write-ClientConfig): removes the OpenCode plugin file + its opencode.json
+# registration, and the Neuron entries from Claude Code's SessionStart hooks -
+# WITHOUT touching any other plugin/hook a user has configured (ponytail,
+# rtk, ...). All paths are $env:USERPROFILE-based, so this is correct on any
+# Windows account, not just the one it was written on.
+function Remove-ClientPlugins {
+    $any = $false
+
+    # --- OpenCode: clients/opencode-plugin/neuron-handshake.mjs -----------
+    $ocPath       = "$env:USERPROFILE\.config\opencode\opencode.json"
+    $ocPluginFile = "$env:USERPROFILE\.config\opencode\plugins\neuron-handshake.mjs"
+    if (Test-Path $ocPath) {
+        $cfg = Load-Json $ocPath
+        if ($cfg -and $cfg.PSObject.Properties['plugin'] -and $null -ne $cfg.plugin) {
+            $before = @($cfg.plugin)
+            $after  = @($before | Where-Object { $_ -ne $ocPluginFile })
+            if ($after.Count -ne $before.Count) {
+                Set-Prop $cfg 'plugin' $after
+                Save-Json $cfg $ocPath
+                Write-Host "  [OK] Removed neuron-handshake entry from OpenCode's opencode.json" -ForegroundColor Green
+                $any = $true
+            }
+        }
+    }
+    if (Test-Path $ocPluginFile) {
+        Remove-Item -LiteralPath $ocPluginFile -Force -ErrorAction SilentlyContinue
+        Write-Host "  [OK] Deleted $ocPluginFile" -ForegroundColor Green
+        $any = $true
+    }
+
+    # --- Claude Code: ~/.claude/settings.json hooks.SessionStart -----------
+    $ccPath = "$env:USERPROFILE\.claude\settings.json"
+    if (Test-Path $ccPath) {
+        $cfg = Load-Json $ccPath
+        if ($cfg -and $cfg.PSObject.Properties['hooks'] -and $cfg.hooks -and
+            $cfg.hooks.PSObject.Properties['SessionStart'] -and $null -ne $cfg.hooks.SessionStart) {
+            $changed  = $false
+            $newGroups = @()
+            foreach ($g in @($cfg.hooks.SessionStart)) {
+                $beforeHooks = @($g.hooks)
+                $afterHooks  = @($beforeHooks | Where-Object {
+                    -not ($_.command -and $_.command -match [regex]::Escape('neuron_sessionstart_hook.py'))
+                })
+                if ($afterHooks.Count -ne $beforeHooks.Count) { $changed = $true }
+                if ($afterHooks.Count -gt 0) {
+                    Set-Prop $g 'hooks' $afterHooks
+                    $newGroups += $g
+                }
+                # else: this matcher group existed ONLY for our hook -> drop the group
+            }
+            if ($changed) {
+                Set-Prop $cfg.hooks 'SessionStart' $newGroups
+                Save-Json $cfg $ccPath
+                Write-Host "  [OK] Removed Neuron SessionStart hook from Claude Code's settings.json" -ForegroundColor Green
+                $any = $true
+            }
+        }
+    }
+
+    if (-not $any) { Write-Host "  (No OpenCode plugin or Claude Code hook found to remove.)" -ForegroundColor DarkGray }
+    return $any
+}
+
+# Remove Turso/API secrets from the repo's .env, keeping everything else -
+# same rule scripts\uninstall.ps1 uses (ported here for parity in the
+# interactive menu).
+function Scrub-Env {
+    param([string]$EnvPath)
+    if (-not (Test-Path -LiteralPath $EnvPath)) {
+        Write-Host "  - .env : not present" -ForegroundColor DarkGray
+        return
+    }
+    $lines = Get-Content -LiteralPath $EnvPath
+    $kept  = $lines | Where-Object { $_ -notmatch '^\s*(TURSO_[A-Z_]+|[A-Za-z0-9]+_(API_KEY|TOKEN))\s*=' }
+    $n = $lines.Count - $kept.Count
+    if ($n -le 0) {
+        Write-Host "  - .env : no secret lines to scrub" -ForegroundColor DarkGray
+        return
+    }
+    Copy-Item -LiteralPath $EnvPath "$EnvPath.neuron-bak" -Force -ErrorAction SilentlyContinue
+    $kept | Set-Content -LiteralPath $EnvPath -Encoding UTF8
+    Write-Host "  [OK] Scrubbed $n secret line(s) from .env (backup: $EnvPath.neuron-bak)" -ForegroundColor Green
+}
+
 function Invoke-CleanUninstall {
     Clear-Host; Show-Banner
     Write-Host "`n  Clean install / Uninstall Neuron`n" -ForegroundColor Yellow
-    Write-Host "  This removes the installed Neuron server so you can start from scratch."
-    Write-Host "  It will:" -ForegroundColor Gray
-    Write-Host "    - delete the install venv:  $InstallDir" -ForegroundColor Gray
-    Write-Host "    - remove the Start Menu shortcut" -ForegroundColor Gray
-    Write-Host "    - (optionally) de-register 'neuron' from your AI apps" -ForegroundColor Gray
-    Write-Host "  It will NOT touch this source repo, and by default KEEPS your memory data." -ForegroundColor Gray
+    Write-Host "  You choose exactly what gets removed below - nothing happens until the final" -ForegroundColor Gray
+    Write-Host "  confirmation. Every path used ($env:USERPROFILE / $env:LOCALAPPDATA-based) is" -ForegroundColor Gray
+    Write-Host "  resolved at runtime, so this works identically on any Windows account." -ForegroundColor Gray
     Write-Host ""
-    Write-Host "  Note: your Turso CLOUD database (if any) is never deleted from here." -ForegroundColor DarkGray
+    Write-Host "  Always removed:" -ForegroundColor Gray
+    Write-Host "    - install dir : $InstallDir" -ForegroundColor Gray
+    Write-Host "    - Start Menu  : shortcut for '$Slug'" -ForegroundColor Gray
+    Write-Host "  Never touched from here: this source repo, your Turso CLOUD database," -ForegroundColor DarkGray
+    Write-Host "  on-demand system tools (Rust, MSVC Build Tools, uv, cloudflared)." -ForegroundColor DarkGray
+    Write-Host ""
 
     if (-not (Confirm-YesNo "Proceed with uninstall?")) {
         Write-Host "  Cancelled - nothing was changed." -ForegroundColor DarkYellow
         Pause-Any; return
     }
 
+    # Every extra removal is its own opt-in question - full control, nothing
+    # bundled. Detected-but-declined items are reported as "kept" at the end.
     Write-Host ""
-    $deReg = Confirm-YesNo "Also remove Neuron from your AI apps' config (recommended)?"
-    $wipeData = Confirm-YesNo "Also DELETE ALL local memory data (the real store + repo graphs\*.db)? Irreversible."
+    $deregMcp     = Confirm-YesNo "Remove '$Slug' MCP registration from your AI apps (Claude Desktop, Claude Code, Cursor, VS Code, OpenCode, Zed)?"
+    $deregPlugins = Confirm-YesNo "Also remove the OpenCode handshake plugin and the Claude Code SessionStart hook, if installed?"
+    $wipeData     = Confirm-YesNo "DELETE ALL local memory data (the real store + repo graphs\*.db)? Irreversible."
+    $scrubSecrets = Confirm-YesNo "Scrub Turso/API secrets from this repo's .env?"
+    $wipeCache    = Confirm-YesNo "Remove the fastembed/HuggingFace model cache (~330MB, re-downloads next run)?"
 
     Write-Host "`n  Uninstalling..." -ForegroundColor Yellow
-    if ($deReg) { Remove-McpRegistrations }
+    if ($deregMcp)     { Remove-McpRegistrations }
+    if ($deregPlugins) { Remove-ClientPlugins }
     Remove-StartMenuShortcut
     Remove-InstallDir
 
@@ -1426,10 +1763,32 @@ function Invoke-CleanUninstall {
                 Write-Host "  [OK] Cleared memory graphs in $s" -ForegroundColor Green
             }
         }
-        Write-Host "  Tip: for a full wipe (secrets, model cache too) run scripts\uninstall.ps1 -All" -ForegroundColor DarkGray
     } else {
         Write-Host "  Kept your local memory data." -ForegroundColor DarkGray
     }
+
+    if ($scrubSecrets) {
+        Write-Host "`n  Scrubbing secrets..." -ForegroundColor Yellow
+        Scrub-Env (Join-Path $Repo '.env')
+    }
+
+    if ($wipeCache) {
+        Write-Host "`n  Removing model cache..." -ForegroundColor Yellow
+        foreach ($c in $NP.ModelCaches) {
+            if (Test-Path $c) {
+                Remove-Item -LiteralPath $c -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Host "  [OK] Removed $c" -ForegroundColor Green
+            }
+        }
+    }
+
+    Write-Host "`n  Left in place (nothing here was touched):" -ForegroundColor DarkGray
+    if (-not $deregMcp)     { Write-Host "    - MCP registration in your AI apps." -ForegroundColor DarkGray }
+    if (-not $deregPlugins) { Write-Host "    - OpenCode plugin / Claude Code hook (if any)." -ForegroundColor DarkGray }
+    if (-not $wipeData)     { Write-Host "    - Memory data." -ForegroundColor DarkGray }
+    if (-not $scrubSecrets) { Write-Host "    - .env secrets." -ForegroundColor DarkGray }
+    if (-not $wipeCache)    { Write-Host "    - Model cache." -ForegroundColor DarkGray }
+    Write-Host "    - This source repo, Turso cloud DB, on-demand system tools." -ForegroundColor DarkGray
 
     Write-Host "`n  Done. Neuron has been uninstalled." -ForegroundColor Green
     if (Confirm-YesNo "Reinstall a fresh copy now (prerequisites -> PyTurso -> Neuron)?") {
@@ -1452,7 +1811,7 @@ function Get-NeuronServerProcs {
     try {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
             $_.ProcessId -ne $me -and $_.CommandLine -and
-            ($_.CommandLine -match '(?i)(-m\s+neuron|\\run_mcp\.bat|Programs\\neuron\\\.venv)')
+            ($_.CommandLine -match ('(?i)(-m\s+neuron|\\run_mcp\.bat|Programs\\' + $Slug + '\\\.venv)'))
         })
     } catch {
         # No CIM available (rare) -> fall back to processes whose exe is in the install venv.
@@ -1507,6 +1866,102 @@ function Invoke-KillMcp {
     Pause-Any
 }
 
+# Manual/diagnostic start: your AI app normally launches Neuron itself, on
+# demand, over stdio - this exists so you can confirm `python -m neuron` boots
+# cleanly (imports, deps, embedding model) BEFORE wiring up a client, or to
+# recover a workable server without needing to relaunch the AI app. Output is
+# redirected to a log file, since a stdio MCP server just waits on stdin with
+# no client attached - that's expected, not a hang.
+function Invoke-StartServer {
+    Clear-Host; Show-Banner
+    Write-Host "`n  Start Neuron MCP server (manual / diagnostic)`n" -ForegroundColor Yellow
+    Write-Host "  Your AI app normally starts Neuron itself, on demand - you don't need this" -ForegroundColor Gray
+    Write-Host "  for normal use. It's here to confirm 'python -m neuron' boots cleanly on" -ForegroundColor Gray
+    Write-Host "  its own before you wire up a client, or after changing the install." -ForegroundColor Gray
+    Write-Host ""
+
+    if (-not (Test-NeuronReady $InstallVenvPy)) {
+        Write-Host "  [!] Neuron isn't installed yet - run 'Install / Update Neuron' first." -ForegroundColor DarkYellow
+        Pause-Any; return
+    }
+    $existing = Get-NeuronServerProcs
+    if ($existing.Count -gt 0) {
+        Write-Host "  [!] $($existing.Count) Neuron process(es) already running - stop them first if you want a clean restart." -ForegroundColor DarkYellow
+        Pause-Any; return
+    }
+
+    $logDir = Join-Path $InstallDir "logs"
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $log    = Join-Path $logDir "manual-start-$stamp.out.log"
+    $logErr = Join-Path $logDir "manual-start-$stamp.err.log"
+
+    try {
+        # -RedirectStandardInput 'NUL' is load-bearing, not cosmetic: Neuron is an
+        # MCP STDIO server - it blocks reading stdin waiting for a client. Without
+        # redirecting stdin away from the console, the child inherits the SAME
+        # console input as this menu (only stdout/stderr were being redirected
+        # before), so every keystroke you type after "Start" goes to the detached
+        # Neuron process instead of Pause-Any's ReadKey - the menu looks frozen.
+        # Pointing stdin at the null device fixes that; Neuron sees EOF and shuts
+        # down cleanly almost immediately, which is the expected outcome here
+        # (there's no real client on the other end) and still proves it boots.
+        $p = Start-Process -FilePath $InstallVenvPy -ArgumentList @('-m', 'neuron') `
+             -WorkingDirectory $InstallDir `
+             -RedirectStandardInput  'NUL' `
+             -RedirectStandardOutput $log `
+             -RedirectStandardError  $logErr `
+             -WindowStyle Hidden -PassThru
+    } catch {
+        Write-Host "  [X] Could not start Neuron: $_" -ForegroundColor Red
+        Pause-Any; return
+    }
+
+    # Give it enough time to import, load the embedding model, and hit EOF on
+    # stdin on its own (model load alone can take a couple of seconds).
+    Start-Sleep -Milliseconds 3000
+    if ($p.HasExited) {
+        if ($p.ExitCode -eq 0) {
+            Write-Host "  [OK] Neuron booted and shut down cleanly (exit code 0)." -ForegroundColor Green
+            Write-Host "       That's expected here: with no real client attached, it saw an" -ForegroundColor DarkGray
+            Write-Host "       immediate end-of-input and exited - this still proves it starts" -ForegroundColor DarkGray
+            Write-Host "       without errors (imports, deps, embedding model all fine)." -ForegroundColor DarkGray
+        } else {
+            Write-Host "  [X] It exited with a non-zero code ($($p.ExitCode)) - likely a startup error." -ForegroundColor Red
+        }
+        Write-Host "      Logs: $log" -ForegroundColor DarkYellow
+        Write-Host "            $logErr" -ForegroundColor DarkYellow
+    } else {
+        Write-Host "  [OK] Neuron server is still running (PID $($p.Id))." -ForegroundColor Green
+        Write-Host "       Logs: $log" -ForegroundColor DarkGray
+        Write-Host "       Stop it from this same menu ('Stop') whenever you're done." -ForegroundColor DarkGray
+    }
+    Pause-Any
+}
+
+# Combined Start/Stop submenu - one place to control the MCP server process,
+# instead of only ever being able to kill it.
+function Invoke-ServerControl {
+    while ($true) {
+        $procs = Get-NeuronServerProcs
+        $statusTag = if ($procs.Count -gt 0) { "$($procs.Count) running" } else { "not running" }
+        $idx = Show-Menu -Title "Start/Stop Neuron MCP server    [$statusTag]" -Options @(
+            "1) Start server (manual / diagnostic)",
+            "2) Stop server (kill running process(es))",
+            "Back"
+        ) -Descriptions @(
+            "Launch python -m neuron by hand and confirm it boots cleanly.",
+            "Find and stop lingering 'python -m neuron' servers your AI apps left running.",
+            ""
+        )
+        switch ($idx) {
+            0 { Invoke-StartServer }
+            1 { Invoke-KillMcp }
+            default { return }
+        }
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -1533,7 +1988,8 @@ function Main {
             "5) Seed knowledge DB (what & how)",
             "6) Run the test suite",
             "7) Live Graph Console",
-            "-  Stop Neuron MCP processes (kill server)",
+            "8) Embedding model (multilingual vs lightweight)",
+            "-  Start/Stop MCP server",
             "-  Clean install / Uninstall Neuron",
             "Exit"
         )
@@ -1545,7 +2001,8 @@ function Main {
             "What the optional seed knowledge base is and how to build/import your own.",
             "Run the pytest suite (core-only or full).",
             "Live graph view (nodes/links/health) - refreshes only when it changes.",
-            "Find and stop lingering 'python -m neuron' servers your AI apps left running.",
+            "Switch between the ~380MB multilingual default and a ~90MB English-only model.",
+            "Manually start python -m neuron (diagnostic) or stop lingering server processes.",
             "Remove the install (venv, shortcut, app registrations); optionally reinstall fresh.",
             "Close the Configuration Center."
         )
@@ -1565,12 +2022,13 @@ function Main {
             4 { Invoke-SeedGuide }
             5 { Invoke-Tests }
             6 { Invoke-Console }
-            7 { Invoke-KillMcp }
-            8 { Invoke-CleanUninstall }
-            9       { break }
+            7 { Invoke-EmbedModelMenu }
+            8 { Invoke-ServerControl }
+            9 { Invoke-CleanUninstall }
+            10      { break }
             default { break }
         }
-        if ($real -eq 9) { break }
+        if ($real -eq 10) { break }
     }
     # Housekeeping: don't silently orphan a background bridge on exit.
     if (Test-BridgeAlive) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Neuron SessionStart hook for Claude Code.
 
-Registered by scripts/neuron5-config.ps1 (Install-ClaudeCodeSessionHook) in
+Registered by scripts/configuration.ps1 (Install-ClaudeCodeSessionHook) in
 ~/.claude/settings.json under hooks.SessionStart, for the "startup", "resume",
 "clear" and "compact" matchers. Claude Code runs this script and adds its
 stdout directly to context at the start of the conversation (SessionStart is

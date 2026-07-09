@@ -6,7 +6,7 @@
 // same mechanism as other opencode plugins that inject system-prompt text
 // (experimental.chat.system.transform), so it composes cleanly with them.
 //
-// Deployed automatically by scripts/neuron5-config.ps1's "Add Neuron to your
+// Deployed automatically by scripts/configuration.ps1's "Add Neuron to your
 // AI" -> OpenCode flow, which copies this file to
 // %USERPROFILE%\.config\opencode\plugins\neuron-handshake.mjs and registers
 // it in opencode.json's top-level "plugin" array. Safe to copy by hand too.

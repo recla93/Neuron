@@ -1,5 +1,9 @@
 # Neuron — Persistent semantic memory for AI
 
+**Current release: v5.0.1 "Synapse"** — associative memory (Hebbian link reinforcement,
+spreading activation, cross-context drift, sleep-mode consolidation) plus auto-handshake
+plugins for OpenCode and Claude Code. See [CHANGELOG](CHANGELOG.md) for the full v5 story.
+
 Neuron is an **MCP server** that gives LLMs long-term memory. Across conversations it builds a
 **concept graph**: every exchange saves keywords with 384-dim vector embeddings and semantic
 links, retrievable in later sessions — per topic **context**, with inheritance from parent

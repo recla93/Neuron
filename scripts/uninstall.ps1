@@ -83,7 +83,7 @@ function Remove-McpEntry($t) {
 }
 
 # Undo Install-OpenCodeHandshakePlugin / Install-ClaudeCodeSessionHook (see
-# scripts\neuron5-config.ps1): removes the OpenCode plugin file + its
+# scripts\configuration.ps1): removes the OpenCode plugin file + its
 # opencode.json registration, and the Neuron entries from Claude Code's
 # SessionStart hooks - without touching any other plugin/hook the user has
 # configured (ponytail, third-party PreToolUse hooks, ...). Paths are
