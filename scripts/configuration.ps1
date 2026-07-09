@@ -1069,27 +1069,43 @@ function Warn-LegacyNeuronKey {
     Write-Host ""
 }
 
-# Deploy the neuron-handshake opencode plugin (clients/opencode-plugin/) to
-# %USERPROFILE%\.config\opencode\plugins\ and register it in $cfg's top-level
-# "plugin" array (an array of absolute path strings — appended, not replaced,
-# so other plugins like an existing "ponytail" entry are left untouched).
-# $cfg is the in-memory opencode.json object; caller still runs Save-Json.
+# Deploy the neuron-handshake opencode plugin (clients/opencode-plugin/) into
+# OpenCode's plugin folder (a SIBLING of opencode.json — hardcoding the path
+# broke non-standard installs) and register the absolute path in $Cfg's
+# top-level "plugin" array. Other plugins (e.g. an existing "ponytail" entry)
+# are preserved: we append, we do NOT replace. Post-copy we verify the file
+# lands at the exact destination; post-mutation we verify the entry is really
+# in $Cfg.plugin (Save-Json is the caller's job). Returns $true on success -
+# printed diagnostics point at the exact absolute path that got written.
 function Install-OpenCodeHandshakePlugin {
-    param([object]$Cfg)
+    param([object]$Cfg, [string]$ConfigPath)
     $repoRoot  = Split-Path -Parent $PSScriptRoot
     $srcPlugin = Join-Path $repoRoot "clients\opencode-plugin\neuron-handshake.mjs"
     if (-not (Test-Path $srcPlugin)) {
         Write-Host "  [!] neuron-handshake.mjs not found in repo - skipping opencode plugin install." -ForegroundColor DarkYellow
-        return
+        Write-Host "      Looked at: $srcPlugin" -ForegroundColor DarkGray
+        return $false
     }
-    $pluginDir = "$env:USERPROFILE\.config\opencode\plugins"
+    # Derive the plugin dir from the CONFIG PATH: OpenCode reads plugins from
+    # <same folder as opencode.json>/plugins/, so wherever the config lives is
+    # authoritative. Fall back to the documented default if the caller didn't
+    # thread the path through (older callers).
+    if ($ConfigPath) { $configDir = Split-Path -Parent $ConfigPath }
+    else             { $configDir = "$env:USERPROFILE\.config\opencode" }
+    $pluginDir = Join-Path $configDir "plugins"
     $dstPlugin = Join-Path $pluginDir "neuron-handshake.mjs"
     try {
         if (-not (Test-Path $pluginDir)) { New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null }
-        Copy-Item $srcPlugin $dstPlugin -Force
+        Copy-Item $srcPlugin $dstPlugin -Force -ErrorAction Stop
     } catch {
-        Write-Host "  [!] Could not copy neuron-handshake.mjs to $pluginDir : $_" -ForegroundColor DarkYellow
-        return
+        Write-Host "  [X] Could not copy neuron-handshake.mjs to $pluginDir : $_" -ForegroundColor Red
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $dstPlugin)) {
+        Write-Host "  [X] Copy reported success but the plugin file isn't at the expected path:" -ForegroundColor Red
+        Write-Host "        $dstPlugin" -ForegroundColor Red
+        Write-Host "      (Filesystem virtualization? Try a real Python install and re-run.)" -ForegroundColor DarkYellow
+        return $false
     }
     $plugins = @()
     if ($Cfg.PSObject.Properties['plugin'] -and $null -ne $Cfg.plugin) {
@@ -1099,7 +1115,19 @@ function Install-OpenCodeHandshakePlugin {
         $plugins += $dstPlugin
         Set-Prop $Cfg 'plugin' $plugins
     }
-    Write-Host "  [OK] neuron-handshake plugin deployed to $dstPlugin" -ForegroundColor Green
+    # Verify in-memory: the array we just Set-Prop'd on $Cfg has to contain
+    # our dstPlugin. Catches Set-Prop failures / object-identity surprises.
+    $memPlugins = @($Cfg.plugin)
+    if ($memPlugins -notcontains $dstPlugin) {
+        Write-Host "  [X] Failed to register the plugin path in the config object:" -ForegroundColor Red
+        Write-Host "        wanted: $dstPlugin" -ForegroundColor Red
+        Write-Host "        got:    $($memPlugins -join ', ')" -ForegroundColor Red
+        return $false
+    }
+    Write-Host "  [OK] OpenCode handshake plugin:" -ForegroundColor Green
+    Write-Host "        file:   $dstPlugin" -ForegroundColor DarkGray
+    Write-Host "        config: `"$ConfigPath`" > plugin[] appended" -ForegroundColor DarkGray
+    return $true
 }
 
 # Deploy the neuron_sessionstart_hook.py script (clients/claude-code-hook/) and
@@ -1118,16 +1146,22 @@ function Install-ClaudeCodeSessionHook {
     $srcHook  = Join-Path $repoRoot "clients\claude-code-hook\neuron_sessionstart_hook.py"
     if (-not (Test-Path $srcHook)) {
         Write-Host "  [!] neuron_sessionstart_hook.py not found in repo - skipping Claude Code hook install." -ForegroundColor DarkYellow
-        return
+        Write-Host "      Looked at: $srcHook" -ForegroundColor DarkGray
+        return $false
     }
     $hookDir  = Join-Path $InstallDir "hooks"
     $dstHook  = Join-Path $hookDir "neuron_sessionstart_hook.py"
     try {
         if (-not (Test-Path $hookDir)) { New-Item -ItemType Directory -Path $hookDir -Force | Out-Null }
-        Copy-Item $srcHook $dstHook -Force
+        Copy-Item $srcHook $dstHook -Force -ErrorAction Stop
     } catch {
-        Write-Host "  [!] Could not copy neuron_sessionstart_hook.py to $hookDir : $_" -ForegroundColor DarkYellow
-        return
+        Write-Host "  [X] Could not copy neuron_sessionstart_hook.py to $hookDir : $_" -ForegroundColor Red
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $dstHook)) {
+        Write-Host "  [X] Copy reported success but the hook file isn't at the expected path:" -ForegroundColor Red
+        Write-Host "        $dstHook" -ForegroundColor Red
+        return $false
     }
     # Prefer the real venv python if it exists; fall back to a bare "python" so
     # the hook entry is still written (and works once Neuron is installed).
@@ -1160,8 +1194,41 @@ function Install-ClaudeCodeSessionHook {
         }
     }
     Set-Prop $hooks 'SessionStart' $sessionStart
-    Save-Json $settings $settingsPath
-    Write-Host "  [OK] Claude Code SessionStart hook registered ($settingsPath)" -ForegroundColor Green
+    $ok = Save-Json $settings $settingsPath
+    if (-not $ok) { return $false }
+    # Post-write verification: re-read settings.json and confirm the hook
+    # command is present under EVERY matcher we tried to register. Catches
+    # silent JSON-roundtrip failures where Save-Json's "valid JSON" check
+    # passed but our nested entries got stripped/truncated.
+    try {
+        $reread = Get-Content $settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-Host "  [X] Could not re-read $settingsPath to verify the hook: $_" -ForegroundColor Red
+        return $false
+    }
+    $missing = @()
+    foreach ($matcher in @('startup', 'resume', 'clear', 'compact')) {
+        $group = @($reread.hooks.SessionStart) | Where-Object { $_.matcher -eq $matcher } | Select-Object -First 1
+        $ok = $false
+        if ($group -and $group.hooks) {
+            foreach ($h in @($group.hooks)) {
+                if ($h.command -eq $hookCommand) { $ok = $true; break }
+            }
+        }
+        if (-not $ok) { $missing += $matcher }
+    }
+    if ($missing.Count -gt 0) {
+        Write-Host "  [X] Claude Code hook was written but is MISSING from these matchers:" -ForegroundColor Red
+        Write-Host "        $($missing -join ', ')" -ForegroundColor Red
+        Write-Host "      Expected command in each matcher's hooks[]:" -ForegroundColor Red
+        Write-Host "        $hookCommand" -ForegroundColor Red
+        return $false
+    }
+    Write-Host "  [OK] Claude Code SessionStart hook:" -ForegroundColor Green
+    Write-Host "        file:     $dstHook" -ForegroundColor DarkGray
+    Write-Host "        settings: $settingsPath" -ForegroundColor DarkGray
+    Write-Host "        matchers: startup, resume, clear, compact (all verified)" -ForegroundColor DarkGray
+    return $true
 }
 
 # Ensure obj.<name> exists as an object and return it.
@@ -1346,7 +1413,7 @@ function Write-ClientConfig {
             Set-Prop $servers $Slug ([pscustomobject]@{ command = $vpy; args = $nargs; cwd = $InstallDir })
             $ok = Save-Json $cfg $path
             if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcpServers', $Slug) -Label 'Claude Code') }
-            Install-ClaudeCodeSessionHook -Vpy $vpy
+            [void](Install-ClaudeCodeSessionHook -Vpy $vpy)
             Show-ClientTutorial -App 'claude-code' -Path $path -Vpy $vpy
         }
         'cursor' {
@@ -1379,7 +1446,7 @@ function Write-ClientConfig {
             $mcp = Get-OrAddObject $cfg 'mcp'
             Warn-LegacyNeuronKey -Container $mcp -App 'OpenCode' -Path $path
             Set-Prop $mcp $Slug ([pscustomobject]@{ command = @($vpy, '-m', 'neuron'); type = 'local' })
-            Install-OpenCodeHandshakePlugin -Cfg $cfg
+            [void](Install-OpenCodeHandshakePlugin -Cfg $cfg -ConfigPath $path)
             $ok = Save-Json $cfg $path
             if ($ok) { [void](Assert-JsonKey -Path $path -Keys @('mcp', $Slug) -Label 'OpenCode') }
             Show-ClientTutorial -App 'opencode' -Path $path -Vpy $vpy
