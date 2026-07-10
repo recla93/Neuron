@@ -37,6 +37,14 @@ Behaviour changes to be aware of (all backward-compatible, no migration):
   consolidation on a shared store). New one-shot setup: `scripts/init_cloud.py`.
 
 ### Fixed
+- **DB toggle in Configuration.bat was deleting credential lines.** The old toggle
+  hardcoded cloud/local key names, deduplicated lines, and created placeholders —
+  any deviation (duplicates, missing keys) caused data loss or "nothing to toggle".
+  The toggle now simply flips the `#` prefix on every `TURSO_*` line in `.env`:
+  no hardcoding, no line deletion, no re-entry needed.
+- **DB check didn't reflect toggle state.** `check_cloud_config.py` read
+  `os.environ` which was stale after a toggle; it now reads the `.env` file
+  directly so the active mode is always accurate.
 - **Vector similarity was a raw dot product, not a cosine, on the Python fallback
   tier.** `_search_embeddings` and `_refine_domain` scored non-normalized
   fastembed vectors with a bare dot product, so "similarities" ran well above 1
