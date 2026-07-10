@@ -1356,23 +1356,45 @@ function Install-CodexSessionHook {
         Write-Host "  [X] Could not copy hook to $dstHook : $_" -ForegroundColor Red; return $false
     }
     $hookPython = if (Test-Path $Vpy) { $Vpy } else { "python" }
-    $shellCmd = "`"$hookPython`" `"$dstHook`""
+    $hookCommand = "`"$hookPython`" `"$dstHook`""
     $hookJsonPath = "$env:USERPROFILE\.codex\hooks.json"
     $hDir = Split-Path -Parent $hookJsonPath
     if (-not (Test-Path $hDir)) { New-Item -ItemType Directory -Path $hDir -Force | Out-Null }
-    $hooks = New-Object psobject
-    $inner = New-Object psobject
+
+    # MERGE into any existing hooks.json (never clobber other tools' hooks), and
+    # use Codex's actual schema: a top-level "hooks" object -> <Event> -> array of
+    # { matcher, hooks: [ { type: "command", command, timeout } ] } groups. The old
+    # code wrote { matcher, shell } (wrong key) and overwrote the whole file.
+    $root = Load-Json $hookJsonPath
+    if ($null -eq $root) { $root = New-Object psobject }
+    $hooksObj = Get-OrAddObject $root 'hooks'
+
     $sessionStart = @()
-    foreach ($matcher in @('startup', 'resume')) {
-        $sessionStart += [pscustomobject]@{ matcher = $matcher; shell = $shellCmd }
+    if ($hooksObj.PSObject.Properties['SessionStart'] -and $null -ne $hooksObj.SessionStart) {
+        $sessionStart = @($hooksObj.SessionStart)
     }
-    $inner | Add-Member -NotePropertyName 'SessionStart' -NotePropertyValue $sessionStart
-    $hooks | Add-Member -NotePropertyName 'hooks' -NotePropertyValue $inner
-    $ok = Save-Json $hooks $hookJsonPath
+    # One group matching every startup source ('.*'), dedup by command.
+    $group = $sessionStart | Where-Object { $_.matcher -eq '.*' } | Select-Object -First 1
+    if ($null -eq $group) {
+        $sessionStart += [pscustomobject]@{
+            matcher = '.*'
+            hooks   = @([pscustomobject]@{ type = 'command'; command = $hookCommand; timeout = 30 })
+        }
+    } else {
+        $existingHooks = @($group.hooks)
+        $already = $existingHooks | Where-Object { $_.command -eq $hookCommand }
+        if (-not $already) {
+            $existingHooks += [pscustomobject]@{ type = 'command'; command = $hookCommand; timeout = 30 }
+            Set-Prop $group 'hooks' $existingHooks
+        }
+    }
+    Set-Prop $hooksObj 'SessionStart' $sessionStart
+    $ok = Save-Json $root $hookJsonPath
     if (-not $ok) { return $false }
     Write-Host "  [OK] Codex CLI SessionStart hook:" -ForegroundColor Green
     Write-Host "        file:  $dstHook" -ForegroundColor DarkGray
-    Write-Host "        hooks: $hookJsonPath (startup + resume)" -ForegroundColor DarkGray
+    Write-Host "        hooks: $hookJsonPath (matcher '.*')" -ForegroundColor DarkGray
+    Write-Host "        note:  needs 'codex_hooks = true' under [features] in config.toml (the MCP step sets it)." -ForegroundColor DarkGray
     return $true
 }
 
@@ -1532,7 +1554,7 @@ function Show-ClientTutorial {
             Write-Host "  4) Restart OpenCode." -ForegroundColor Yellow
         }
         'zed' {
-            Write-Host "     `"context_servers`": { `"$Slug`": { `"command`": { `"path`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } } }" -ForegroundColor White
+            Write-Host "     `"context_servers`": { `"$Slug`": { `"command`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } }" -ForegroundColor White
             Write-Host "  4) Restart Zed." -ForegroundColor Yellow
         }
         'codex' {
@@ -1638,7 +1660,9 @@ function Write-ClientConfig {
             if ($null -eq $cfg) { Show-CannotMerge $path $vpy; break }
             $cs = Get-OrAddObject $cfg 'context_servers'
             Warn-LegacyNeuronKey -Container $cs -App 'Zed' -Path $path
-            Set-Prop $cs $Slug ([pscustomobject]@{ command = [pscustomobject]@{ path = $vpy; args = $nargs } })
+            # Zed's current schema is FLAT: context_servers.<name> = { command, args }.
+            # The old nested { command = { path, args } } shape is no longer accepted.
+            Set-Prop $cs $Slug ([pscustomobject]@{ command = $vpy; args = $nargs })
             $saved    = Save-Json $cfg $path
             $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('context_servers', $Slug) -Label 'Zed' } else { $false }
             Show-ClientTutorial -App 'zed' -Path $path -Vpy $vpy -Ok ($saved -and $verified)
@@ -1648,10 +1672,36 @@ function Write-ClientConfig {
             $tomlDir = Split-Path -Parent $tomlPath
             if (-not (Test-Path $tomlDir)) { New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
             $escapedCmd = $vpy -replace '\\', '\\'
-            $tomlLines = @("[mcp_servers.$Slug]", "command = `"$escapedCmd`"", "args = ['-m', 'neuron']")
+            # MERGE into the existing config.toml — NEVER overwrite it. The old code
+            # used WriteAllText with only our block, which wiped the user's entire
+            # Codex config (model, other MCP servers, everything). Append our table
+            # only if it isn't already declared, and enable the hooks feature.
+            $existing = if (Test-Path $tomlPath) { [System.IO.File]::ReadAllText($tomlPath) } else { "" }
+            $newText  = $existing
+            if ($existing -notmatch "(?m)^\s*\[mcp_servers\.$([regex]::Escape($Slug))\]") {
+                $block = @("[mcp_servers.$Slug]", "command = `"$escapedCmd`"", "args = ['-m', 'neuron']") -join "`r`n"
+                $newText = if ($newText.Trim()) { $newText.TrimEnd() + "`r`n`r`n" + $block + "`r`n" } else { $block + "`r`n" }
+            }
+            # Enable the hooks feature (required for the SessionStart hook to run).
+            # Merge into an existing [features] table if present; otherwise append one
+            # (a duplicate [features] header would be a TOML error).
+            if ($newText -notmatch "(?m)^\s*codex_hooks\s*=") {
+                if ($newText -match "(?m)^\s*\[features\]") {
+                    $ls = $newText -split "`r?`n"
+                    $out = New-Object System.Collections.Generic.List[string]
+                    $done = $false
+                    foreach ($ln in $ls) {
+                        $out.Add($ln)
+                        if (-not $done -and $ln -match '^\s*\[features\]') { $out.Add('codex_hooks = true'); $done = $true }
+                    }
+                    $newText = ($out -join "`r`n")
+                } else {
+                    $newText = $newText.TrimEnd() + "`r`n`r`n[features]`r`ncodex_hooks = true`r`n"
+                }
+            }
             try {
-                [System.IO.File]::WriteAllText($tomlPath, ($tomlLines -join "`r`n") + "`r`n", [System.Text.UTF8Encoding]::new($false))
-                Write-Host "  [OK] Wrote $tomlPath" -ForegroundColor Green; $saved = $true
+                [System.IO.File]::WriteAllText($tomlPath, $newText, [System.Text.UTF8Encoding]::new($false))
+                Write-Host "  [OK] Merged Neuron into $tomlPath (existing config preserved)" -ForegroundColor Green; $saved = $true
             } catch { Write-Host "  [X] Could not write $tomlPath : $_" -ForegroundColor Red; $saved = $false }
             $hookOk = Install-CodexSessionHook -Vpy $vpy
             Show-ClientTutorial -App 'codex' -Path $tomlPath -Vpy $vpy -Ok ($saved -and $hookOk)

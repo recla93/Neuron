@@ -3,9 +3,9 @@
   "_path_windows": "%USERPROFILE%\\.cursor\\mcp.json",
   "_path_macos": "~/.cursor/mcp.json",
   "mcpServers": {
-    "neuron": {
+    "neuron5": {
       "command": "cmd",
-      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron\\scripts\\run_mcp.bat"]
+      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
     }
   }
 }

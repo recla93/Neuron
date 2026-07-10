@@ -2,14 +2,28 @@
 //
 // Ensures Neuron's handshake priority text reaches the model's system prompt
 // on every turn, independent of whether the host actually surfaces the MCP
-// `instructions` field (opencode does not do this reliably today). Uses the
-// same mechanism as other opencode plugins that inject system-prompt text
-// (experimental.chat.system.transform), so it composes cleanly with them.
+// `instructions` field.
+//
+// IMPORTANT (why this is a NAMED export): OpenCode discovers plugins by their
+// NAMED exports -- a `export default` is NOT picked up, so the hook below never
+// registers and the handshake silently never fires. This was the bug. The
+// plugin function must be exported by name (any name); OpenCode calls it with
+// its context object and reads the hook map it returns.
+//
+// Caveat: `experimental.chat.system.transform` is an experimental hook, and on
+// some OpenCode versions the runtime discards mutations to `output.system`
+// (anomalyco/opencode#17100). So this plugin is a best-effort SECOND channel;
+// the RELIABLE delivery path for OpenCode is the top-level `instructions` entry
+// in opencode.json (see clients/opencode.example.json), which points at
+// neuron-opener.md. Keep both.
 //
 // Deployed automatically by scripts/configuration.ps1's "Add Neuron to your
 // AI" -> OpenCode flow, which copies this file to
-// %USERPROFILE%\.config\opencode\plugins\neuron-handshake.mjs and registers
-// it in opencode.json's top-level "plugin" array. Safe to copy by hand too.
+// <opencode.json dir>\plugins\neuron-handshake.mjs and registers it in
+// opencode.json's top-level "plugin" array. Safe to copy by hand too.
+//
+// Tool names use OpenCode's `<serverkey>_<tool>` convention for a server
+// registered under the key "neuron5" (the v5 "Synapse" identity).
 
 const NEURON_HANDSHAKE = (
   "!IMPORTANT [NEURON]: Neuron (persistent semantic memory) is connected. " +
@@ -29,7 +43,7 @@ const NEURON_HANDSHAKE = (
   "is empty. Step 1 still applies even then."
 );
 
-export default async () => {
+export const NeuronHandshake = async () => {
   return {
     "experimental.chat.system.transform": async (_input, output) => {
       output.system.push(NEURON_HANDSHAKE);

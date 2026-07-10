@@ -1,13 +1,11 @@
 {
-  "_comment": "Zed Editor — merge into ~/.config/zed/settings.json",
+  "_comment": "Zed Editor — merge into ~/.config/zed/settings.json. Zed's current schema is flat: command + args (the older nested command:{path,args} form is no longer accepted).",
   "_path_windows": "%APPDATA%\\Zed\\settings.json",
   "_path_macos": "~/.config/zed/settings.json",
   "context_servers": {
-    "neuron": {
-      "command": {
-        "path": "cmd",
-        "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron\\scripts\\run_mcp.bat"]
-      }
+    "neuron5": {
+      "command": "cmd",
+      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
     }
   }
 }

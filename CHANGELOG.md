@@ -15,6 +15,27 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.1.1] — 2026-07-10
+
+Bugfix release: client-config and installer fixes discovered after 5.1.0 shipped.
+No changes to the memory engine or data — a reinstall (to refresh the deployed
+`…\Programs\neuron5` copy) plus a client restart is enough.
+
+### Fixed
+- **OpenCode plugin never loaded.** `clients/opencode-plugin/neuron-handshake.mjs`
+  used `export default`, which OpenCode doesn't pick up; it now uses a named export
+  so the handshake actually runs.
+- **Example configs pointed at the pre-v5 slug.** `clients/*.example.json` used the
+  MCP key `neuron` and install path `…\Programs\neuron`; both now use `neuron5`
+  (key and path). The Python module invocation stays `-m neuron`.
+- **Codex installer clobbered `config.toml`.** `scripts/configuration.ps1` overwrote
+  the user's existing `~/.codex/config.toml`; it now merges non-destructively, writes
+  `hooks.json` with the correct schema (`type`/`command`), and sets the
+  `[features] codex_hooks = true` flag.
+- **Zed config used the wrong shape.** The Zed entry (in `configuration.ps1` and
+  `clients/zed.example.json`) used a nested object; it now uses the flat
+  `command`/`args` format Zed expects.
+
 ## [5.1.0] "Synapse" — 2026-07-10
 
 Consolidation of the **FiveFix** work: correctness and precision fixes to the
