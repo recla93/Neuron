@@ -27,9 +27,13 @@
     powershell -ExecutionPolicy Bypass -File scripts\configuration.ps1
 #>
 
-# Debug: set $true to see detailed operations instead of suppressing them with
-# | Out-Null. Uncomment the line below before running.
-# $NeuronDebug = $true
+# Debug mode: loaded from .env (NEURON_DEBUG=true/false), togglable via the
+# "Debug Mode" menu option below. When ON, detailed filesystem operations
+# (dir creation, file copies) are shown instead of suppressed with | Out-Null.
+$script:NeuronDebug = $false
+$_envFile = Join-Path $Repo ".env"
+$_envRaw = if (Test-Path $_envFile) { Get-Content $_envFile -Raw -ErrorAction SilentlyContinue } else { "" }
+if ($_envRaw -and ($_envRaw -match '(?m)^NEURON_DEBUG=(.+)$')) { $script:NeuronDebug = ($Matches[1].Trim() -eq 'true') }
 
 # Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host so
 # it works under both Windows PowerShell (powershell.exe) AND PowerShell 7 (pwsh);
@@ -2461,6 +2465,29 @@ function Invoke-StartServer {
     Pause-Any
 }
 
+# Debug Mode toggle — persists to .env as NEURON_DEBUG=true/false.
+# When ON, every filesystem operation (dir creation, file copy) prints a
+# "[..] Creating: ..." line so you can follow exactly what the script is doing
+# during 'Add to your AI' or any other step. When OFF (default), only the
+# standard [OK]/[!] status messages appear.
+function Invoke-DebugModeToggle {
+    Clear-Host; Show-Banner
+    $current = if ($script:NeuronDebug) { 'ON' } else { 'OFF' }
+    Write-Host "`n  Debug Mode: currently $current`n" -ForegroundColor Yellow
+    Write-Host "  When ON, directory creation, file copies and similar low-level" -ForegroundColor DarkGray
+    Write-Host "  operations are printed to the terminal so you can follow what" -ForegroundColor DarkGray
+    Write-Host "  the script is doing. Useful during 'Add to your AI' to confirm" -ForegroundColor DarkGray
+    Write-Host "  every file was written exactly where expected. When OFF (default)," -ForegroundColor DarkGray
+    Write-Host "  those details are suppressed — you only see the [OK]/[!] summary.`n" -ForegroundColor DarkGray
+    Write-Host "  Persisted to: .env (NEURON_DEBUG=$(if ($script:NeuronDebug) { 'true' } else { 'false' }))`n" -ForegroundColor DarkGray
+    if (Confirm-YesNo "Turn Debug Mode $(if ($script:NeuronDebug) { 'OFF' } else { 'ON' })?") {
+        $script:NeuronDebug = -not $script:NeuronDebug
+        Update-EnvFile @{ 'NEURON_DEBUG' = if ($script:NeuronDebug) { 'true' } else { 'false' } }
+        Write-Host "`n  [OK] Debug Mode is now $(if ($script:NeuronDebug) { 'ON' } else { 'OFF' }). Restart the affected operation to see the detail." -ForegroundColor Green
+    }
+    Pause-Any
+}
+
 # Combined Start/Stop submenu - one place to control the MCP server process,
 # instead of only ever being able to kill it.
 function Invoke-ServerControl {
@@ -2511,6 +2538,7 @@ function Main {
             "6) Run the test suite",
             "7) Live Graph Console",
             "8) Embedding model (multilingual vs lightweight)",
+            "9) Debug Mode",
             "-  Start/Stop MCP server",
             "-  Clean install / Uninstall Neuron",
             "Exit"
@@ -2524,6 +2552,7 @@ function Main {
             "Run the pytest suite (core-only or full).",
             "Live graph view (nodes/links/health) - refreshes only when it changes.",
             "Switch between the ~380MB multilingual default and a ~90MB English-only model.",
+            "Toggle detailed terminal output ON/OFF (dir creation, file copies — useful to debug 'Add to your AI'). Persisted in .env.",
             "Manually start python -m neuron (diagnostic) or stop lingering server processes.",
             "Remove the install (venv, shortcut, app registrations); optionally reinstall fresh.",
             "Close the Configuration Center."
@@ -2545,12 +2574,13 @@ function Main {
             5 { Invoke-Tests }
             6 { Invoke-Console }
             7 { Invoke-EmbedModelMenu }
-            8 { Invoke-ServerControl }
-            9 { Invoke-CleanUninstall }
-            10      { break }
+            8 { Invoke-DebugModeToggle }
+            9 { Invoke-ServerControl }
+            10 { Invoke-CleanUninstall }
+            11      { break }
             default { break }
         }
-        if ($real -eq 10) { break }
+        if ($real -eq 11) { break }
     }
     # Housekeeping: don't silently orphan a background bridge on exit.
     if (Test-BridgeAlive) {
