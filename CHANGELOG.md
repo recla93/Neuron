@@ -15,11 +15,26 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
-## [Unreleased] — "FiveFix"
+## [5.1.0] "Synapse" — 2026-07-10
 
-Correctness and precision fixes to the search / embedding path and the heuristic
-extractor, surfaced while reviewing the FiveFix working branch. No data migration
-or re-embed needed. Bump `__version__` when this is cut for release.
+Consolidation of the **FiveFix** work: correctness and precision fixes to the
+search / embedding / extraction path, performance optimizations, and — the
+headline of this release — concurrency hardening so a team can build a **shared
+knowledge base on Turso Cloud** without corrupting or clobbering each other's
+memory. No data migration or re-embed needed; existing single-user installs keep
+working unchanged.
+
+Behaviour changes to be aware of (all backward-compatible, no migration):
+- Vector-search similarities on the Python fallback tier are now a true cosine
+  in [0, 1] (they were an unbounded dot product), so results and the thresholds
+  that depend on them behave correctly — expect different (better-calibrated)
+  associations than 5.0.x.
+- On a shared **remote** store, per-user session state (turn counter, staged
+  stimulus, last-topic) moves to a local sidecar; each user's `turn_count` reads
+  its empty sidecar once and restarts from 0 (one-time, harmless). Local
+  single-user stores are unchanged.
+- New env switches: `NS_ALLOW_SHARED_RECONCILE` (opt-in for coordinated
+  consolidation on a shared store). New one-shot setup: `scripts/init_cloud.py`.
 
 ### Fixed
 - **Vector similarity was a raw dot product, not a cosine, on the Python fallback
