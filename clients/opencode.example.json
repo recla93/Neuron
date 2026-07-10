@@ -4,7 +4,7 @@
   "_path_macos": "~/.config/opencode/opencode.json",
   "mcp": {
     "neuron5": {
-      "command": ["cmd", "/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"],
+      "command": ["python.exe", "-m", "neuron"],
       "type": "local"
     }
   },

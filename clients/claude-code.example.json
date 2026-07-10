@@ -2,9 +2,8 @@
   "_comment": "Claude Code — place as .mcp.json in project root, or merge into ~/.claude.json. The server key must be `neuron5` so the SessionStart hook's tool names (mcp__neuron5__help, ...) resolve.",
   "mcpServers": {
     "neuron5": {
-      "command": "python3",
-      "args": ["-m", "neuron"],
-      "cwd": "%LOCALAPPDATA%\\Programs\\neuron5"
+      "command": "python.exe",
+      "args": ["-m", "neuron"]
     }
   }
 }

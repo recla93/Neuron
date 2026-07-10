@@ -3,8 +3,8 @@
   "_path": ".vscode/settings.json",
   "github.copilot.mcpServers": {
     "neuron5": {
-      "command": "cmd",
-      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
+      "command": "python.exe",
+      "args": ["-m", "neuron"]
     }
   },
   "_comment_global": "Or for user-level (Ctrl+Shift+P → 'Open User Settings JSON'):",
@@ -12,8 +12,8 @@
     "servers": {
       "neuron5": {
         "type": "stdio",
-        "command": "cmd",
-        "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
+        "command": "python.exe",
+        "args": ["-m", "neuron"]
       }
     }
   }

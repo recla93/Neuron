@@ -3,8 +3,8 @@
   "_path": "~/.vscode/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_servers.json",
   "mcpServers": {
     "neuron5": {
-      "command": "cmd",
-      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"],
+      "command": "python.exe",
+      "args": ["-m", "neuron"],
       "disabled": false,
       "alwaysAllow": []
     }

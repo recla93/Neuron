@@ -4,8 +4,8 @@
   "mcpServers": {
     "neuron5": {
       "transport": "stdio",
-      "command": "cmd",
-      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
+      "command": "python.exe",
+      "args": ["-m", "neuron"]
     }
   },
   "_macos_linux": {

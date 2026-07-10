@@ -556,10 +556,70 @@ Register-Mcp -App "Claude Desktop" -Path "$env:APPDATA\Claude\claude_desktop_con
 Register-Mcp -App "Claude Code"    -Path "$env:USERPROFILE\.claude.json"                   -Entry $mcpEntryStd -Key $Slug
 Register-Mcp -App "Cursor"         -Path "$env:USERPROFILE\.cursor\mcp.json"               -Entry $mcpEntryStd -Key $Slug
 Register-McpNested -App "VS Code"  -Path "$env:APPDATA\Code\User\settings.json"            -ParentKeys @('mcp','servers') -Entry @{ type='stdio'; command=$runCmd; args=@('-m','neuron') } -Key $Slug
-Register-McpNested -App "OpenCode" -Path "$env:USERPROFILE\.config\opencode\opencode.json" -ParentKeys @('mcp') -Entry @{ command=@($runCmd, '-m','neuron'); type='local' } -Key $Slug
-Register-McpNested -App "Zed"      -Path "$env:APPDATA\Zed\settings.json"                  -ParentKeys @('context_servers') -Entry @{ command=@{ path=$runCmd; args=@('-m','neuron') } } -Key $Slug
+$ocPath = "$env:USERPROFILE\.config\opencode\opencode.json"
+if (Test-Path "$env:USERPROFILE\.config\opencode\opencode.jsonc") { $ocPath = "$env:USERPROFILE\.config\opencode\opencode.jsonc" }
+Register-McpNested -App "OpenCode" -Path $ocPath -ParentKeys @('mcp') -Entry @{ command=@($runCmd, '-m','neuron'); type='local' } -Key $Slug
+Register-McpNested -App "Zed"      -Path "$env:APPDATA\Zed\settings.json"                  -ParentKeys @('context_servers') -Entry @{ command=$runCmd; args=@('-m','neuron') } -Key $Slug
 Register-CodexMcp -Vpy $runCmd -Slug $Slug
 Write-Host "   Restart your AI app(s) to activate Neuron." -ForegroundColor DarkGray
+
+# --- OpenCode handshake plugin (deploy + register) ---
+$ocDir = Split-Path -Parent $ocPath
+$ocPluginSrc = Join-Path $SrcDir "clients\opencode-plugin\neuron-handshake.mjs"
+$ocPluginDst = Join-Path $ocDir "plugins\neuron-handshake.mjs"
+if ((Test-Path $ocPath) -and (Test-Path $ocPluginSrc)) {
+    try {
+        if (-not (Test-Path (Split-Path -Parent $ocPluginDst))) { New-Item -ItemType Directory -Path (Split-Path -Parent $ocPluginDst) -Force | Out-Null }
+        Copy-Item $ocPluginSrc $ocPluginDst -Force -ErrorAction Stop
+        $raw = Get-Content $ocPath -Raw -ErrorAction SilentlyContinue
+        if ($raw -and $raw.Trim()) { $ocCfg = $raw | ConvertFrom-Json -ErrorAction SilentlyContinue }
+        if (-not $ocCfg) { $ocCfg = New-Object psobject }
+        $plugs = @()
+        if ($ocCfg.PSObject.Properties['plugin'] -and $null -ne $ocCfg.plugin) { $plugs = @($ocCfg.plugin) }
+        if ($plugs -notcontains $ocPluginDst) { $plugs += $ocPluginDst }
+        if ($ocCfg.plugin -ne $plugs) {
+            $ocCfg | Add-Member -Force -NotePropertyName 'plugin' -NotePropertyValue $plugs
+            [System.IO.File]::WriteAllText($ocPath, ($ocCfg | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
+        }
+        Write-Host "   [OK] OpenCode handshake plugin: $ocPluginDst" -ForegroundColor Green
+    } catch { Write-Host "   [!] OpenCode plugin install failed: $_" -ForegroundColor DarkYellow }
+}
+
+# --- Claude Code SessionStart hook (deploy + register in ~/.claude/settings.json) ---
+$ccHookSrc = Join-Path $SrcDir "clients\claude-code-hook\neuron_sessionstart_hook.py"
+$ccHookDir = Join-Path $DestDir "hooks"
+$ccHookDst = Join-Path $ccHookDir "neuron_sessionstart_hook.py"
+if (Test-Path "$env:USERPROFILE\.claude.json") {
+    try {
+        if (-not (Test-Path $ccHookDir)) { New-Item -ItemType Directory -Path $ccHookDir -Force | Out-Null }
+        Copy-Item $ccHookSrc $ccHookDst -Force -ErrorAction Stop
+        $hookCmd = "`"$runCmd`" `"$ccHookDst`""
+        $settingsPath = "$env:USERPROFILE\.claude\settings.json"
+        $sDir = Split-Path -Parent $settingsPath
+        if (-not (Test-Path $sDir)) { New-Item -ItemType Directory -Path $sDir -Force | Out-Null }
+        $sRaw = if (Test-Path $settingsPath) { Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue } else { "" }
+        if ($sRaw -and $sRaw.Trim()) { $sCfg = $sRaw | ConvertFrom-Json -ErrorAction SilentlyContinue } else { $sCfg = New-Object psobject }
+        if (-not $sCfg) { $sCfg = New-Object psobject }
+        if (-not $sCfg.PSObject.Properties['hooks']) { $sCfg | Add-Member -NotePropertyName 'hooks' -NotePropertyValue (New-Object psobject) -Force }
+        $sHooks = $sCfg.hooks
+        $sStart = @()
+        if ($sHooks.PSObject.Properties['SessionStart'] -and $null -ne $sHooks.SessionStart) { $sStart = @($sHooks.SessionStart) }
+        foreach ($matcher in @('startup', 'resume', 'clear', 'compact')) {
+            $group = $sStart | Where-Object { $_.matcher -eq $matcher } | Select-Object -First 1
+            if ($null -eq $group) {
+                $sStart += [pscustomobject]@{ matcher = $matcher; hooks = @([pscustomobject]@{ type = 'command'; command = $hookCmd; timeout = 30 }) }
+            } else {
+                $existing = @($group.hooks)
+                $already = $existing | Where-Object { $_.command -eq $hookCmd }
+                if (-not $already) { $existing += [pscustomobject]@{ type = 'command'; command = $hookCmd; timeout = 30 }; $group | Add-Member -Force -NotePropertyName 'hooks' -NotePropertyValue $existing }
+            }
+        }
+        $sHooks | Add-Member -Force -NotePropertyName 'SessionStart' -NotePropertyValue $sStart
+        $json = ($sCfg | ConvertTo-Json -Depth 100)
+        [System.IO.File]::WriteAllText($settingsPath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "   [OK] Claude Code SessionStart hook: $ccHookDst (startup/resume/clear/compact)" -ForegroundColor Green
+    } catch { Write-Host "   [!] Claude Code hook install failed: $_" -ForegroundColor DarkYellow }
+}
 
 # ===============================================================
 # 7. SHORTCUT

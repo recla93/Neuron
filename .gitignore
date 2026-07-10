@@ -53,7 +53,7 @@ config.json
 .claude/
 /CLAUDE.md
 /TASKLIST.md
-/HANDOFF-*.md
+/HANDOFF*.md
 /handoff/
 
 # Garbage

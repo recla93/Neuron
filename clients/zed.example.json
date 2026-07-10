@@ -4,8 +4,8 @@
   "_path_macos": "~/.config/zed/settings.json",
   "context_servers": {
     "neuron5": {
-      "command": "cmd",
-      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
+      "command": "python.exe",
+      "args": ["-m", "neuron"]
     }
   }
 }

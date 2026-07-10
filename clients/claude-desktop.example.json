@@ -4,8 +4,8 @@
   "_path_macos": "~/Library/Application Support/Claude/claude_desktop_config.json",
   "mcpServers": {
     "neuron5": {
-      "command": "cmd",
-      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
+      "command": "python.exe",
+      "args": ["-m", "neuron"]
     }
   }
 }
