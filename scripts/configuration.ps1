@@ -1427,10 +1427,11 @@ function Get-OrAddObject {
 function Save-Json {
     param([object]$obj, [string]$path)
     $dir = Split-Path -Parent $path
-    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    if ($dir -and -not (Test-Path $dir)) { if ($NeuronDebug) { Write-Host "       Creating dir: $dir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $backup = $null
-    if (Test-Path $path) { $backup = "$path.neuron-bak"; Copy-Item $path $backup -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $path) { if ($NeuronDebug) { Write-Host "       Backing up: $path -> $path.neuron-bak" -ForegroundColor DarkGray }; $backup = "$path.neuron-bak"; Copy-Item $path $backup -Force -ErrorAction SilentlyContinue }
     try {
+        if ($NeuronDebug) { Write-Host "       Writing: $path" -ForegroundColor DarkGray }
         Write-Utf8NoBom -Path $path -Content ($obj | ConvertTo-Json -Depth 100)
     } catch {
         Write-Host "  [X] Could not write $path : $_" -ForegroundColor Red
@@ -1465,6 +1466,7 @@ function Save-Json {
 function Assert-JsonKey {
     param([string]$Path, [string[]]$Keys, [string]$Label)
     try {
+        if ($NeuronDebug) { Write-Host "       Verifying: $Path -> $($Keys -join '.')" -ForegroundColor DarkGray }
         $cfg = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     } catch {
         Write-Host "  [X] $Label - could not re-read $Path to verify: $_" -ForegroundColor Red
@@ -1584,6 +1586,7 @@ function Write-ClientConfig {
         Write-Host "      'Install full Neuron' before starting your app." -ForegroundColor DarkYellow
     }
     $nargs = @('-m', 'neuron')
+    if ($NeuronDebug) { Write-Host "  [..] Configuring $App" -ForegroundColor DarkGray }
 
     switch ($App) {
         'claude-desktop' {
@@ -1764,6 +1767,7 @@ function Invoke-AddToAI {
             Clear-Host; Show-Banner
             Write-Host "`n  Configuring: $($map[$idx])`n" -ForegroundColor Yellow
             Write-ClientConfig -App $map[$idx]
+            if ($NeuronDebug) { Write-Host "`n  (Debug mode — press any key to continue)" -ForegroundColor DarkGray; Pause-Any }
             Write-Host "`n  Note: Neuron is a LOCAL server - it does not need any API key." -ForegroundColor Green
             Maybe-StoreLlmKey
             Pause-Any
