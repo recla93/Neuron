@@ -28,13 +28,38 @@ except Exception:
     pass
 
 
-def _present(name: str) -> bool:
-    return bool(os.environ.get(name, "").strip())
+def _load_dotenv_minimal(env_path: str) -> dict[str, str]:
+    """Minimal .env reader: KEY=VALUE lines only, skips comments and blank lines.
+    Returns a dict of key -> value for uncommented lines."""
+    result: dict[str, str] = {}
+    if not os.path.isfile(env_path):
+        return result
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "=" in stripped:
+                key, _, val = stripped.partition("=")
+                result[key.strip()] = val.strip().strip("\"'")
+    return result
+
+
+def _present(name: str, env_file_vars: dict[str, str]) -> bool:
+    """Check env var: process env first, then .env file (uncommented lines only)."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return True
+    val = env_file_vars.get(name, "").strip()
+    return bool(val)
 
 
 def main() -> int:
-    url_set = _present("TURSO_DATABASE_URL")
-    token_set = _present("TURSO_AUTH_TOKEN")
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    env_file_vars = _load_dotenv_minimal(env_path)
+
+    url_set = _present("TURSO_DATABASE_URL", env_file_vars)
+    token_set = _present("TURSO_AUTH_TOKEN", env_file_vars)
     remote_requested = url_set and token_set
     remote_partial = (url_set or token_set) and not remote_requested
 
