@@ -41,16 +41,22 @@ Il bridge/cloud **non può**: (a) fare scritture git sul mount del device (manca
    git push origin vX.Y.Z          # fa partire release.yml
    ```
 
-## In sospeso ora → 5.1.1 (bugfix dopo la 5.1.0)
+## Ultima release: 5.1.1 (rilasciata — 2026-07-10)
 
-La 5.1.0 è già uscita. Le modifiche fatte **dopo** il finalize del CHANGELOG 5.1.0 sono bugfix, da rilasciare come **5.1.1**:
+Bugfix release dopo la 5.1.0. Tag `v5.1.1` pushato, `release.yml` eseguito. Contenuto:
 
 - **OpenCode handshake** (`clients/opencode-plugin/neuron-handshake.mjs`): era `export default` → OpenCode non lo caricava; ora export nominato.
 - **Example config** (`clients/*.example.json`): chiave `neuron` → `neuron5` e path `…\Programs\neuron` → `…\Programs\neuron5` (il modulo `-m neuron` resta).
-- **Installer Codex** (`scripts/configuration.ps1`): `config.toml` non viene più **sovrascritto** (merge non distruttivo) + `hooks.json` con schema corretto (`type`/`command`) + flag `[features] codex_hooks = true`.
+- **Installer Codex** (`scripts/configuration.ps1`): `config.toml` non viene più **sovrascritto** (merge non distruttivo) + `hooks.json` con schema corretto (`type`/`command`) + flag `[features] codex_hooks = true` + pulizia entry legacy `shell` nel merge.
 - **Installer Zed** (`configuration.ps1` + `zed.example.json`): formato **piatto** `command`/`args` (non più annidato).
 
-Per chiudere la 5.1.1: aggiungi una sezione `## [5.1.1] — <data>` in `CHANGELOG.md` con questi punti, bumpa `__version__` a `5.1.1`, poi esegui il flusso sopra (commit → merge → reinstalla → testa → tag `v5.1.1`). Chiedi a Claude di preparare CHANGELOG+bump se vuoi.
+Sistemato live (fuori repo, sul PC): plugin OpenCode + `~/.codex/hooks.json` deployati corretti a mano, `~/.cursor/mcp.json` aggiunto (`neuron5`).
+
+**Lezione appresa:** `configuration.ps1` copia il plugin OpenCode **dal repo** (`$repoRoot\clients\opencode-plugin\`), non dalla copia deployata. Dopo un fix ai file client, **ri-esegui lo step "Add Neuron to your AI" di `configuration.ps1` dal repo** — `install.ps1` da solo rinfresca solo il server, non i plugin/config dei client.
+
+## In sospeso ora
+
+Niente. Prossimo lavoro = nuova sezione `## [X.Y.Z]` in `CHANGELOG.md` + bump `__version__`, poi il flusso sopra.
 
 ## Note / trappole
 
