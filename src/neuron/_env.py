@@ -20,7 +20,18 @@ Deliberately conservative:
 from __future__ import annotations
 
 import os
+import re
 import sys
+
+# Strip stray whitespace/control chars anywhere in a credential value, not just
+# the ends. The auth token becomes an HTTP header; the HTTP stack rejects any
+# header value containing \\r/\\n/\\0 (header-injection guard), so a hidden
+# newline from copy-paste or a CRLF-wrapped .env makes every scheme fail.
+_CTRL_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]")
+
+
+def sanitize_credential(value: str) -> str:
+    return _CTRL_WS_RE.sub("", value or "")
 
 _loaded = False
 
@@ -81,6 +92,28 @@ def load_dotenv_once(path: str | None = None) -> bool:
                 key = key.strip()
                 if key:
                     os.environ.setdefault(key, _unquote(val))
+
+        # Warn if .env contains TURSO_ vars but they aren't in os.environ after
+        # loading — means real env vars are set (which is fine), or the .env
+        # format is wrong (CRLF-wrapped value, unquoted trailing garbage, ...).
+        if not os.environ.get("TURSO_DATABASE_URL") or not os.environ.get("TURSO_AUTH_TOKEN"):
+            try:
+                with open(path, encoding="utf-8") as _check:
+                    for _line in _check:
+                        _line = _line.strip()
+                        # Check EVERY TURSO_ line: a prior `break` after the first
+                        # one meant a malformed TURSO_AUTH_TOKEN was never reported
+                        # when TURSO_DATABASE_URL happened to load fine.
+                        if _line.startswith("TURSO_") and "=" in _line:
+                            _key, _ = _line.split("=", 1)
+                            if _key.strip() not in os.environ:
+                                print(
+                                    f"  [?] .env has {_key.strip()} but it was not loaded "
+                                    f"(real env var set, or malformed value in .env?)",
+                                    file=sys.stderr,
+                                )
+            except OSError:
+                pass
     except OSError:
         return False
     return True

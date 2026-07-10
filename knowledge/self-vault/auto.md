@@ -15,8 +15,8 @@ auto(text="messaggio utente + risposta")
 ```
 
 - Unico parametro: tutto il testo del turno.
-- L'estrazione è euristica (keyword, topic, dominio, intento, sentiment).
-- Usa `use_llm` solo se serve estrazione LLM (costosa, lenta).
+- L'estrazione è euristica (keyword, topic, dominio, intento, sentiment) — 0 token.
+- LLM extraction rimossa da server.py: usa [[store_turn]] per estrazione curata.
 
 ## Vantaggio
 

@@ -112,6 +112,19 @@ This drops `pyturso-0.6.1-cp<XY>-cp<XY>-win_amd64.whl` into `vendor\`, where
 When you bump `pyturso`, change the pin in **both** `pyproject.toml` and the
 `build-pyturso-win` job in `.github/workflows/release.yml`, then rebuild.
 
+> **Arm64 / WoA (Windows on Arm):** The `vendor\` folder only ships `win_amd64`
+> wheels. On an Arm64 Windows device (Surface Pro X, etc.) pip must compile
+> `pyturso` from source via x64 emulation, which needs the full Rust + MSVC
+> toolchain. Prebuilt `win_arm64` wheels are not currently distributed — PRs
+> welcome (add a `build-pyturso-win-arm64` job in `release.yml`).
+
+> **Vendor scaling:** Each Python minor version × platform combo needs its own
+> wheel (e.g. `cp313` + `win_amd64`, `cp312` + `win_arm64`, ...). The `vendor\`
+> approach does not scale beyond the few combos the maintainers pre-build. For a
+> broader platform matrix, push `pyturso` to PyPI with `win_arm64` wheels, or
+> switch to an engine that distributes prebuilt wheels for every supported
+> platform.
+
 ---
 
 ## 2. Install from a wheel by hand (any OS)

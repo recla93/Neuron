@@ -1,21 +1,21 @@
-# extract — estrazione semantica da testo
+# extract — estrazione semantica da testo (euristico, 0 token)
 
-Analizza un testo e ne estrae: keyword, topic, dominio, intento, sentiment, entità. Usa euristica (regole + scoring) di default, o LLM opzionale se `use_llm=true`.
+Analizza un testo e ne estrae: keyword, topic, dominio, intento, sentiment, entità.
+Sempre euristico (regole + scoring). LLM extraction rimossa da server.py — è responsabilità
+del modello chiamante fornire parametri via [[store_turn]].
 
 ## Quando usarlo
 
 - Come passo separato se vuoi ispezionare l'estrazione prima di salvare.
 - [[auto]] già include `extract` + save in un colpo solo — preferire quello per il workflow normale.
-- `use_llm=true` per estrazione più intelligente su testi complessi (costa latenza).
 
 ## Come si usa
 
 ```
-extract(text="testo da analizzare", use_llm=False)
+extract(text="testo da analizzare")
 ```
 
-- L'estrazione euristica è 0-token e deterministica.
-- LLM richiede un endpoint Ollama configurato e blocca l'event loop se `use_llm=true`.
+- 0-token, deterministico, nessuna dipendenza esterna.
 
 ## Vantaggio
 

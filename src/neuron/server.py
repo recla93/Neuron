@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +47,10 @@ from neuron.models import (
 # ---------------------------------------------------------------------------
 
 INTENT_SALIENCE = {"exploration": 3, "task": 3, "clarification": 2, "question": 1, "feedback": 0}
+
+def _resolve_slug() -> str:
+    return os.environ.get("NEURON_SLUG", "neuron5")
+
 def _default_graphs_dir() -> str:
     """A STABLE per-user location for the memory graphs.
 
@@ -54,14 +59,15 @@ def _default_graphs_dir() -> str:
     launch setups, somewhere throwaway — so memory didn't reliably persist
     across restarts. Use a real user-data dir instead. Override with
     ``NS_GRAPHS_DIR`` (e.g. to keep an existing ``./graphs``)."""
-    # v5 "Synapse" uses its OWN store dir ("neuron5") so it can run side by side
-    # with a v4 install without sharing a graph store — their DB schema and default
-    # embedding model differ, so a shared store would corrupt each other's vectors.
+    # Uses NEURON_SLUG (default "neuron5") so it can run side by side with v4
+    # without sharing a graph store — their DB schema and default embedding model
+    # differ, so a shared store would corrupt each other's vectors.
+    slug = _resolve_slug()
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "neuron5", "graphs")
+        return os.path.join(base, slug, "graphs")
     base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
-    return os.path.join(base, "neuron5", "graphs")
+    return os.path.join(base, slug, "graphs")
 
 
 GRAPHS_DIR = os.path.normpath(os.environ.get("NS_GRAPHS_DIR") or _default_graphs_dir())
@@ -161,6 +167,10 @@ STOP_WORDS: set[str] = {
     "la", "li", "le", "ne", "ho", "hai", "ha", "hanno", "ho", "hai", "ha",
     "abbiamo", "avete", "hanno", "era", "erano", "sono", "sei", "siamo",
     "siete", "e", "ed", "o", "ma", "se", "no", "grazie", "ok", "okay",
+    # Accented connectors/adverbs in ASCII-folded form (tokens are folded before
+    # matching, so "perché"→"perche", "così"→"cosi", "cioè"→"cioe", etc.).
+    "perche", "poiche", "giacche", "benche", "sebbene", "affinche", "finche",
+    "cosi", "cioe", "ne", "sara", "saranno", "puo", "piu", "gia", "pero",
     "si", "no", "forse", "anche", "ancora", "gia", "gia", "solo", "sempre",
     "mai", "qui", "qua", "li", "la", "ora", "adesso", "poi", "dopo", "prima",
     "allora", "mentre", "intanto", "fino", "oltre", "sopra", "sotto",
@@ -302,16 +312,32 @@ ENTITY_EXCLUDE: set[str] = {
 }
 
 
+def _fold_accents(text: str) -> str:
+    """Strip diacritics, mapping accented Latin letters to their ASCII base
+    (à→a, é→e, ù→u, ç→c). Keeps case. Used so tokenization and stopword matching
+    treat "città"/"citta" and "più"/"piu" identically."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c)
+    )
+
+
 class SemanticExtractor:
     """Heuristic semantic extractor from raw text.
-    
+
     Uses lexical analysis, pattern matching, and known domains.
     Does not require LLM.
     """
 
     @staticmethod
     def _tokenize(text: str) -> list[str]:
-        text = text.strip()
+        # Fold accents to ASCII BEFORE matching. The token regex is ASCII-only, so
+        # without this an accented word is truncated at the first accent —
+        # "città"→"citt", "perché"→"perch", "così"→"cos", "università"→"universit" —
+        # and those garbage stems leaked as keywords, while accent-stripped stopwords
+        # ("piu"/"gia"/"puo") never matched "più"/"già"/"può". Folding makes both work:
+        # "città"→"citta" (clean noun), "più"→"piu" (matches the stopword).
+        text = _fold_accents(text.strip())
         tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9]*(?:[_.:+#/-][a-zA-Z0-9]+)*", text)
         return tokens
 
@@ -466,95 +492,9 @@ class SemanticExtractor:
         )
 
 
-# ---------------------------------------------------------------------------
-# LLM extraction (Ollama/OpenAI-compatible)
-# ---------------------------------------------------------------------------
-
-EXTRACTION_SYSTEM = """You are a semantic analyzer. Extract from the user message a JSON with this EXACT structure (no markdown, pure JSON only):
-{
-  "topic": "main topic in 3-5 words",
-  "entities": ["list of relevant entities"],
-  "intent": "question|task|exploration|clarification|feedback",
-  "sentiment": "neutral|positive|critical|urgent",
-  "domain": "AI|backend|frontend|gaming|architecture|general",
-  "keywords": ["kw1","kw2","kw3","kw4","kw5"],
-  "tags": ["free labels beyond the domain"]
-}
-Keywords must be abstract, generalizable, and in English. Capture the weight and importance of concepts in context."""
-
-NS_LLM_ENDPOINT = os.environ.get("NS_LLM_ENDPOINT", "http://localhost:11434/api/generate")
-NS_LLM_MODEL = os.environ.get("NS_LLM_MODEL", "qwen2.5:3b")
-NS_LLM_API_KEY = os.environ.get("NS_LLM_API_KEY", "")
-
-
-def _llm_extract(text: str) -> dict | None:
-    """Extract semantic JSON via Ollama/OpenAI-compatible API."""
-    if not text.strip():
-        return None
-    try:
-        import urllib.request
-        import urllib.parse
-
-        payload = json.dumps({
-            "model": NS_LLM_MODEL,
-            "system": EXTRACTION_SYSTEM,
-            "prompt": text,
-            "stream": False,
-            "format": "json",
-        }).encode("utf-8")
-
-        headers = {"Content-Type": "application/json"}
-        if NS_LLM_API_KEY:
-            headers["Authorization"] = f"Bearer {NS_LLM_API_KEY}"
-
-        req = urllib.request.Request(
-            NS_LLM_ENDPOINT,
-            data=payload,
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-
-        raw = body.get("response", "")
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw.strip())
-        data = json.loads(raw)
-        # Minimum field validation
-        if not data.get("keywords"):
-            return None
-        return {
-            "topic": str(data.get("topic", ""))[:TOPIC_MAX_LENGTH],
-            "keywords": [str(k)[:KEYWORD_MAX_LENGTH] for k in data.get("keywords", [])][:8],
-            "entities": [str(e) for e in data.get("entities", [])][:15],
-            "domain": str(data.get("domain", "general")),
-            "intent": str(data.get("intent", "question")),
-            "sentiment": str(data.get("sentiment", "neutral")),
-            "tags": [str(t) for t in data.get("tags", [])][:10],
-        }
-    except Exception:
-        return None
-
-
-async def _auto_extract(text: str, use_llm: bool = False) -> ExtractionResult:
-    """Extract: heuristic (0 token) by default, LLM only if requested.
-
-    `_llm_extract` does a *synchronous* HTTP request, so it is offloaded to a
-    worker thread via `asyncio.to_thread` to avoid blocking the MCP server's
-    single event loop while the model responds.
-    """
-    if use_llm:
-        llm_result = await asyncio.to_thread(_llm_extract, text)
-        if llm_result:
-            return ExtractionResult(
-                topic=llm_result["topic"],
-                keywords=llm_result["keywords"],
-                entities=llm_result["entities"],
-                domain=llm_result["domain"],
-                intent=llm_result["intent"],
-                sentiment=llm_result["sentiment"],
-                tags=llm_result["tags"],
-            )
+async def _auto_extract(text: str) -> ExtractionResult:
+    """Extract semantic info via heuristic (0 token). LLM extraction is the calling LLM's
+    responsibility — it provides params directly via store_turn."""
     return SemanticExtractor.extract(text)
 
 
@@ -788,6 +728,15 @@ NS_EMBED_MODEL = os.environ.get(
 _embedder: TextEmbedding | None = None
 _embed_dim_checked = False
 
+# Per-process embedding cache. Within a single turn the SAME keywords get
+# embedded again and again — _refine_domain, _auto_link (one query per keyword),
+# the cross-domain loop, and _build_context_window all re-embed the current
+# keywords. Caching collapses those to one model call per distinct text. The key
+# includes the embedder identity so swapping the model (tests, re-embed) misses
+# stale vectors. Bounded with cheap FIFO-ish eviction to keep memory flat.
+_EMBED_CACHE_MAX = 4096
+_embed_cache: "dict[tuple[int, str], list[float]]" = {}
+
 
 def _get_embedder() -> TextEmbedding:
     """Lazy-load the embedding model on first use (avoids slow startup)."""
@@ -797,12 +746,14 @@ def _get_embedder() -> TextEmbedding:
     return _embedder
 
 
-def _get_embedding(text: str) -> list[float]:
-    """Semantic embedding via fastembed (model = NS_EMBED_MODEL, dim = VECTOR_DIM).
+def _embed_one(text: str) -> list[float]:
+    """Uncached single embed + one-shot dimension guard.
 
-    On the first call, verify the model's output width matches VECTOR_DIM — a
-    mismatch means the configured model and NS_EMBED_DIM disagree, which would
-    silently corrupt vector search (cosine across incompatible spaces)."""
+    The guard runs ONCE per process (flag set on first call) — it's a startup
+    sanity check that the configured model matches VECTOR_DIM, not a per-call
+    gate. Keeping it one-shot is load-bearing: the test suite shares a global
+    embedder across cases, and a re-arming guard would make a mismatch in one
+    test cascade into every later one."""
     global _embed_dim_checked
     vec = list(_get_embedder().embed([text]))[0]
     if not _embed_dim_checked:
@@ -813,6 +764,23 @@ def _get_embedding(text: str) -> list[float]:
                 f"but VECTOR_DIM={VECTOR_DIM}. Set NS_EMBED_DIM={len(vec)} and re-embed "
                 f"the store (scripts/reembed.py), or choose a {VECTOR_DIM}-dim model."
             )
+    return vec
+
+
+def _get_embedding(text: str) -> list[float]:
+    """Semantic embedding via fastembed (model = NS_EMBED_MODEL, dim = VECTOR_DIM),
+    memoized per (embedder, text). See ``_embed_one`` for the dimension guard."""
+    key = (id(_get_embedder()), text)
+    cached = _embed_cache.get(key)
+    if cached is not None:
+        return cached
+    vec = _embed_one(text)
+    if len(_embed_cache) >= _EMBED_CACHE_MAX:
+        # Evict a batch of the oldest keys at once (dict preserves insertion order)
+        # so we amortize eviction instead of paying it on every insert past the cap.
+        for stale in list(_embed_cache)[: max(1, _EMBED_CACHE_MAX // 10)]:
+            _embed_cache.pop(stale, None)
+    _embed_cache[key] = vec
     return vec
 
 
@@ -841,6 +809,34 @@ def _seed_usable(path: "str | None") -> bool:
         return False
 
 
+# Read-only connection cache for the immutable seed DB. base_knowledge.db is
+# never written at runtime, so reopening it on every search call is pure waste —
+# auto_link alone issues one search per keyword, each reopening the seed. Reuse a
+# single connection for the whole session. The ACTIVE graph DB is written on save,
+# so it is deliberately NOT cached here: it stays open-per-call to avoid stale
+# reads after a save within the same turn.
+_seed_conn_cache: "dict[str, Any]" = {}
+
+
+def _seed_connection(path: str):
+    conn = _seed_conn_cache.get(path)
+    if conn is None:
+        conn = _db.connect_local(path)
+        _seed_conn_cache[path] = conn
+    return conn
+
+
+def _drop_seed_connection(path: str) -> None:
+    """Evict (and close) a cached seed connection — call after any error on it so
+    a broken handle isn't reused."""
+    conn = _seed_conn_cache.pop(path, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _search_embeddings(
     query_keywords: list[str],
     top_n: int = 8,
@@ -863,9 +859,16 @@ def _search_embeddings(
         adp = _active_db_path()
         if adp and os.path.exists(adp):
             db_paths.append(adp)
+        # MERGE across all DBs. The old code returned on the FIRST non-empty DB,
+        # so the seed (base_knowledge) always shadowed the user's live active
+        # graph — the active vectors were never searched whenever the seed matched
+        # anything. Accumulate every DB, keep the max sim per keyword, then rank.
+        merged: dict[str, float] = {}
         for db in db_paths:
+            is_seed = (db == seed_path)
             try:
-                conn = _db.connect_local(db)
+                # Seed connection is cached (immutable DB); active is per-call.
+                conn = _seed_connection(db) if is_seed else _db.connect_local(db)
                 rows = conn.execute(
                     "SELECT keyword, sim FROM ("
                     "  SELECT keyword, 1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS sim "
@@ -873,25 +876,40 @@ def _search_embeddings(
                     ") WHERE sim > ? ORDER BY sim DESC LIMIT ?",
                     (query_blob, SIM_THRESHOLD, top_n),
                 ).fetchall()
-                conn.close()
-                results = [(row[0], round(row[1], 4)) for row in rows]
-                if results:
-                    return results
+                if not is_seed:
+                    conn.close()
+                for kw, sim in rows:
+                    s = round(sim, 4)
+                    if kw not in merged or s > merged[kw]:
+                        merged[kw] = s
             except Exception:
+                if is_seed:
+                    _drop_seed_connection(db)
                 # Any DB/engine error (incl. pyturso I/O errors that are not
                 # sqlite3.DatabaseError) must fall through to the Python path,
                 # never crash the tool.
                 pass
+        if merged:
+            return sorted(merged.items(), key=lambda kv: -kv[1])[:top_n]
 
+    # --- Python fallback (non-Turso, or every Turso query failed) ---
+    # Score with TRUE cosine. The old code used a raw dot product on
+    # non-normalized vectors, so "similarities" ran to ~9 and every downstream
+    # threshold (0.30/0.45/0.65...) was trivially cleared — inconsistent with the
+    # Turso tier's real cosine in [0, 1]. A missing vector is embedded ONCE via
+    # the (now memoized) `_get_embedding` and cached on the node + marked dirty.
+    q_norm = (sum(x * x for x in query_vec) ** 0.5) or 1.0
     scores: list[tuple[str, float]] = []
     for nd in g.nodes:
         if nd.vector is None:
-            # Missing vector: compute it ONCE, cache in memory and mark it dirty so
-            # the next save persists it — the old code re-embedded on every search
-            # (O(N) embeddings per query on the sqlite fallback tier). (E1.1)
             nd.vector = _get_embedding(nd.keyword)
             g.mark_vector_dirty(nd.keyword)
-        sim = sum(qi * vi for qi, vi in zip(query_vec, nd.vector))
+        v = nd.vector
+        if not v:
+            continue
+        dot = sum(qi * vi for qi, vi in zip(query_vec, v))
+        denom = q_norm * ((sum(x * x for x in v) ** 0.5) or 1.0)
+        sim = dot / denom
         if sim > 0:
             scores.append((nd.keyword, round(sim, 4)))
     scores.sort(key=lambda x: -x[1])
@@ -919,7 +937,7 @@ def _refine_domain(keywords: list[str]) -> tuple[str | None, list[str]]:
         seed_path = getattr(_g, '_seed_path', None)
         if _seed_usable(seed_path):
             try:
-                conn = _db.connect_local(seed_path)
+                conn = _seed_connection(seed_path)   # cached: immutable seed DB
                 rows = conn.execute("""
                     SELECT n.domain, 1.0 - vector_distance_cos(f32blob(nv.embedding), f32blob(?)) AS sim
                     FROM node_vectors nv
@@ -927,18 +945,21 @@ def _refine_domain(keywords: list[str]) -> tuple[str | None, list[str]]:
                     WHERE n.domain != 'general'
                     ORDER BY sim DESC LIMIT 30
                 """, (query_blob,)).fetchall()
-                conn.close()
             except Exception:
-                pass
+                _drop_seed_connection(seed_path)
 
-    # Fallback: Python loop over loaded graphs (non-Turso or Turso query failed)
+    # Fallback: Python loop over loaded graphs (non-Turso or Turso query failed).
+    # TRUE cosine, matching the Turso vector_distance_cos above — a raw dot product
+    # on non-normalized vectors put the 0.3 threshold on a different scale.
     if not rows:
+        q_norm = (sum(x * x for x in query_vec) ** 0.5) or 1.0
         for ctx_g in list(getattr(_g, '_graphs', {}).values()):
             for nd in (ctx_g.nodes or []):
                 v = nd.vector
-                if v is None:
+                if not v:
                     continue
-                sim = sum(qi * vi for qi, vi in zip(query_vec, v))
+                dot = sum(qi * vi for qi, vi in zip(query_vec, v))
+                sim = dot / (q_norm * ((sum(x * x for x in v) ** 0.5) or 1.0))
                 if sim > 0.3:
                     rows.append((nd.domain, sim))
 
@@ -1460,18 +1481,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="extract",
-            description="Automatic semantic extraction from text: keyword, topic, domain, intent, sentiment, entities. Uses LLM (if configured) or heuristic.",
+            description="Automatic semantic extraction from text: keyword, topic, domain, intent, sentiment, entities. Heuristic (0 token) — no LLM extraction.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "text": {
                         "type": "string",
                         "description": "Text to analyze (user message)",
-                    },
-                    "use_llm": {
-                        "type": "boolean",
-                        "description": "Force LLM extraction (Ollama). Default: heuristic 0 token.",
-                        "default": False,
                     },
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                 },
@@ -1763,7 +1779,7 @@ HELP_TEXT = (
     "  flash           Toggle semantic flashbacks (dormant / cross-domain sparks).\n"
     "\n"
     "Data & danger zone\n"
-    "  extract         Analyze text -> keyword/topic/domain/intent (no save). use_llm optional.\n"
+    "  extract         Analyze text -> keyword/topic/domain/intent (no save). Heuristic only.\n"
     "  export          Dump the whole graph as JSON.\n"
     "  merge           Merge two keywords into one.\n"
     "  reset           Wipe the graph and start over. (destructive)\n"
@@ -2107,8 +2123,7 @@ async def _call_tool_impl(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "extract":
         text = arguments["text"]
-        use_llm = arguments.get("use_llm", False)
-        result = await _auto_extract(text, use_llm=use_llm)
+        result = await _auto_extract(text)
         return [TextContent(type="text", text=json.dumps({
             "topic": result.topic,
             "keywords": result.keywords,

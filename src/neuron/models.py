@@ -876,6 +876,98 @@ class Graph:
         self.nodes = [nd for nd in self.nodes if nd.keyword not in drop]
         self._rebuild_node_map()
 
+    # ------------------------------------------------------------------
+    # Per-user session-state sidecar (T11 P1)
+    # ------------------------------------------------------------------
+    # On a shared remote Turso store the graph (nodes/links/vectors) is shared,
+    # but each user's session working-state (turn counter, staged stimulus,
+    # last-topic, ...) is personal and must NOT go in the store's global meta.
+    # It lives in a small local JSON file next to where the local graph file
+    # would sit — the graphs dir is already per-user, like ``_cross_links.json``.
+
+    @staticmethod
+    def _session_sidecar_path(path: str, context: str) -> str:
+        base, _ext = os.path.splitext(path)
+        return base + ".session.json"
+
+    def _save_session_sidecar(self, path: str, context: str, data: dict) -> None:
+        sp = self._session_sidecar_path(path, context)
+        try:
+            d = os.path.dirname(sp)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(sp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except OSError:
+            pass
+
+    def _load_session_sidecar(self, path: str, context: str) -> dict:
+        sp = self._session_sidecar_path(path, context)
+        try:
+            with open(sp, encoding="utf-8") as f:
+                loaded = json.load(f)
+            return loaded if isinstance(loaded, dict) else {}
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {}
+
+    def _create_store_schema(self, conn, context: str) -> None:
+        """Create/migrate the store schema (tables + indexes). Idempotent — safe to
+        run repeatedly. Shared by ``save_sqlite`` (lazy, once per process) and by the
+        one-shot cloud initializer ``ensure_schema`` so a shared Turso Cloud DB can
+        be migrated ONCE up front instead of racing across clients on first write
+        (P4)."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE IF NOT EXISTS nodes (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                context TEXT DEFAULT 'default',
+                keyword TEXT, turn INTEGER, topic TEXT,
+                domain  TEXT, sentiment TEXT, salience INTEGER,
+                entities TEXT DEFAULT '[]',
+                tags     TEXT DEFAULT '[]',
+                refs     TEXT DEFAULT '[]');
+            CREATE TABLE IF NOT EXISTS node_vectors (
+                context   TEXT NOT NULL DEFAULT 'default',
+                keyword   TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                dim       INTEGER NOT NULL,
+                PRIMARY KEY (context, keyword));
+            CREATE TABLE IF NOT EXISTS links (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                context          TEXT DEFAULT 'default',
+                source           TEXT, target TEXT, link_type TEXT, weight TEXT,
+                rationale        TEXT, created_turn INTEGER,
+                last_active_turn INTEGER, inactive_turns INTEGER,
+                co_activation_count INTEGER DEFAULT 0,
+                target_context   TEXT);
+            CREATE TABLE IF NOT EXISTS _graveyard (
+                context TEXT, keyword TEXT, salience INTEGER, domain TEXT,
+                reason TEXT, turn INTEGER);
+            CREATE INDEX IF NOT EXISTS idx_links_source ON links(source);
+            CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
+            CREATE INDEX IF NOT EXISTS idx_links_turn   ON links(created_turn);
+        """)
+        # Migration: add legacy JSON columns if missing
+        for col in ("entities", "tags", "refs"):
+            try:
+                conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} TEXT DEFAULT '[]'")
+            except Exception:
+                pass
+        # Migration: context column + composite unique indexes + node_vectors PK
+        self._ensure_schema(conn, context)
+
+    def ensure_schema(self, path: str = "", context: str = "default") -> None:
+        """Connect and create/migrate the store schema, then close. For a ONE-SHOT
+        cloud initialization (scripts/init_cloud.py) run once before multiple
+        writers connect, so lazy per-client migration never races on a fresh shared
+        DB (P4). ``path`` is ignored on the remote tier (the store is the cloud DB)."""
+        conn = _db.connect(path)
+        try:
+            self._create_store_schema(conn, context)
+            conn.commit()
+        finally:
+            conn.close()
+
     def save_sqlite(self, path: str, *, context: str = "default", force: bool = False) -> None:
         """Persist to SQLite/Turso, scoped to ``context``. Skips the write
         entirely if the graph is not dirty (unless ``force=True``).
@@ -908,64 +1000,69 @@ class Graph:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             if not self._schema_ready:
-                conn.executescript("""
-                    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-                    CREATE TABLE IF NOT EXISTS nodes (
-                        id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                        context TEXT DEFAULT 'default',
-                        keyword TEXT, turn INTEGER, topic TEXT,
-                        domain  TEXT, sentiment TEXT, salience INTEGER,
-                        entities TEXT DEFAULT '[]',
-                        tags     TEXT DEFAULT '[]',
-                        refs     TEXT DEFAULT '[]');
-                    CREATE TABLE IF NOT EXISTS node_vectors (
-                        context   TEXT NOT NULL DEFAULT 'default',
-                        keyword   TEXT NOT NULL,
-                        embedding BLOB NOT NULL,
-                        dim       INTEGER NOT NULL,
-                        PRIMARY KEY (context, keyword));
-                    CREATE TABLE IF NOT EXISTS links (
-                        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                        context          TEXT DEFAULT 'default',
-                        source           TEXT, target TEXT, link_type TEXT, weight TEXT,
-                        rationale        TEXT, created_turn INTEGER,
-                        last_active_turn INTEGER, inactive_turns INTEGER,
-                        co_activation_count INTEGER DEFAULT 0,
-                        target_context   TEXT);
-                    CREATE INDEX IF NOT EXISTS idx_links_source ON links(source);
-                    CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
-                    CREATE INDEX IF NOT EXISTS idx_links_turn   ON links(created_turn);
-                """)
-                # Migration: add legacy JSON columns if missing
-                for col in ("entities", "tags", "refs"):
-                    try:
-                        conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} TEXT DEFAULT '[]'")
-                    except Exception:
-                        pass
-                # Migration: context column + composite unique indexes + node_vectors PK
-                self._ensure_schema(conn, context)
+                self._create_store_schema(conn, context)
                 self._schema_ready = True
 
-            # Meta (cheap, always rewritten)
-            conn.executemany("INSERT OR REPLACE INTO meta VALUES (?,?)", [
-                ("session_id",     self.session_id),
-                ("turn_count",     str(self.turn_count)),
-                ("last_sentiment", self.last_sentiment),
-                ("last_topic",     self.last_topic),
-                ("last_keywords",  json.dumps(self.last_keywords)),
-                ("embed_model",    EMBED_MODEL),
-                ("embed_dim",      str(VECTOR_DIM)),
+            # P5 — embed-model write guard. Vectors from different embedding models
+            # live in different spaces, so on a SHARED store they must never mix. If
+            # the store already declares a different model, keep writing the
+            # model-agnostic nodes/links but SKIP vectors, and don't overwrite the
+            # store's model declaration.
+            _stored_model_row = conn.execute(
+                "SELECT value FROM meta WHERE key='embed_model'").fetchone()
+            _stored_model = _stored_model_row[0] if _stored_model_row else None
+            write_vectors = (not _stored_model) or (_stored_model == EMBED_MODEL)
+            if not write_vectors:
+                import sys as _sys
+                print(
+                    f"neuron: lo store '{path}' usa il modello di embedding "
+                    f"'{_stored_model}', quello attivo e' '{EMBED_MODEL}'. Vettori NON "
+                    f"scritti (spazi non confrontabili). Allinea NS_EMBED_MODEL per "
+                    f"tutti gli scrittori, o rigenera lo store (scripts/reembed.py).",
+                    file=_sys.stderr,
+                )
+
+            # P2 — wrap the DATA writes below in a single atomic transaction on the
+            # remote tier: commit() flushes them as one all-or-nothing batch, so a
+            # concurrent load never observes a half-applied save. Schema/DDL above
+            # ran outside it (idempotent, once per process); reads inside still see
+            # committed state. On the local tier begin() is not called and the plain
+            # commit() behaves exactly as before.
+            if _db.REMOTE_TURSO:
+                conn.begin()
+
+            # Meta split (T11 P1): SHARED graph-level settings vs PER-USER session
+            # state. embed_dim (and embed_model, only when compatible) describe the
+            # shared vector space and live in the store meta. The turn counter,
+            # staged stimulus, last-topic/keywords and session id are one user's
+            # working state; on a shared remote store the global meta has no
+            # per-user key, so they go to a LOCAL per-user sidecar instead of
+            # bleeding across colleagues. On a local single-writer store they stay
+            # in meta (unchanged behaviour, keeps legacy files working).
+            _shared_meta = [("embed_dim", str(VECTOR_DIM))]
+            if write_vectors:
+                _shared_meta.append(("embed_model", EMBED_MODEL))
+            conn.executemany("INSERT OR REPLACE INTO meta VALUES (?,?)", _shared_meta)
+
+            session_meta = [
+                ("session_id",            self.session_id),
+                ("turn_count",            str(self.turn_count)),
+                ("last_sentiment",        self.last_sentiment),
+                ("last_topic",            self.last_topic),
+                ("last_keywords",         json.dumps(self.last_keywords)),
                 ("last_active_timestamp", str(time.time())),           # E3.3
                 ("staged_stimulus",       self.staged_stimulus or ""),  # E3.4
                 ("staged_ts",             str(self._staged_ts or "")),
-            ])
+            ]
+            if _db.REMOTE_TURSO:
+                self._save_session_sidecar(path, context, dict(session_meta))
+            else:
+                conn.executemany("INSERT OR REPLACE INTO meta VALUES (?,?)", session_meta)
 
             # Flush archived nodes (E1.2/E1.3) — recoverable, then clear the buffer.
+            # The _graveyard table is created in _create_store_schema, so this is a
+            # plain INSERT (no per-save DDL inside the transaction).
             if self._graveyard:
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS _graveyard "
-                    "(context TEXT, keyword TEXT, salience INTEGER, domain TEXT, "
-                    "reason TEXT, turn INTEGER)")
                 conn.executemany(
                     "INSERT INTO _graveyard (context, keyword, salience, domain, reason, turn) "
                     "VALUES (?,?,?,?,?,?)",
@@ -974,10 +1071,29 @@ class Graph:
                 )
                 self._graveyard = []
 
+            # P3 — a reconcile (diff-delete) can drop rows another colleague added
+            # to a shared context since we loaded. On a shared remote store, skip
+            # the destructive delete unless explicitly allowed (coordinated
+            # maintenance): fall back to an additive write so the merge's upserts
+            # still land and no one else's rows are lost.
             if self._needs_diff_delete:
-                self._save_reconcile(conn, context)      # merge: absolute + diff-delete
+                _allow_shared = os.environ.get(
+                    "NS_ALLOW_SHARED_RECONCILE", "").strip().lower() in ("1", "true", "yes", "on")
+                if _db.REMOTE_TURSO and not _allow_shared:
+                    import sys as _sys
+                    print(
+                        "neuron: reconcile/consolidamento su store cloud condiviso "
+                        "declassato a scrittura additiva (nessuna cancellazione di "
+                        "righe altrui). Per la manutenzione coordinata avvia con "
+                        "NS_ALLOW_SHARED_RECONCILE=1.",
+                        file=_sys.stderr,
+                    )
+                    self._save_delta(conn, context, all_rows=True, write_vectors=write_vectors)
+                else:
+                    self._save_reconcile(conn, context, write_vectors=write_vectors)
             else:
-                self._save_delta(conn, context, all_rows=self._needs_full_write)
+                self._save_delta(conn, context, all_rows=self._needs_full_write,
+                                 write_vectors=write_vectors)
 
             conn.commit()
             self._reset_tracking()
@@ -985,10 +1101,20 @@ class Graph:
             # delta against. The store may hold a higher value (concurrent adds);
             # that reconciles on the next load. Deltas are always relative to here.
             self._snapshot_salience()
+        except Exception:
+            # Discard the buffered remote transaction so a failed save applies
+            # nothing (next turn re-sends the still-dirty state).
+            if _db.REMOTE_TURSO:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            raise
         finally:
             conn.close()
 
-    def _save_delta(self, conn, context: str, *, all_rows: bool) -> None:
+    def _save_delta(self, conn, context: str, *, all_rows: bool,
+                    write_vectors: bool = True) -> None:
         """Atomic, additive write — no row is ever deleted except the ones this
         graph explicitly removed. Salience is applied as a relative delta and
         link weight is promoted monotonically, so concurrent writers on the same
@@ -998,6 +1124,9 @@ class Graph:
         path). ``all_rows=True`` writes every in-memory row (fresh graph, or a
         context warm-started from the seed) so the store gets rows it's missing —
         still without any diff-delete, so it's safe on a shared store.
+
+        ``write_vectors=False`` skips vector upserts (P5: the store's embedding
+        model differs from the active one, so the vectors aren't comparable).
         """
         # Targeted deletes first (a key removed-then-readded in the same cycle was
         # already discarded from the removed set by the mutation helpers).
@@ -1022,7 +1151,7 @@ class Graph:
 
         vec_set = self.nodes if all_rows else [nd for nd in self.nodes
                                                if nd.keyword in self._dirty_vectors]
-        if vec_set:
+        if vec_set and write_vectors:
             conn.executemany(_VEC_UPSERT, [self._vec_row(nd, context) for nd in vec_set])
 
         link_set = self.links if all_rows else [lk for lk in self.links
@@ -1030,15 +1159,17 @@ class Graph:
         if link_set:
             conn.executemany(_LINK_UPSERT_ATOMIC, [self._link_row(lk, context) for lk in link_set])
 
-    def _save_reconcile(self, conn, context: str) -> None:
+    def _save_reconcile(self, conn, context: str, *, write_vectors: bool = True) -> None:
         """Structural reconcile (merge only): absolute upsert of every in-memory
         row, then delete this context's store rows no longer present in memory
         (delete-by-diff, scoped to this context). This is the one save that may
         delete another writer's rows, so it's reserved for deliberate structural
-        edits, never the per-turn path."""
+        edits, never the per-turn path. ``write_vectors=False`` skips vector
+        upserts when the store's embedding model differs from the active one (P5)."""
         if self.nodes:
             conn.executemany(_NODE_UPSERT, [self._node_row(nd, context) for nd in self.nodes])
-            conn.executemany(_VEC_UPSERT,  [self._vec_row(nd,  context) for nd in self.nodes])
+            if write_vectors:
+                conn.executemany(_VEC_UPSERT, [self._vec_row(nd, context) for nd in self.nodes])
         if self.links:
             conn.executemany(_LINK_UPSERT, [self._link_row(lk, context) for lk in self.links])
 
@@ -1070,23 +1201,33 @@ class Graph:
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
-            self.session_id    = meta.get("session_id", "")
-            self.turn_count    = int(meta.get("turn_count", "0"))
-            self.last_sentiment = meta.get("last_sentiment", "neutral")
-            self.last_topic    = meta.get("last_topic", "")
-            try:
-                self.last_keywords = json.loads(meta.get("last_keywords", "[]"))
-            except (json.JSONDecodeError, TypeError):
-                self.last_keywords = []
-            # Sleep-mode / pre-staging state (E3.3/E3.4)
+
             def _as_float(v):
                 try:
                     return float(v)
                 except (TypeError, ValueError):
                     return None
-            self._loaded_ts      = _as_float(meta.get("last_active_timestamp"))
-            self.staged_stimulus = meta.get("staged_stimulus") or None
-            self._staged_ts      = _as_float(meta.get("staged_ts"))
+
+            # Session/working state (T11 P1): on a shared remote store read it
+            # from THIS user's local sidecar, not the shared global meta; on a
+            # local store it's just the store's meta (single writer). embed_model /
+            # embed_dim below always come from the store (shared, must be consistent).
+            smeta = self._load_session_sidecar(path, context) if _db.REMOTE_TURSO else meta
+            self.session_id    = smeta.get("session_id", "")
+            try:
+                self.turn_count = int(smeta.get("turn_count", "0") or 0)
+            except (TypeError, ValueError):
+                self.turn_count = 0
+            self.last_sentiment = smeta.get("last_sentiment", "neutral")
+            self.last_topic    = smeta.get("last_topic", "")
+            try:
+                self.last_keywords = json.loads(smeta.get("last_keywords", "[]"))
+            except (json.JSONDecodeError, TypeError):
+                self.last_keywords = []
+            # Sleep-mode / pre-staging state (E3.3/E3.4)
+            self._loaded_ts      = _as_float(smeta.get("last_active_timestamp"))
+            self.staged_stimulus = smeta.get("staged_stimulus") or None
+            self._staged_ts      = _as_float(smeta.get("staged_ts"))
 
             # Guard modello<->store: i vettori salvati con un modello diverso vivono
             # in uno spazio diverso e NON sono confrontabili col modello attivo. Se

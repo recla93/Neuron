@@ -217,8 +217,8 @@ function Get-RunnerPython {
     if (Test-Path $InstallVenvPy) { return $InstallVenvPy }
     if (Test-Path $RepoVenvPy)    { return $RepoVenvPy }
     $p = Get-Command python -ErrorAction SilentlyContinue
-    if ($p) { return $p.Source }
-    return $null
+    if ($p -and -not (Test-StorePython $p.Source)) { return $p.Source }
+    return (Get-RealPython)   # skips the Store build/alias stub; $null if none
 }
 
 # Is Neuron actually importable by this interpreter? (Several helpers import
@@ -260,14 +260,37 @@ function Invoke-Prereqs {
     Clear-Host; Show-Banner
     Write-Host "`n  [1] Install prerequisites (Python + venv)`n" -ForegroundColor Yellow
 
-    $py = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $py) {
-        Write-Host "  [X] Python not found on PATH." -ForegroundColor Red
-        Write-Host "      Install Python 3.10-3.14 from https://python.org (tick 'Add to PATH')," -ForegroundColor Red
-        Write-Host "      then re-run this step." -ForegroundColor Red
+    # Resolve a REAL interpreter - never the Microsoft Store build or its
+    # zero-byte App-Execution-Alias stub. Building the venv on Store Python is
+    # the #1 cause of corrupted installs: its per-package virtualized
+    # filesystem silently redirects the venv into the package's own LocalCache,
+    # invisible to the AI apps that must launch Neuron - and the uninstaller
+    # then can't find the real files either. install.ps1 already blocks it;
+    # this menu used to happily build on it.
+    $base = $null
+    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pyCmd -and -not (Test-StorePython $pyCmd.Source)) {
+        $exe = (& $pyCmd.Source -c "import sys;print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $exe -and -not (Test-StorePython ([string]$exe).Trim())) { $base = ([string]$exe).Trim() }
+    }
+    if (-not $base) { $base = Get-RealPython }   # py launcher / other PATH entries
+    if (-not $base) {
+        if ($pyCmd -and (Test-StorePython $pyCmd.Source)) {
+            Write-Host "  [X] The only 'python' found is the Microsoft Store build (WindowsApps)." -ForegroundColor Red
+            Write-Host "      Its virtualized filesystem silently breaks venvs and installed" -ForegroundColor Red
+            Write-Host "      packages, so Neuron refuses to build on it." -ForegroundColor Red
+            Write-Host "      Fix (pick one):" -ForegroundColor Yellow
+            Write-Host "      1) Install real Python 3.10-3.14 from https://python.org/downloads" -ForegroundColor Yellow
+            Write-Host "         (tick 'Add python.exe to PATH'), then re-open this menu." -ForegroundColor Yellow
+            Write-Host "      2) Already have one? Disable the Store alias: Settings > Apps >" -ForegroundColor Yellow
+            Write-Host "         Advanced app settings > App execution aliases > OFF for python.exe." -ForegroundColor Yellow
+        } else {
+            Write-Host "  [X] Python not found on PATH." -ForegroundColor Red
+            Write-Host "      Install Python 3.10-3.14 from https://python.org (tick 'Add to PATH')," -ForegroundColor Red
+            Write-Host "      then re-run this step." -ForegroundColor Red
+        }
         Pause-Any; return
     }
-    $base = $py.Source
     $ver = (& $base -c "import sys;print('%d.%d'%sys.version_info[:2])").Trim()
     Write-Host "  [OK] Python $ver  ($base)" -ForegroundColor Green
 
@@ -286,6 +309,13 @@ function Invoke-Prereqs {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     $venv = "$InstallDir\.venv"
     if (-not (Test-Path "$venv\Scripts\python.exe")) {
+        & $base -m venv $venv
+    }
+    if (-not (Test-Path "$venv\Scripts\python.exe")) {
+        # A partial venv (e.g. an interrupted earlier run) makes 'python -m venv'
+        # fail quietly - clean it up and retry once before giving up.
+        Write-Host "  [!] venv creation failed - cleaning up a partial venv and retrying once..." -ForegroundColor DarkYellow
+        Remove-DirRobust -Path $venv | Out-Null
         & $base -m venv $venv
     }
     if (-not (Test-Path "$venv\Scripts\python.exe")) {
@@ -308,7 +338,9 @@ function Invoke-PyTurso {
         Pause-Any; return
     }
     $cp = Get-CpTag $InstallVenvPy
-    $pipArgs = @("-m", "pip", "install", $PyTursoPin)
+    # --timeout/--retries: flaky networks used to fail the whole step on the
+    # first hiccup; pip now retries the download itself.
+    $pipArgs = @("-m", "pip", "install", "--timeout", "180", "--retries", "3", $PyTursoPin)
     if (Test-Path $Vendor) { $pipArgs += @("--find-links", $Vendor) }
 
     if (Test-VendoredWheel $cp) {
@@ -359,8 +391,13 @@ function Invoke-Neuron {
     else        { Write-Host "  Installing from source tree ($Repo)." -ForegroundColor DarkYellow }
 
     # --upgrade so an existing (older) install is actually replaced.
-    $pipArgs = @("-m", "pip", "install", "--upgrade", $target)
+    # --timeout/--retries make flaky networks survivable; constraints.txt (when
+    # shipped) caps unpinned dep majors - same behavior as install.ps1, which
+    # this menu used to silently diverge from.
+    $pipArgs = @("-m", "pip", "install", "--timeout", "180", "--retries", "3", "--upgrade", $target)
     if (Test-Path $Vendor) { $pipArgs += @("--find-links", $Vendor) }
+    $constraints = Join-Path $Repo "constraints.txt"
+    if (Test-Path $constraints) { $pipArgs += @("-c", $constraints) }
     Write-Host ""
     & $InstallVenvPy @pipArgs
     if ($LASTEXITCODE -ne 0) {
@@ -1231,6 +1268,43 @@ function Install-ClaudeCodeSessionHook {
     return $true
 }
 
+function Install-CodexSessionHook {
+    param([string]$Vpy)
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $srcHook  = Join-Path $repoRoot "clients\claude-code-hook\neuron_sessionstart_hook.py"
+    if (-not (Test-Path $srcHook)) {
+        Write-Host "  [!] neuron_sessionstart_hook.py not found - skipping Codex hook." -ForegroundColor DarkYellow
+        return $false
+    }
+    $hookDir  = Join-Path $InstallDir "hooks"
+    $dstHook  = Join-Path $hookDir "neuron_sessionstart_hook.py"
+    try {
+        if (-not (Test-Path $hookDir)) { New-Item -ItemType Directory -Path $hookDir -Force | Out-Null }
+        Copy-Item $srcHook $dstHook -Force -ErrorAction Stop
+    } catch {
+        Write-Host "  [X] Could not copy hook to $dstHook : $_" -ForegroundColor Red; return $false
+    }
+    $hookPython = if (Test-Path $Vpy) { $Vpy } else { "python" }
+    $shellCmd = "`"$hookPython`" `"$dstHook`""
+    $hookJsonPath = "$env:USERPROFILE\.codex\hooks.json"
+    $hDir = Split-Path -Parent $hookJsonPath
+    if (-not (Test-Path $hDir)) { New-Item -ItemType Directory -Path $hDir -Force | Out-Null }
+    $hooks = New-Object psobject
+    $inner = New-Object psobject
+    $sessionStart = @()
+    foreach ($matcher in @('startup', 'resume')) {
+        $sessionStart += [pscustomobject]@{ matcher = $matcher; shell = $shellCmd }
+    }
+    $inner | Add-Member -NotePropertyName 'SessionStart' -NotePropertyValue $sessionStart
+    $hooks | Add-Member -NotePropertyName 'hooks' -NotePropertyValue $inner
+    $ok = Save-Json $hooks $hookJsonPath
+    if (-not $ok) { return $false }
+    Write-Host "  [OK] Codex CLI SessionStart hook:" -ForegroundColor Green
+    Write-Host "        file:  $dstHook" -ForegroundColor DarkGray
+    Write-Host "        hooks: $hookJsonPath (startup + resume)" -ForegroundColor DarkGray
+    return $true
+}
+
 # Ensure obj.<name> exists as an object and return it.
 function Get-OrAddObject {
     param([object]$obj, [string]$name)
@@ -1390,6 +1464,13 @@ function Show-ClientTutorial {
             Write-Host "     `"context_servers`": { `"$Slug`": { `"command`": { `"path`": `"$vj`", `"args`": [`"-m`",`"neuron`"] } } }" -ForegroundColor White
             Write-Host "  4) Restart Zed." -ForegroundColor Yellow
         }
+        'codex' {
+            Write-Host "     Add this to ~\.codex\config.toml:" -ForegroundColor Gray
+            Write-Host "       [mcp_servers.$Slug]" -ForegroundColor White
+            Write-Host "       command = `"$vj`"" -ForegroundColor White
+            Write-Host "       args = ['-m', 'neuron']" -ForegroundColor White
+            Write-Host "  4) Restart Codex CLI." -ForegroundColor Yellow
+        }
     }
     Write-Host "  ------------------------------------------------------------" -ForegroundColor DarkGray
 }
@@ -1491,7 +1572,37 @@ function Write-ClientConfig {
             $verified = if ($saved) { Assert-JsonKey -Path $path -Keys @('context_servers', $Slug) -Label 'Zed' } else { $false }
             Show-ClientTutorial -App 'zed' -Path $path -Vpy $vpy -Ok ($saved -and $verified)
         }
+        'codex' {
+            $tomlPath = "$env:USERPROFILE\.codex\config.toml"
+            $tomlDir = Split-Path -Parent $tomlPath
+            if (-not (Test-Path $tomlDir)) { New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
+            $escapedCmd = $vpy -replace '\\', '\\'
+            $tomlLines = @("[mcp_servers.$Slug]", "command = `"$escapedCmd`"", "args = ['-m', 'neuron']")
+            try {
+                [System.IO.File]::WriteAllText($tomlPath, ($tomlLines -join "`r`n") + "`r`n", [System.Text.UTF8Encoding]::new($false))
+                Write-Host "  [OK] Wrote $tomlPath" -ForegroundColor Green; $saved = $true
+            } catch { Write-Host "  [X] Could not write $tomlPath : $_" -ForegroundColor Red; $saved = $false }
+            $hookOk = Install-CodexSessionHook -Vpy $vpy
+            Show-ClientTutorial -App 'codex' -Path $tomlPath -Vpy $vpy -Ok ($saved -and $hookOk)
+        }
     }
+}
+
+function Invoke-AddToAllAI {
+    Clear-Host; Show-Banner
+    Write-Host "`n  Registering Neuron with ALL supported AI clients...`n" -ForegroundColor Yellow
+    $results = @()
+    foreach ($app in @('claude-desktop','claude-code','cursor','vscode','opencode','zed','codex')) {
+        Write-Host "`n  --- $app ---" -ForegroundColor Cyan
+        Write-ClientConfig -App $app
+        $results += [pscustomobject]@{ App = $app; Ok = $? }
+    }
+    Write-Host "`n  ================== SUMMARY ==================" -ForegroundColor Cyan
+    $ok = @($results | Where-Object { $_.Ok }).Count; $fail = @($results | Where-Object { -not $_.Ok }).Count
+    Write-Host "  $ok / $($results.Count) clients configured successfully" -ForegroundColor $(if ($fail -eq 0) { 'Green' } else { 'Yellow' })
+    foreach ($r in $results) { Write-Host ("    {0,-25} {1}" -f $r.App, $(if ($r.Ok) { '[OK]' } else { '[!]' })) -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' }) }
+    Write-Host "  ==============================================" -ForegroundColor Cyan
+    Pause-Any
 }
 
 function Invoke-AddToAI {
@@ -1503,6 +1614,8 @@ function Invoke-AddToAI {
             "VS Code (Copilot / Continue)",
             "OpenCode",
             "Zed",
+            "Codex CLI (OpenAI)",
+            "ALL supported AI clients (one shot)",
             "ChatGPT or another remote connector",
             "Back"
         ) -Descriptions @(
@@ -1512,13 +1625,15 @@ function Invoke-AddToAI {
             "Local MCP app. No API key needed - Neuron runs on your machine.",
             "Local MCP app. No API key needed - Neuron runs on your machine.",
             "Local MCP app. No API key needed - Neuron runs on your machine.",
+            "OpenAI's open-source terminal agent (Tauri). TOML config + SessionStart hooks.",
+            "Wire Neuron into every supported app at once — Claude Desktop, Code, Cursor, VS Code, OpenCode, Zed, Codex CLI.",
             "Can't run local stdio - needs the HTTP bridge + a public HTTPS URL.",
             ""
         )
 
-        $map = @{ 0='claude-desktop'; 1='claude-code'; 2='cursor'; 3='vscode'; 4='opencode'; 5='zed' }
+        $map = @{ 0='claude-desktop'; 1='claude-code'; 2='cursor'; 3='vscode'; 4='opencode'; 5='zed'; 6='codex' }
 
-        if ($idx -ge 0 -and $idx -le 5) {
+        if ($idx -ge 0 -and $idx -le 6) {
             Clear-Host; Show-Banner
             Write-Host "`n  Configuring: $($map[$idx])`n" -ForegroundColor Yellow
             Write-ClientConfig -App $map[$idx]
@@ -1526,7 +1641,10 @@ function Invoke-AddToAI {
             Maybe-StoreLlmKey
             Pause-Any
         }
-        elseif ($idx -eq 6) {
+        elseif ($idx -eq 7) {
+            Invoke-AddToAllAI
+        }
+        elseif ($idx -eq 8) {
             Show-RemoteHelp
         }
         else { return }
@@ -1558,20 +1676,15 @@ function Maybe-StoreLlmKey {
         return
     }
     $idx = Show-Menu -Title "Which provider's key?" -Options @(
-        "OpenAI", "Anthropic", "Google Gemini", "Ollama (local, no key)", "Cancel"
+        "OpenAI", "Anthropic", "Google Gemini", "Cancel"
     )
-    if ($idx -lt 0 -or $idx -eq 4) { return }
-    if ($idx -eq 3) {
-        Update-EnvFile @{ 'NS_LLM_ENDPOINT' = 'http://localhost:11434/api/generate'; 'NS_LLM_MODEL' = 'qwen2.5:3b' }
-        Write-Host "  [OK] Configured Neuron to use a local Ollama endpoint (no key stored)." -ForegroundColor Green
-        return
-    }
+    if ($idx -lt 0 -or $idx -eq 3) { return }
     $providerEnv = @{ 0 = 'OPENAI_API_KEY'; 1 = 'ANTHROPIC_API_KEY'; 2 = 'GEMINI_API_KEY' }[$idx]
     $sec = Read-Host "  Paste the API key (hidden)" -AsSecureString
     $key = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
              [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
     if (-not $key) { Write-Host "  Nothing entered - skipped." -ForegroundColor DarkYellow; return }
-    Update-EnvFile @{ $providerEnv = $key; 'NS_LLM_API_KEY' = $key }
+    Update-EnvFile @{ $providerEnv = $key }
     Write-Host "  [OK] Saved to .env (gitignored). Keep that file private." -ForegroundColor Green
 }
 
@@ -1740,6 +1853,19 @@ function Remove-Prop { param([object]$obj, [string]$name)
 
 # The exact places 'Add Neuron to your AI' can write, and where the neuron entry
 # lives in each. Used to cleanly de-register on uninstall.
+function Remove-TomlConfig {
+    param([string]$Path, [string[]]$Keys)
+    if (-not (Test-Path $Path)) { return }
+    $content = Get-Content $Path -Raw -ErrorAction SilentlyContinue
+    if (-not $content) { return }
+    $section = ($Keys -join '.') -replace '\\', '\\'
+    $new = $content -replace "(?ms)^\[$section\].*?(?=^\[|\z)", ''
+    if ($new -ne $content) {
+        [System.IO.File]::WriteAllText($Path, $new.TrimEnd() + "`r`n", [System.Text.UTF8Encoding]::new($false))
+        Write-Host "  [OK] Removed '$section' from $Path" -ForegroundColor Green
+    }
+}
+
 function Get-RegistrationTargets {
     # Reuse the single source of truth (_neuron_paths.ps1) instead of a second,
     # driftable copy of the same app/path/key list - already slug-aware.
@@ -1749,6 +1875,8 @@ function Get-RegistrationTargets {
 function Remove-McpRegistrations {
     $removed = 0
     foreach ($t in (Get-RegistrationTargets)) {
+        if ($t.format -eq 'toml') { Remove-TomlConfig $t.path $t.keys; continue }
+        if ($t.format -eq 'hooks-json') { continue }
         if (-not (Test-Path $t.path)) { continue }
         $cfg = Load-Json $t.path
         if ($null -eq $cfg) {
@@ -1782,7 +1910,7 @@ function Remove-InstallDir {
         return
     }
 
-    Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-DirRobust -Path $target | Out-Null
     if (-not (Test-Path $target)) { Write-Host "  [OK] Removed $target" -ForegroundColor Green; return }
 
     # Still there -> files are locked, almost always by a running Neuron process
@@ -1803,13 +1931,13 @@ function Remove-InstallDir {
         if (Confirm-YesNo "Stop these Neuron processes and retry removal?") {
             foreach ($p in $procs) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {} }
             Start-Sleep -Milliseconds 700
-            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-DirRobust -Path $target | Out-Null
         }
     } else {
         Write-Host "      No Neuron process found under the folder - the lock may be your AI app itself." -ForegroundColor DarkYellow
         if (Confirm-YesNo "Fully quit Claude Desktop / Cursor, then retry removal now?") {
             Start-Sleep -Milliseconds 500
-            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-DirRobust -Path $target | Out-Null
         }
     }
 
@@ -1851,7 +1979,7 @@ function Remove-StorePythonShadowCopy {
         if (Test-Path $shadow) {
             $found = $true
             Write-Host "  [!] Found a Store-Python-virtualized copy of the install: $shadow" -ForegroundColor DarkYellow
-            Remove-Item -LiteralPath $shadow -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-DirRobust -Path $shadow | Out-Null
             if (-not (Test-Path $shadow)) { Write-Host "  [OK] Removed $shadow" -ForegroundColor Green }
             else { Write-Host "  [X] Could not fully remove $shadow - delete it by hand." -ForegroundColor Red }
         }
@@ -1885,9 +2013,19 @@ function Remove-ClientPlugins {
         }
     }
     if (Test-Path $ocPluginFile) {
-        Remove-Item -LiteralPath $ocPluginFile -Force -ErrorAction SilentlyContinue
-        Write-Host "  [OK] Deleted $ocPluginFile" -ForegroundColor Green
+        if (Remove-FileRobust -Path $ocPluginFile) {
+            Write-Host "  [OK] Deleted $ocPluginFile" -ForegroundColor Green
+        } else {
+            Write-Host "  [X] Could not delete $ocPluginFile - remove it by hand." -ForegroundColor Red
+        }
         $any = $true
+    }
+
+    # --- Codex CLI: ~/.codex/hooks.json hooks.SessionStart ----------------
+    $codexHookPath = "$env:USERPROFILE\.codex\hooks.json"
+    if (Test-Path $codexHookPath) {
+        try { Remove-Item -LiteralPath $codexHookPath -Force -ErrorAction Stop; Write-Host "  [OK] Deleted Codex CLI hooks.json" -ForegroundColor Green; $any = $true }
+        catch { Write-Host "  [X] Could not delete $codexHookPath" -ForegroundColor Red }
     }
 
     # --- Claude Code: ~/.claude/settings.json hooks.SessionStart -----------
@@ -1919,7 +2057,7 @@ function Remove-ClientPlugins {
         }
     }
 
-    if (-not $any) { Write-Host "  (No OpenCode plugin or Claude Code hook found to remove.)" -ForegroundColor DarkGray }
+    if (-not $any) { Write-Host "  (No OpenCode plugin, Codex hook, or Claude Code hook found to remove.)" -ForegroundColor DarkGray }
     return $any
 }
 
@@ -1950,6 +2088,11 @@ function Invoke-CleanUninstall {
     Write-Host "  You choose exactly what gets removed below - nothing happens until the final" -ForegroundColor Gray
     Write-Host "  confirmation. Every path used ($env:USERPROFILE / $env:LOCALAPPDATA-based) is" -ForegroundColor Gray
     Write-Host "  resolved at runtime, so this works identically on any Windows account." -ForegroundColor Gray
+    if (Test-OneDrivePath $Repo) {
+        Write-Host ""
+        Write-Host "  [i] This repo is under a OneDrive-synced folder. If a removal below" -ForegroundColor DarkCyan
+        Write-Host "      fails, pause OneDrive syncing (cloud tray icon > Pause) and retry." -ForegroundColor DarkCyan
+    }
     Write-Host ""
     Write-Host "  Always removed:" -ForegroundColor Gray
     Write-Host "    - install dir : $InstallDir" -ForegroundColor Gray
@@ -1991,8 +2134,20 @@ function Invoke-CleanUninstall {
         $stores += (Join-Path $Repo "graphs")            # repo copy
         foreach ($s in ($stores | Select-Object -Unique)) {
             if (Test-Path $s) {
-                Get-ChildItem -LiteralPath $s -Filter "*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-                Write-Host "  [OK] Cleared memory graphs in $s" -ForegroundColor Green
+                foreach ($f in @(Get-ChildItem -LiteralPath $s -Filter "*.db*" -ErrorAction SilentlyContinue)) {
+                    Remove-FileRobust -Path $f.FullName | Out-Null
+                }
+                $leftDb = @(Get-ChildItem -LiteralPath $s -Filter "*.db*" -ErrorAction SilentlyContinue)
+                if ($leftDb.Count -eq 0) {
+                    Write-Host "  [OK] Cleared memory graphs in $s" -ForegroundColor Green
+                } else {
+                    Write-Host "  [X] $($leftDb.Count) graph file(s) could NOT be deleted in $s" -ForegroundColor Red
+                    if (Test-OneDrivePath $s) {
+                        Write-Host "      Path is under OneDrive - pause syncing (tray icon > Pause) and retry." -ForegroundColor DarkYellow
+                    } else {
+                        Write-Host "      Close every app using Neuron and retry, or delete them by hand." -ForegroundColor DarkYellow
+                    }
+                }
             }
         }
     } else {
@@ -2008,8 +2163,11 @@ function Invoke-CleanUninstall {
         Write-Host "`n  Removing model cache..." -ForegroundColor Yellow
         foreach ($c in $NP.ModelCaches) {
             if (Test-Path $c) {
-                Remove-Item -LiteralPath $c -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Host "  [OK] Removed $c" -ForegroundColor Green
+                if (Remove-DirRobust -Path $c) {
+                    Write-Host "  [OK] Removed $c" -ForegroundColor Green
+                } else {
+                    Write-Host "  [X] Could not fully remove $c - delete it by hand." -ForegroundColor Red
+                }
             }
         }
     }

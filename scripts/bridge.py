@@ -52,17 +52,22 @@ WIN = os.name == "nt"
 def resolve_neuron_cmd(override: list[str] | None) -> list[str]:
     """Return the command that launches Neuron's stdio server.
 
-    Priority: explicit override → this interpreter if it can import neuron →
-    the Windows install's run_mcp.bat → this interpreter as a last resort (the
-    preflight will then surface a clear 'No module named neuron')."""
+    Priority: explicit override → the installed venv venv (via slug + LOCALAPPDATA)
+    → the Windows install's run_mcp.bat → this interpreter (preflight will then
+    surface a clear 'No module named neuron' if Neuron isn't there)."""
     if override:
         return override
-    if importlib.util.find_spec("neuron") is not None:
-        return [sys.executable, "-m", "neuron"]
     if WIN:
-        bat = os.path.expandvars(r"%LOCALAPPDATA%\Programs\neuron\scripts\run_mcp.bat")
+        slug = os.environ.get("NEURON_SLUG", "neuron5")
+        local = os.environ.get("LOCALAPPDATA", "")
+        venv_py = os.path.join(local, "Programs", slug, ".venv", "Scripts", "python.exe")
+        if os.path.isfile(venv_py):
+            return [venv_py, "-m", "neuron"]
+        bat = os.path.join(local, "Programs", slug, "scripts", "run_mcp.bat")
         if os.path.isfile(bat):
             return ["cmd", "/c", bat]
+    if importlib.util.find_spec("neuron") is not None:
+        return [sys.executable, "-m", "neuron"]
     return [sys.executable, "-m", "neuron"]
 
 
@@ -132,6 +137,17 @@ def main(argv: list[str] | None = None) -> int:
               "  • pipx : python -m pip install --user pipx\n"
               "Then re-run this script.", file=sys.stderr)
         return 2
+
+    # Quick smoke test: can the proxy runner actually launch mcp-proxy?
+    try:
+        r = subprocess.run(proxy + ["--version"], capture_output=True, timeout=15)
+        if r.returncode != 0:
+            print(f"  [!] '{' '.join(proxy)}' did not return a valid mcp-proxy.",
+                  file=sys.stderr)
+            print("      It may still work at runtime, but check your network / runner install.",
+                  file=sys.stderr)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        print(f"  [!] '{' '.join(proxy)}' — {exc}", file=sys.stderr)
 
     full = proxy + [f"--port={args.port}", f"--host={args.host}", "--"] + neuron_cmd
     url = f"http://{args.host}:{args.port}/mcp"

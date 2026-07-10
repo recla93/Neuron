@@ -65,18 +65,18 @@ def _preview(token: str) -> str:
 # *internal* line break slips through; here we strip whitespace/control chars
 # everywhere, then validate what remains.
 
-# Anything that is whitespace or an ASCII/Unicode control character.
-_CTRL_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]")
 # RFC-3986-ish set: enough for libsql://host:port/path?query URLs.
 _URL_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$")
 _URL_SCHEMES = ("libsql", "wss", "ws", "https", "http")
 
 
-def sanitize_credential(value: str) -> str:
-    """Drop stray whitespace/control chars anywhere in the value (not just the
-    ends). This removes the hidden \\r/\\n that breaks the auth header while
-    leaving the real credential content untouched."""
-    return _CTRL_WS_RE.sub("", value or "")
+try:
+    from neuron._env import sanitize_credential
+except ImportError:
+    import re as _re
+    _CTRL_WS_RE_FALLBACK = _re.compile(r"[\s\x00-\x1f\x7f]")
+    def sanitize_credential(value: str) -> str:
+        return _CTRL_WS_RE_FALLBACK.sub("", value or "")
 
 
 def validate_url(url: str) -> str | None:
@@ -216,8 +216,10 @@ def update_env_file(path: str, values: dict[str, str]) -> None:
     for key, val in remaining.items():
         out.append(f"{key}={val}")
 
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write("\n".join(out) + "\n")
+    os.replace(tmp, path)
 
 
 # ---------------------------------------------------------------------------

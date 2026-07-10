@@ -15,6 +15,99 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [Unreleased] — "FiveFix"
+
+Correctness and precision fixes to the search / embedding path and the heuristic
+extractor, surfaced while reviewing the FiveFix working branch. No data migration
+or re-embed needed. Bump `__version__` when this is cut for release.
+
+### Fixed
+- **Vector similarity was a raw dot product, not a cosine, on the Python fallback
+  tier.** `_search_embeddings` and `_refine_domain` scored non-normalized
+  fastembed vectors with a bare dot product, so "similarities" ran well above 1
+  (Neuron's own `vector_search` reported values up to ~9). Every downstream
+  threshold (auto-link 0.30, weight tiers 0.45/0.65, dormant 0.38, cross-domain
+  0.48) is calibrated for a true cosine in [0, 1], so on the fallback tier they
+  were all trivially cleared — everything linked, every weight became "strong",
+  flashes always fired. Both paths now compute a true cosine, consistent with the
+  Turso `vector_distance_cos` tier.
+- **The seed graph shadowed the user's live graph in vector search.**
+  `_search_embeddings` returned on the FIRST non-empty DB, so whenever the seed
+  (`base_knowledge.db`) matched anything the active graph's vectors were never
+  searched on the Turso tier (and the two tiers disagreed: the Python fallback
+  searched only the active graph). It now merges results across seed + active,
+  keeping the max similarity per keyword.
+- **Accented Italian words were truncated to garbage stems.** The ASCII-only
+  tokenizer cut "città"→"citt", "perché"→"perch", "così"→"cos",
+  "università"→"universit", leaking those stems as keywords, while the
+  ASCII-folded stopwords ("piu"/"gia"/"puo") never matched "più"/"già"/"può".
+  Extraction now folds accents before matching: real nouns survive clean
+  ("città"→"citta") and accented connectors ("più", "perché", "così", "però",
+  "cioè") are filtered.
+- **`.env` diagnostic only inspected the first `TURSO_` line.** An unconditional
+  `break` meant a malformed `TURSO_AUTH_TOKEN` was never reported when
+  `TURSO_DATABASE_URL` happened to load. It now checks every `TURSO_` line.
+
+### Optimized
+- **Embedding cache.** `_get_embedding` is memoized per (embedder, text). Within
+  a single turn the same keywords were re-embedded by `_refine_domain`,
+  `_auto_link` (one query per keyword), the cross-domain loop and
+  `_build_context_window`; they now hit the model once each.
+- **Seed connection reuse.** The immutable `base_knowledge.db` connection is
+  cached for the session instead of reopened on every search call. The writable
+  active graph DB is deliberately still opened per-call to avoid stale reads.
+
+### Changed
+- Removed the unused Ollama/LLM extraction path from the server (`_llm_extract`,
+  the `use_llm` param, `NS_LLM_*`). Server-side extraction is heuristic
+  (0-token); richer extraction is the calling LLM's job via `store_turn`. The
+  standalone CLI engine (`engine.py`) keeps its own LLM path.
+
+### Added
+- `.gitattributes` normalizing line endings (LF for code/docs, CRLF preserved for
+  `.bat`/`.cmd`/`.ps1`) to end the CRLF↔LF diff churn and prevent recurrence —
+  git normalizes at `add` time regardless of editor.
+- `tests/test_fivefix.py` — regression tests for the cosine range, seed+active
+  merge, seed connection reuse, accent folding, the embedding cache and
+  credential sanitization.
+
+### Concurrency (shared Turso cloud, multi-writer) — P1
+- **Per-user session state no longer bleeds through the shared `meta` table.**
+  On a shared cloud store the `meta` table has no per-user/per-context key, so
+  every save wrote one global `turn_count` / `session_id` / `staged_stimulus` /
+  `last_topic` / `last_keywords` — colleagues overwrote each other's turn count
+  and could receive each other's "while-you-were-away" stimulus. Session state
+  now persists to a **local per-user sidecar** (`graph_<context>.session.json`,
+  next to the local graph dir, like `_cross_links.json`); only the shared,
+  must-agree settings `embed_model` / `embed_dim` stay in the store's `meta`.
+  Local single-writer stores are unchanged (session state stays in `meta`).
+  One-time effect on an existing shared cloud DB: each user's `turn_count` reads
+  its empty sidecar once and restarts from 0 (harmless).
+- Regression tests in `test_fivefix.py::TestSessionSidecar` (meta split on the
+  remote tier, sidecar round-trip, local behaviour unchanged).
+- **Atomic save on the remote tier (P2).** `RemoteTursoConnection` now supports a
+  real transaction: `begin()` buffers the write statements and `commit()` flushes
+  them as ONE libSQL `batch()` (all-or-nothing), so a colleague loading mid-save
+  can no longer observe a half-applied graph. Reads inside the transaction still
+  execute immediately (reconcile's "which rows exist" SELECT). Schema/DDL runs
+  outside the transaction, once per process. Local tier unchanged.
+- **Reconcile guard on a shared store (P3).** A consolidate/merge triggers a
+  diff-delete that can drop rows another colleague added since load. On a shared
+  remote store this is now downgraded to an additive write (the merge's upserts
+  still land, nobody else's rows are deleted) unless run as coordinated
+  maintenance with `NS_ALLOW_SHARED_RECONCILE=1`.
+- **One-shot cloud initializer (P4).** `scripts/init_cloud.py` +
+  `Graph.ensure_schema()` migrate the shared cloud schema ONCE up front, so lazy
+  per-client migration never races on a fresh database. Run it before colleagues
+  connect.
+- **Embed-model write guard + retry/backoff (P5).** A save into a shared store
+  whose declared `embed_model` differs from the active one now skips vector
+  writes (incompatible spaces) instead of poisoning the store, and doesn't
+  clobber the store's model. Remote client creation and each `batch()` are
+  wrapped in bounded exponential-backoff retries so a transient network blip
+  no longer silently loses a turn. Tests: `TestRemoteTransaction`,
+  `TestRetryAndModelGuard`, `TestSharedReconcileGuard`, `TestEnsureSchema`.
+
 ## [5.0.2] "Synapse" — 2026-07-09
 
 Installer hardening release. All bug fixes, no behavior change to the server or

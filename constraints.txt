@@ -7,7 +7,9 @@
 #   mcp        — cap the major; the MCP SDK moves fast and 2.x could break the server.
 #   fastembed  — it's pre-1.0, and minor bumps have changed embedding behavior
 #                (e.g. mean- vs CLS-pooling), which shifts the vector space. Cap tight.
-#   pyturso    — matches the prebuilt win_amd64 wheels shipped in vendor/ (0.6.1).
+#   pyturso    — pinned in pyproject.toml (authoritative), not duplicated here.
+#   fastembed  — pre-1.0; ≥0.8 because 0.5–0.7 pin pillow<12 which has no cp314 wheel
+#                (pillow 10.4–11.x can't build from source on Windows without zlib).
+#                Dev env already runs 0.8.0 — the pooling-change concern is stale.
 mcp>=1.28,<2
-fastembed>=0.5,<0.9
-pyturso==0.6.1
+fastembed>=0.8,<1

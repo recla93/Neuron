@@ -64,6 +64,7 @@ $SrcDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LocalApp = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { "$env:USERPROFILE\AppData\Local" }
 $DestDir = Join-Path $LocalApp "Programs\$Slug"   # install identity from -Slug (default neuron5)
 $Vendor  = Join-Path $SrcDir "vendor"     # pre-built pyturso wheels live here
+. (Join-Path $SrcDir "scripts\_neuron_paths.ps1")                                                # paths + RegistrationTargets
 
 Write-Host "Neuron installer (wheel-based) - slug '$Slug'" -ForegroundColor Cyan
 Write-Host "Source: $SrcDir  ->  Destination: $DestDir`n"
@@ -146,12 +147,37 @@ function Invoke-Pip {
 # 1. PYTHON  (FIX A2: integer major/minor compare, locale-proof)
 # ===============================================================
 Write-Host "1. Python 3.10 - 3.14..." -ForegroundColor Yellow
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) { Write-Host "ERROR: Python not found in PATH. Install Python 3.10-3.14 from python.org." -ForegroundColor Red; exit 1 }
-$verOut = python -c "import sys; print(sys.version_info.major, sys.version_info.minor)"
-$parts  = $verOut.Trim().Split()
+# Resolve a WORKING interpreter first, then version-check THAT one.
+# Two field failures the old code hit:
+#   - 'python' on PATH is the Microsoft Store App-Execution-Alias STUB: it
+#     prints a Store hint to stderr and exits without output, so the version
+#     parse crashed with "Cannot index into a null array" instead of a clear
+#     message.
+#   - 'python' missing but the py launcher present: install failed although a
+#     perfectly good Python was on the machine.
+$basePy = $null
+$pyCmd = Get-Command python -ErrorAction SilentlyContinue
+if ($pyCmd) {
+    $exeOut = (& $pyCmd.Source -c "import sys; print(sys.executable)" 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $exeOut) { $basePy = ([string]$exeOut).Trim() }
+}
+if (-not $basePy -or $basePy -like '*\WindowsApps\*') {
+    # Try the py launcher: it never resolves to the Store alias.
+    $pyl = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyl) {
+        $exeOut = (& $pyl.Source -3 -c "import sys; print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $exeOut -and (([string]$exeOut).Trim() -notlike '*\WindowsApps\*')) {
+            $basePy = ([string]$exeOut).Trim()
+            Write-Host "   'python' on PATH is unusable (missing or Store alias) - using the py launcher instead:" -ForegroundColor DarkYellow
+            Write-Host "   $basePy" -ForegroundColor DarkYellow
+        }
+    }
+}
+if (-not $basePy) { Write-Host "ERROR: no working Python found in PATH. Install Python 3.10-3.14 from python.org (check 'Add python.exe to PATH')." -ForegroundColor Red; exit 1 }
+$verOut = (& $basePy -c "import sys; print(sys.version_info.major, sys.version_info.minor)" 2>$null)
+if (-not $verOut) { Write-Host "ERROR: '$basePy' did not report a version - the interpreter looks broken. Reinstall Python from python.org." -ForegroundColor Red; exit 1 }
+$parts  = ([string]$verOut).Trim().Split()
 $maj = [int]$parts[0]; $min = [int]$parts[1]
-$basePy = (python -c "import sys; print(sys.executable)").Trim()   # the interpreter we validated
 Write-Host "   Detected Python $maj.$min : $basePy"
 
 # The Microsoft Store build of Python (the "python" alias Windows offers when no
@@ -204,7 +230,15 @@ New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
 $venv = "$DestDir\.venv"
 if (-not (Test-Path "$venv\Scripts\python.exe")) {
     Write-Host "   Creating virtual env..." -ForegroundColor Yellow
-    python -m venv $venv 2>$null
+    # Use the interpreter VALIDATED in step 1 ($basePy), never the bare
+    # 'python' alias - after the py-launcher fallback they can differ, and the
+    # bare alias may be the Store stub.
+    & $basePy -m venv $venv
+    if (-not (Test-Path "$venv\Scripts\python.exe")) {
+        Write-Host "   venv creation failed - retrying once after cleaning up a partial venv..." -ForegroundColor DarkYellow
+        Remove-Item -LiteralPath $venv -Recurse -Force -ErrorAction SilentlyContinue
+        & $basePy -m venv $venv
+    }
 }
 $venvPy = "$venv\Scripts\python.exe"
 $pip    = "$venv\Scripts\pip.exe"
@@ -484,9 +518,48 @@ function Register-Mcp {
     Write-Host "   [OK] $App (key '$Key'; backup: $backup)"
 }
 
+# Generic JSON MCP writer for apps with non-mcpServers parent keys (VS Code, OpenCode, Zed).
+function Register-McpNested {
+    param([string]$App, [string]$Path, [string[]]$ParentKeys, [object]$Entry, [string]$Key)
+    if (-not (Test-Path $Path)) { Write-Host "   [ ] $App - config not found" -ForegroundColor DarkYellow; return }
+    $raw = Get-Content $Path -Raw -ErrorAction SilentlyContinue
+    if (-not $raw -or -not $raw.Trim()) { $cfg = New-Object psobject }
+    else { try { $cfg = $raw | ConvertFrom-Json -ErrorAction Stop } catch { Write-Host "   [!] $App - not plain JSON ($Path)" -ForegroundColor Red; return }
+    if ($null -eq $cfg) { Write-Host "   [!] $App - not a JSON object ($Path)" -ForegroundColor Red; return } }
+    $backup = "$Path.neuron-bak"
+    Copy-Item $Path $backup -Force -ErrorAction SilentlyContinue
+    $cur = $cfg
+    foreach ($pk in $ParentKeys) {
+        if (-not $cur.PSObject.Properties[$pk]) { $cur | Add-Member -NotePropertyName $pk -NotePropertyValue (New-Object PSObject) -Force }
+        $cur = $cur.$pk
+    }
+    $cur | Add-Member -Force -MemberType NoteProperty -Name $Key -Value $Entry
+    try { $json = ($cfg | ConvertTo-Json -Depth 100); [System.IO.File]::WriteAllText($Path, $json, [System.Text.UTF8Encoding]::new($false)) }
+    catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
+    Write-Host "   [OK] $App (key '$Key'; backup: $backup)"
+}
+
+# Codex CLI uses TOML instead of JSON for MCP config.
+function Register-CodexMcp {
+    param([string]$Vpy, [string]$Slug)
+    $tomlPath = "$env:USERPROFILE\.codex\config.toml"
+    $tomlDir = Split-Path -Parent $tomlPath
+    if (-not (Test-Path $tomlDir)) { New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
+    $escaped = $Vpy -replace '\\', '\\'
+    $toml = "[mcp_servers.$Slug]`r`ncommand = `"$escaped`"`r`nargs = ['-m', 'neuron']`r`n"
+    try { [System.IO.File]::WriteAllText($tomlPath, $toml, [System.Text.UTF8Encoding]::new($false)); Write-Host "   [OK] Codex CLI (TOML config)" }
+    catch { Write-Host "   [X] Codex CLI - could not write $tomlPath : $_" -ForegroundColor Red }
+}
+
+# --- MCP registrations ---
 Register-Mcp -App "Claude Desktop" -Path "$env:APPDATA\Claude\claude_desktop_config.json" -Entry $mcpEntryStd -Key $Slug
-Register-Mcp -App "Cursor"         -Path "$env:USERPROFILE\.cursor\mcp.json"                -Entry $mcpEntryStd -Key $Slug
-Write-Host "   Other clients (OpenCode, Claude Code, VS Code, Zed, ...): run scripts\configuration.ps1 or see INSTALL.md."
+Register-Mcp -App "Claude Code"    -Path "$env:USERPROFILE\.claude.json"                   -Entry $mcpEntryStd -Key $Slug
+Register-Mcp -App "Cursor"         -Path "$env:USERPROFILE\.cursor\mcp.json"               -Entry $mcpEntryStd -Key $Slug
+Register-McpNested -App "VS Code"  -Path "$env:APPDATA\Code\User\settings.json"            -ParentKeys @('mcp','servers') -Entry @{ type='stdio'; command=$runCmd; args=@('-m','neuron') } -Key $Slug
+Register-McpNested -App "OpenCode" -Path "$env:USERPROFILE\.config\opencode\opencode.json" -ParentKeys @('mcp') -Entry @{ command=@($runCmd, '-m','neuron'); type='local' } -Key $Slug
+Register-McpNested -App "Zed"      -Path "$env:APPDATA\Zed\settings.json"                  -ParentKeys @('context_servers') -Entry @{ command=@{ path=$runCmd; args=@('-m','neuron') } } -Key $Slug
+Register-CodexMcp -Vpy $runCmd -Slug $Slug
+Write-Host "   Restart your AI app(s) to activate Neuron." -ForegroundColor DarkGray
 
 # ===============================================================
 # 7. SHORTCUT

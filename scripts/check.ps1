@@ -1,19 +1,13 @@
-<#
+﻿<#
 .SYNOPSIS
-    Neuron - Dependency check and repair
+    Neuron - Dependency check
 .DESCRIPTION
-    Checks every required component. With -Repair, attempts to fix what's missing.
-    Exit code: 0 = all good, 1 = issues (repairable with -Repair).
+    Checks every required component. Read-only: reports issues but never modifies anything.
+    Replaces a prior version with a -Repair flag that was unused in practice.
+    Exit code: 0 = all good, 1 = issues found.
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\check.ps1
-.EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Repair
 #>
-
-# NOTE: param() MUST be the first executable statement (after comment-based help).
-# Putting the self-reinvoke if-block above it is a PowerShell parse error that
-# breaks the whole script - that is what made check.bat fail on install.
-param([switch]$Repair)
 
 # Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host so
 # it works under both Windows PowerShell (powershell.exe) AND PowerShell 7 (pwsh).
@@ -24,40 +18,24 @@ if ($MyInvocation.MyCommand.Path -and -not ($env:__NEURON_BYPASS)) {
     if (-not $psExe) { $psExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
     if (-not $psExe) { $psExe = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
     if ($psExe) {
-        & $psExe -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters
+        & $psExe -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path
         exit $LASTEXITCODE
     }
-    # No separate host found - continue in this process (already allowed to run).
 }
 
 $ErrorActionPreference = "Continue"
 $issues = @()
 $SrcDir = Split-Path -Parent $PSScriptRoot
-# Single source of truth for where Neuron is actually INSTALLED (this used to be
-# the one script never wired to it - it always checked a dev venv under the repo,
-# $SrcDir\.venv, which a normal end-user install never creates (install.ps1 puts
-# the real venv under %LOCALAPPDATA%\Programs\<slug>\.venv). Result: check.ps1
-# reported ".venv"/mcp/fastembed/pyturso all missing right after a successful
-# install, because it was looking in the wrong place and silently falling back
-# to the bare system "python". Prefer the installed venv; fall back to the repo
-# dev venv (for a from-source checkout); last resort is the bare "python" on PATH.
 . (Join-Path $PSScriptRoot "_neuron_paths.ps1")
 $NP = Get-NeuronPaths
 $InstallDir = $NP.InstallDir
 
 function Check {
-    param([string]$Label, [scriptblock]$Condition, [scriptblock]$RepairAction = $null)
+    param([string]$Label, [scriptblock]$Condition)
     try {
         $ok = & $Condition
         if ($ok) { Write-Host "  [OK] $Label" -ForegroundColor Green }
-        else {
-            Write-Host "  [!!] $Label" -ForegroundColor Red
-            $script:issues += $Label
-            if ($Repair -and $RepairAction) {
-                Write-Host "       Repair..." -ForegroundColor Yellow
-                try { & $RepairAction; Write-Host "       OK" -ForegroundColor Green } catch { Write-Host "       Failed: $_" -ForegroundColor Red }
-            }
-        }
+        else { Write-Host "  [!!] $Label" -ForegroundColor Red; $script:issues += $Label }
     } catch { Write-Host "  [!!] $Label - $_" -ForegroundColor Red; $script:issues += $Label }
 }
 
@@ -70,13 +48,6 @@ Check -Label "Python 3.10+" -Condition { python -c "import sys; exit(0 if sys.ve
 Check -Label "not the Microsoft Store Python" -Condition {
     $realPy = (python -c "import sys; print(sys.executable)" 2>$null)
     -not ($realPy -like '*\WindowsApps\*')
-} -RepairAction {
-    Write-Host "     The Store build runs in a virtualized filesystem sandbox that silently" -ForegroundColor Yellow
-    Write-Host "     breaks venvs (files it writes can be invisible to every other program)." -ForegroundColor Yellow
-    Write-Host "     Install real Python 3.10-3.14 from https://python.org/downloads (check" -ForegroundColor Yellow
-    Write-Host "     'Add python.exe to PATH'), or disable the alias: Settings > Apps >" -ForegroundColor Yellow
-    Write-Host "     Advanced app settings > App execution aliases > turn OFF python.exe." -ForegroundColor Yellow
-    Write-Host "     Not auto-fixable - no repair action taken." -ForegroundColor DarkGray
 }
 $InstallVenvPy = "$InstallDir\.venv\Scripts\python.exe"
 $RepoVenvPy    = "$SrcDir\.venv\Scripts\python.exe"
@@ -88,29 +59,10 @@ $py = if (Test-Path $InstallVenvPy) { $InstallVenvPy } elseif (Test-Path $RepoVe
 # irrelevant (it's only a *compile fallback* for when no prebuilt wheel exists).
 Write-Host "`n2. Python dependencies" -ForegroundColor Yellow
 
-# pip lives in the venv; use `-m pip` so it works even if the pip.exe launcher
-# is missing (e.g. a uv-created venv). Falls back to the base python's pip.
-$pipExe = if (Test-Path $InstallVenvPy) { "$InstallDir\.venv\Scripts\pip.exe" } else { "$SrcDir\.venv\Scripts\pip.exe" }
-function Invoke-Pip { param([string[]]$PipArgs)
-    if (Test-Path $py) { & $py -m pip @PipArgs 2>$null }
-    elseif (Test-Path $pipExe) { & $pipExe @PipArgs 2>$null }
-}
 
-Check -Label "mcp SDK" -Condition { & $py -c "import mcp" 2>$null; $LASTEXITCODE -eq 0 } -RepairAction {
-    Invoke-Pip @("install", "mcp>=1.28.0")
-}
-Check -Label "fastembed" -Condition { & $py -c "from fastembed import TextEmbedding" 2>$null; $LASTEXITCODE -eq 0 } -RepairAction {
-    Invoke-Pip @("install", "fastembed>=0.5.0")
-}
-Check -Label "pyturso (Turso DB)" -Condition { & $py -c "import turso" 2>$null; $LASTEXITCODE -eq 0 } -RepairAction {
-    # --find-links vendor: prefer the prebuilt win_amd64 wheel (no Rust/MSVC compile,
-    # which otherwise looks frozen at "Preparing metadata"). Falls back to PyPI only
-    # if this Python's ABI has no vendored wheel.
-    $vendor = Join-Path $SrcDir "vendor"
-    $pipArgs = @("install", "pyturso==0.6.1")
-    if (Test-Path $vendor) { $pipArgs += @("--find-links", $vendor) }
-    Invoke-Pip $pipArgs
-}
+Check -Label "mcp SDK" -Condition { & $py -c "import mcp" 2>$null; $LASTEXITCODE -eq 0 }
+Check -Label "fastembed" -Condition { & $py -c "from fastembed import TextEmbedding" 2>$null; $LASTEXITCODE -eq 0 }
+Check -Label "pyturso (Turso DB)" -Condition { & $py -c "import turso" 2>$null; $LASTEXITCODE -eq 0 }
 # Did pyturso end up importable? Drives whether the toolchain matters below.
 & $py -c "import turso" 2>$null; $pytursoOk = ($LASTEXITCODE -eq 0)
 
@@ -138,28 +90,17 @@ if ($pytursoOk) {
     # (which -ErrorAction can't catch) and aborts the whole check.
     $hasRustup = [bool](Get-Command rustup -ErrorAction SilentlyContinue)
     $tc = if ($hasRustup) { rustup default 2>$null } else { "" }
-    Check -Label "MSVC (via vswhere) or GNU" -Condition { $msvcOk -or ($tc -match "gnu") } -RepairAction {
-        if ($msvcOk) { return }
-        if ($hasRustup) {
-            Write-Host "     Activating GNU toolchain..." -ForegroundColor Yellow
-            rustup toolchain install stable-gnu 2>$null
-            rustup default stable-gnu 2>$null
-        } else {
-            Write-Host "     Neither MSVC nor rustup found. Easiest fix: use a prebuilt pyturso" -ForegroundColor Yellow
-            Write-Host "     wheel (Python 3.10-3.14 + the bundled vendor\ wheels), so no compiler" -ForegroundColor Yellow
-            Write-Host "     is needed. Otherwise install Rust from https://rustup.rs and re-run." -ForegroundColor Yellow
-        }
-    }
+    Check -Label "MSVC (via vswhere) or GNU" -Condition { $msvcOk -or ($tc -match "gnu") }
 }
 
 # ---- 5. Config ----
 Write-Host "`n5. Configuration" -ForegroundColor Yellow
-$oc = "$env:USERPROFILE\.config\opencode\opencode.json"
+$oc = if ($env:OPENCODE_CONFIG) { $env:OPENCODE_CONFIG } else { "$env:USERPROFILE\.config\opencode\opencode.json" }
 Check -Label "opencode.json" -Condition { Test-Path $oc }
 
 # ---- 6. Result ----
 Write-Host ""
 if ($issues.Count -eq 0) { Write-Host "All OK. Neuron ready." -ForegroundColor Green; exit 0 }
 Write-Host "Issues ($($issues.Count)): $($issues -join ', ')" -ForegroundColor Yellow
-if (-not $Repair) { Write-Host "Use: check.bat -Repair to fix" -ForegroundColor Cyan }
+Write-Host "Re-run install.ps1 or configuration.bat -> Install to fix." -ForegroundColor Cyan
 exit 1

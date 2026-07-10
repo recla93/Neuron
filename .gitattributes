@@ -1,0 +1,35 @@
+# Line-ending policy (FiveFix) — stops the CRLF↔LF churn that made the branch
+# diff unreadable, and prevents recurrence: git normalizes to LF at `git add`
+# time regardless of the editor, so a CRLF working tree no longer shows as a diff.
+#
+# One-time normalization after adding this file:
+#     git add --renormalize .
+#     git commit -m "chore: normalize line endings (.gitattributes)"
+
+# Default: treat as text, store LF in the repo, check out LF.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF on checkout (batch/PowerShell conventions).
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Explicit LF for code/docs/data (belt-and-suspenders on top of the default).
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.toml  text eol=lf
+*.json  text eol=lf
+*.jsonl text eol=lf
+*.mjs   text eol=lf
+*.sh    text eol=lf
+
+# Binary — never touched by EOL normalization.
+*.db    binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.whl   binary
+*.zip   binary

@@ -43,6 +43,13 @@ if ($All) { $Data = $true; $Secrets = $true; $Cache = $true }
 $P    = Get-NeuronPaths -Slug $Slug
 $Repo = Split-Path -Parent $PSScriptRoot
 
+# Every step records what it could NOT do here, so the run can finish the rest
+# and end with an honest per-item report (and exit code 1) instead of a green
+# "Done." on top of silently-failed deletes - the exact failure mode reported
+# on OneDrive-synced repos and Store-Python machines.
+$script:Fails = @()
+function Note-Fail([string]$what) { $script:Fails += $what }
+
 function Confirm-Step([string]$msg) {
     if ($Yes) { return $true }
     $a = Read-Host "$msg [y/N]"
@@ -51,6 +58,10 @@ function Confirm-Step([string]$msg) {
 
 # Remove a path only if it looks like what we expect (guard against a collapsed
 # path like "\Programs\neuron5" at a drive root when an env var was empty).
+# Deletion is delegated to Remove-DirRobust (_neuron_paths.ps1): attributes
+# cleared, retries with backoff, rd /s /q fallback, and - crucially - the
+# outcome is VERIFIED. The old SilentlyContinue+"[OK]" printed success even
+# when OneDrive or a running client blocked the delete.
 function Remove-Guarded([string]$path, [string]$mustContain, [string]$label) {
     if (-not $path) { return }
     if (-not (Test-Path -LiteralPath $path)) { Write-Host "  - $label : not present" -ForegroundColor DarkGray; return }
@@ -60,8 +71,19 @@ function Remove-Guarded([string]$path, [string]$mustContain, [string]$label) {
         return
     }
     if ($DryRun) { Write-Host "  [dry-run] would remove $label : $full" -ForegroundColor Cyan; return }
-    Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "  [OK] removed $label : $full" -ForegroundColor Green
+    if (Remove-DirRobust -Path $full) {
+        Write-Host "  [OK] removed $label : $full" -ForegroundColor Green
+    } else {
+        Note-Fail "$label : $full"
+        Write-Host "  [X] could NOT fully remove $label : $full" -ForegroundColor Red
+        if (Test-OneDrivePath $full) {
+            Write-Host "      This path is synced by OneDrive - pause syncing (cloud icon >" -ForegroundColor DarkYellow
+            Write-Host "      Pause) or close OneDrive, then re-run the uninstaller." -ForegroundColor DarkYellow
+        } else {
+            Write-Host "      Something still holds files open (usually an AI app running" -ForegroundColor DarkYellow
+            Write-Host "      Neuron). Fully quit Claude Desktop/Cursor/etc. and re-run." -ForegroundColor DarkYellow
+        }
+    }
 }
 
 # A Microsoft Store Python virtualizes its filesystem: a venv "created" under
@@ -84,6 +106,20 @@ function Remove-StorePythonShadowCopy([string]$Slug) {
 }
 
 function Remove-McpEntry($t) {
+    if ($t.format -eq 'toml') {
+        if (Test-Path $t.path) {
+            $content = Get-Content $t.path -Raw; if (-not $content) { return }
+            $section = ($t.keys -join '.') -replace '\\', '\\'
+            $new = $content -replace "(?ms)^\[$section\].*?(?=^\[|\z)", ''
+            if ($new -ne $content) {
+                if ($DryRun) { Write-Host "  [dry-run] would remove '$section' from $($t.path)" -ForegroundColor Cyan; return }
+                [System.IO.File]::WriteAllText($t.path, $new.TrimEnd() + "`r`n", [System.Text.UTF8Encoding]::new($false))
+                Write-Host "  [OK] removed '$section' from $($t.app)" -ForegroundColor Green
+            }
+        }
+        return
+    }
+    if ($t.format -eq 'hooks-json') { return }
     if (-not (Test-Path -LiteralPath $t.path)) { return }
     try { $cfg = Get-Content -LiteralPath $t.path -Raw | ConvertFrom-Json -ErrorAction Stop }
     catch { Write-Host "  [!] $($t.app): not plain JSON - remove '$($P.Slug)' by hand ($($t.path))" -ForegroundColor Yellow; return }
@@ -95,10 +131,43 @@ function Remove-McpEntry($t) {
     $leaf = $t.keys[$t.keys.Count - 1]
     if (-not $parent.PSObject.Properties[$leaf]) { return }
     if ($DryRun) { Write-Host "  [dry-run] would de-register from $($t.app)" -ForegroundColor Cyan; return }
-    Copy-Item -LiteralPath $t.path "$($t.path).neuron-bak" -Force -ErrorAction SilentlyContinue
+    $bak = "$($t.path).neuron-bak"
+    Copy-Item -LiteralPath $t.path $bak -Force -ErrorAction SilentlyContinue
     $parent.PSObject.Properties.Remove($leaf)
-    Write-Utf8NoBom -Path $t.path -Content ($cfg | ConvertTo-Json -Depth 32)
-    Write-Host "  [OK] de-registered from $($t.app) (backup: $($t.path).neuron-bak)" -ForegroundColor Green
+    # Depth 100, NOT 32: Claude Code's ~/.claude.json is deeply nested
+    # (GrowthBook flags + per-project state); a too-low depth truncates real
+    # data to the literal string "System.Collections.Hashtable" - valid JSON,
+    # so it LOOKS fine, but the user's config is corrupted. install.ps1 and
+    # configuration.ps1 already write at 100; keep this in lockstep.
+    try {
+        Write-Utf8NoBom -Path $t.path -Content ($cfg | ConvertTo-Json -Depth 100)
+    } catch {
+        if (Test-Path -LiteralPath $bak) { Copy-Item -LiteralPath $bak $t.path -Force -ErrorAction SilentlyContinue }
+        Note-Fail "de-register from $($t.app) ($($t.path))"
+        Write-Host "  [X] $($t.app): could not write $($t.path) - original restored. ($_)" -ForegroundColor Red
+        return
+    }
+    # Verify the write landed: the file must still parse AND our key must be
+    # gone. On any doubt, restore the backup - never leave a client config in
+    # a half-written state.
+    $ok = $true
+    try {
+        $reread = Get-Content -LiteralPath $t.path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $cur = $reread
+        for ($i = 0; $i -lt $t.keys.Count - 1; $i++) {
+            $k = $t.keys[$i]
+            if ($cur -and $cur.PSObject.Properties[$k]) { $cur = $cur.$k } else { $cur = $null; break }
+        }
+        if ($cur -and $cur.PSObject.Properties[$leaf]) { $ok = $false }
+    } catch { $ok = $false }
+    if (-not $ok) {
+        if (Test-Path -LiteralPath $bak) { Copy-Item -LiteralPath $bak $t.path -Force -ErrorAction SilentlyContinue }
+        Note-Fail "de-register from $($t.app) ($($t.path))"
+        Write-Host "  [X] $($t.app): post-write verification failed - original restored." -ForegroundColor Red
+        Write-Host "      Remove the '$($P.Slug)' entry by hand from $($t.path)." -ForegroundColor DarkYellow
+        return
+    }
+    Write-Host "  [OK] de-registered from $($t.app) (backup: $bak)" -ForegroundColor Green
 }
 
 # Undo Install-OpenCodeHandshakePlugin / Install-ClaudeCodeSessionHook (see
@@ -123,8 +192,14 @@ function Remove-ClientPlugins {
                 else {
                     Copy-Item -LiteralPath $ocPath "$ocPath.neuron-bak" -Force -ErrorAction SilentlyContinue
                     $cfg.plugin = $after
-                    Write-Utf8NoBom -Path $ocPath -Content ($cfg | ConvertTo-Json -Depth 32)
-                    Write-Host "  [OK] Removed neuron-handshake entry from OpenCode's opencode.json" -ForegroundColor Green
+                    try {
+                        Write-Utf8NoBom -Path $ocPath -Content ($cfg | ConvertTo-Json -Depth 100)
+                        Write-Host "  [OK] Removed neuron-handshake entry from OpenCode's opencode.json" -ForegroundColor Green
+                    } catch {
+                        Copy-Item -LiteralPath "$ocPath.neuron-bak" $ocPath -Force -ErrorAction SilentlyContinue
+                        Note-Fail "OpenCode plugin de-registration ($ocPath)"
+                        Write-Host "  [X] Could not update $ocPath - original restored. ($_)" -ForegroundColor Red
+                    }
                 }
                 $any = $true
             }
@@ -133,8 +208,12 @@ function Remove-ClientPlugins {
     if (Test-Path -LiteralPath $ocPluginFile) {
         if ($DryRun) { Write-Host "  [dry-run] would delete $ocPluginFile" -ForegroundColor Cyan }
         else {
-            Remove-Item -LiteralPath $ocPluginFile -Force -ErrorAction SilentlyContinue
-            Write-Host "  [OK] Deleted $ocPluginFile" -ForegroundColor Green
+            if (Remove-FileRobust -Path $ocPluginFile) {
+                Write-Host "  [OK] Deleted $ocPluginFile" -ForegroundColor Green
+            } else {
+                Note-Fail "OpenCode plugin file ($ocPluginFile)"
+                Write-Host "  [X] Could not delete $ocPluginFile - remove it by hand." -ForegroundColor Red
+            }
         }
         $any = $true
     }
@@ -160,31 +239,77 @@ function Remove-ClientPlugins {
                 else {
                     Copy-Item -LiteralPath $ccPath "$ccPath.neuron-bak" -Force -ErrorAction SilentlyContinue
                     $cfg.hooks.SessionStart = $newGroups
-                    Write-Utf8NoBom -Path $ccPath -Content ($cfg | ConvertTo-Json -Depth 32)
-                    Write-Host "  [OK] Removed Neuron SessionStart hook from Claude Code's settings.json" -ForegroundColor Green
+                    try {
+                        Write-Utf8NoBom -Path $ccPath -Content ($cfg | ConvertTo-Json -Depth 100)
+                        Write-Host "  [OK] Removed Neuron SessionStart hook from Claude Code's settings.json" -ForegroundColor Green
+                    } catch {
+                        Copy-Item -LiteralPath "$ccPath.neuron-bak" $ccPath -Force -ErrorAction SilentlyContinue
+                        Note-Fail "Claude Code SessionStart hook de-registration ($ccPath)"
+                        Write-Host "  [X] Could not update $ccPath - original restored. ($_)" -ForegroundColor Red
+                    }
                 }
                 $any = $true
             }
         }
     }
+
+    $codexHookPath = "$env:USERPROFILE\.codex\hooks.json"
+    if (Test-Path -LiteralPath $codexHookPath) {
+        if ($DryRun) { Write-Host "  [dry-run] would delete $codexHookPath" -ForegroundColor Cyan }
+        else {
+            if (Remove-FileRobust -Path $codexHookPath) {
+                Write-Host "  [OK] Deleted Codex CLI hooks.json" -ForegroundColor Green
+            } else {
+                Note-Fail "Codex CLI hooks.json ($codexHookPath)"
+                Write-Host "  [X] Could not delete $codexHookPath - remove it by hand." -ForegroundColor Red
+            }
+        }
+        $any = $true
+    }
+
     if (-not $any) { Write-Host "  - client plugins/hooks : none found" -ForegroundColor DarkGray }
 }
 
 function Scrub-Env([string]$envPath) {
     if (-not (Test-Path -LiteralPath $envPath)) { Write-Host "  - .env : not present" -ForegroundColor DarkGray; return }
-    $lines = Get-Content -LiteralPath $envPath
+    # The repo .env commonly lives under a OneDrive-redirected Desktop: reading
+    # a cloud-only placeholder while offline, or writing while the sync engine
+    # holds the file, throws - and with $ErrorActionPreference='Stop' that used
+    # to abort the ENTIRE uninstall mid-run. Fail just this step instead.
+    try { $lines = Get-Content -LiteralPath $envPath -ErrorAction Stop } catch {
+        Note-Fail ".env scrub ($envPath)"
+        Write-Host "  [X] Could not read $envPath ($_)" -ForegroundColor Red
+        if (Test-OneDrivePath $envPath) {
+            Write-Host "      The file is under OneDrive - make sure it's available offline" -ForegroundColor DarkYellow
+            Write-Host "      (right-click > Always keep on this device) or pause syncing, then re-run." -ForegroundColor DarkYellow
+        }
+        return
+    }
     $kept  = $lines | Where-Object { $_ -notmatch '^\s*(TURSO_[A-Z_]+|[A-Za-z0-9]+_(API_KEY|TOKEN))\s*=' }
     $n = $lines.Count - $kept.Count
     if ($n -le 0) { Write-Host "  - .env : no secret lines to scrub" -ForegroundColor DarkGray; return }
     if ($DryRun) { Write-Host "  [dry-run] would scrub $n secret line(s) from $envPath" -ForegroundColor Cyan; return }
     Copy-Item -LiteralPath $envPath "$envPath.neuron-bak" -Force -ErrorAction SilentlyContinue
-    Write-Utf8NoBom -Path $envPath -Content $kept
-    Write-Host "  [OK] scrubbed $n secret line(s) from .env (backup: $envPath.neuron-bak)" -ForegroundColor Green
+    try {
+        Write-Utf8NoBom -Path $envPath -Content $kept
+        Write-Host "  [OK] scrubbed $n secret line(s) from .env (backup: $envPath.neuron-bak)" -ForegroundColor Green
+    } catch {
+        Note-Fail ".env scrub ($envPath)"
+        Write-Host "  [X] Could not write $envPath ($_)" -ForegroundColor Red
+        if (Test-OneDrivePath $envPath) {
+            Write-Host "      OneDrive is likely holding the file - pause syncing and re-run." -ForegroundColor DarkYellow
+        }
+    }
 }
 
 # --- plan -------------------------------------------------------------------
 Write-Host ""
 Write-Host "  Neuron uninstaller - slug '$($P.Slug)'$(if ($DryRun) {' (DRY RUN)'})" -ForegroundColor Yellow
+if (Test-OneDrivePath $Repo) {
+    Write-Host "  [i] This repo lives under a OneDrive-synced folder ($Repo)." -ForegroundColor DarkCyan
+    Write-Host "      If any removal below fails, pause OneDrive syncing (cloud tray icon >" -ForegroundColor DarkCyan
+    Write-Host "      Pause syncing) and re-run - the sync engine can briefly lock files." -ForegroundColor DarkCyan
+}
 Write-Host "  Will remove (base):" -ForegroundColor Gray
 Write-Host "    - install dir : $($P.InstallDir)"
 Write-Host "    - Start Menu  : $($P.StartMenu)"
@@ -214,8 +339,23 @@ if ($Data -and (Confirm-Step "Delete your memory data? This cannot be undone."))
     if (Test-Path -LiteralPath $repoGraphs) {
         if ($DryRun) { Write-Host "  [dry-run] would clear $repoGraphs\*.db*" -ForegroundColor Cyan }
         else {
-            Get-ChildItem -LiteralPath $repoGraphs -Filter '*.db*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-            Write-Host "  [OK] cleared repo graphs\*.db" -ForegroundColor Green
+            # Per-file robust delete + verify: the repo often sits on a
+            # OneDrive-redirected Desktop where the sync engine can hold .db
+            # files open; the old silent pipeline reported "[OK] cleared" even
+            # when every delete failed.
+            foreach ($f in @(Get-ChildItem -LiteralPath $repoGraphs -Filter '*.db*' -ErrorAction SilentlyContinue)) {
+                Remove-FileRobust -Path $f.FullName | Out-Null
+            }
+            $left = @(Get-ChildItem -LiteralPath $repoGraphs -Filter '*.db*' -ErrorAction SilentlyContinue)
+            if ($left.Count -eq 0) {
+                Write-Host "  [OK] cleared repo graphs\*.db" -ForegroundColor Green
+            } else {
+                Note-Fail "repo graphs ($($left.Count) file(s) left in $repoGraphs)"
+                Write-Host "  [X] $($left.Count) database file(s) could not be deleted in $repoGraphs" -ForegroundColor Red
+                if (Test-OneDrivePath $repoGraphs) {
+                    Write-Host "      The repo is under OneDrive - pause syncing and re-run, or delete them by hand." -ForegroundColor DarkYellow
+                }
+            }
         }
     }
 }
@@ -237,4 +377,13 @@ Write-Host "    - This source repo ($Repo)." -ForegroundColor DarkGray
 if (-not $Data)    { Write-Host "    - Memory data (re-run with -Data to delete)." -ForegroundColor DarkGray }
 if (-not $Secrets) { Write-Host "    - .env secrets (re-run with -Secrets to scrub)." -ForegroundColor DarkGray }
 if (-not $Cache)   { Write-Host "    - Model cache (re-run with -Cache to delete)." -ForegroundColor DarkGray }
+
+# --- honest exit ------------------------------------------------------------
+if ($script:Fails.Count -gt 0 -and -not $DryRun) {
+    Write-Host "`n  Finished WITH $($script:Fails.Count) item(s) that could not be removed:" -ForegroundColor Red
+    foreach ($f in $script:Fails) { Write-Host "    - $f" -ForegroundColor Red }
+    Write-Host "  Close every app using Neuron (and pause OneDrive if flagged above)," -ForegroundColor Yellow
+    Write-Host "  then re-run this script - it is safe to run repeatedly." -ForegroundColor Yellow
+    exit 1
+}
 Write-Host "`n  Done.$(if ($DryRun) {' (dry run - nothing was actually changed)'})" -ForegroundColor Green

@@ -49,6 +49,91 @@ function Get-LocalAppData {
     return (Join-Path $HOME 'AppData\Local')   # last-ditch fallback, never empty
 }
 
+# TRUE when a Python executable is the Microsoft Store build (or its zero-byte
+# App-Execution-Alias stub under WindowsApps). The Store build runs in a
+# per-package virtualized filesystem: venvs "created" under a normal folder get
+# silently redirected into the package's own LocalCache, invisible to every
+# other process - the root cause of "installed fine, then nothing can find its
+# own folders" AND of uninstalls that miss the real files.
+function Test-StorePython {
+    param([string]$PyPath)
+    if (-not $PyPath) { return $false }
+    return ($PyPath -like '*\WindowsApps\*' -or $PyPath -like '*PythonSoftwareFoundation.Python*')
+}
+
+# Find a REAL (non-Store) Python on this machine. The py launcher is probed
+# first because it never resolves to the Store alias; then every 'python' on
+# PATH that is not under WindowsApps. Each candidate is actually EXECUTED
+# (the Store alias stub prints a Store hint and exits non-zero, so it filters
+# itself out). Returns the resolved sys.executable path, or $null.
+function Get-RealPython {
+    $cands = @()
+    $pyl = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyl) {
+        $exe = (& $pyl.Source -3 -c "import sys; print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $exe) { $cands += ([string]$exe).Trim() }
+    }
+    foreach ($c in @(Get-Command python -All -ErrorAction SilentlyContinue)) {
+        if (Test-StorePython $c.Source) { continue }   # don't even run the alias stub
+        $exe = (& $c.Source -c "import sys; print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $exe) { $cands += ([string]$exe).Trim() }
+    }
+    foreach ($p in $cands) {
+        if ($p -and -not (Test-StorePython $p)) { return $p }
+    }
+    return $null
+}
+
+# TRUE when $Path lives under a OneDrive-managed folder. A Desktop/Documents
+# redirected by OneDrive has an intermediate '\OneDrive[ - Org]\' segment
+# (e.g. C:\Users\x\OneDrive\Desktop\...): the sync engine holds transient
+# locks and cloud-only placeholders can fail reads/deletes, so callers use
+# this to warn up front and to explain failures honestly instead of "OK".
+function Test-OneDrivePath {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    if ($Path -match '(?i)\\OneDrive( - [^\\]+)?\\') { return $true }
+    foreach ($v in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
+        if ($v -and $Path.ToLower().StartsWith(($v.ToLower().TrimEnd('\') + '\'))) { return $true }
+    }
+    return $false
+}
+
+# Delete a directory and VERIFY it is actually gone. A plain
+# `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue` hides the two
+# failure classes seen in the field:
+#   - OneDrive-synced paths (redirected Desktop/Documents): sync locks,
+#     ReadOnly/pinned attributes and cloud placeholders block deletion;
+#   - locked venv files (an AI app still holding the Neuron server open).
+# Strategy: clear blocking attributes, Remove-Item with retries + backoff,
+# then cmd's `rd /s /q` (more tolerant of deep/locked trees), verifying after
+# each pass. Returns $true only when the path no longer exists.
+function Remove-DirRobust {
+    param([Parameter(Mandatory)][string]$Path, [int]$Retries = 3)
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    try { & "$env:SystemRoot\System32\attrib.exe" -R -S -H "$Path" /S /D 2>$null | Out-Null } catch {}
+    for ($i = 1; $i -le $Retries; $i++) {
+        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop } catch {}
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        Start-Sleep -Milliseconds (300 * $i)
+    }
+    try { & "$env:SystemRoot\System32\cmd.exe" /d /c "rd /s /q `"$Path`"" 2>$null | Out-Null } catch {}
+    return (-not (Test-Path -LiteralPath $Path))
+}
+
+# Same idea for a single file. Returns $true only when the file is gone.
+function Remove-FileRobust {
+    param([Parameter(Mandatory)][string]$Path, [int]$Retries = 3)
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    try { & "$env:SystemRoot\System32\attrib.exe" -R -S -H "$Path" 2>$null | Out-Null } catch {}
+    for ($i = 1; $i -le $Retries; $i++) {
+        try { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop } catch {}
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        Start-Sleep -Milliseconds (250 * $i)
+    }
+    return (-not (Test-Path -LiteralPath $Path))
+}
+
 # Stop a running Neuron server before touching its venv/files, so deploy/uninstall
 # don't fail on locked files (or half-write and corrupt). Matches processes running
 # `-m neuron`, run_mcp.bat, or anything under the given install dir. Never touches $PID.
@@ -81,9 +166,14 @@ function Get-NeuronPaths {
 
     # Model cache: fastembed / huggingface default locations (no cache_dir override
     # is set in-code, so these are the real spots the ~80MB model lands).
+    # $env:TEMP / $HOME are never assumed non-empty: with the uninstaller's
+    # $ErrorActionPreference='Stop', a Join-Path on an empty prefix would kill
+    # the whole script at dot-source time on stripped/service environments.
+    $tempDir = if ($env:TEMP) { $env:TEMP } else { Join-Path $local 'Temp' }
+    $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($HOME) { $HOME } else { $local }
     $caches = @(
-        (Join-Path $env:TEMP 'fastembed_cache'),
-        (Join-Path $HOME '.cache\huggingface'),
+        (Join-Path $tempDir 'fastembed_cache'),
+        (Join-Path $homeDir '.cache\huggingface'),
         (Join-Path $local 'Temp\fastembed_cache')
     ) | Where-Object { $_ } | Select-Object -Unique
 
@@ -102,7 +192,9 @@ function Get-NeuronPaths {
             @{ app='Cursor';         path="$env:USERPROFILE\.cursor\mcp.json";               keys=@('mcpServers', $Slug) },
             @{ app='VS Code';        path="$env:APPDATA\Code\User\settings.json";            keys=@('mcp','servers', $Slug) },
             @{ app='OpenCode';       path="$env:USERPROFILE\.config\opencode\opencode.json"; keys=@('mcp', $Slug) },
-            @{ app='Zed';            path="$env:APPDATA\Zed\settings.json";                  keys=@('context_servers', $Slug) }
+            @{ app='Zed';            path="$env:APPDATA\Zed\settings.json";                  keys=@('context_servers', $Slug) },
+            @{ app='Codex CLI';       path="$env:USERPROFILE\.codex\config.toml";              keys=@('mcp_servers', $Slug); format='toml' },
+            @{ app='Codex CLI hooks'; path="$env:USERPROFILE\.codex\hooks.json";               keys=@('hooks', 'SessionStart'); format='hooks-json' }
         )
     }
 }

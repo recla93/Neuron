@@ -263,22 +263,10 @@ Designed for providers without automatic injection hooks (OpenCode, Cursor, etc.
 
 Extraction runs on the per-turn hot path (`auto` tool → `_auto_extract`). Two modes exist:
 
-- **Heuristic (default):** `SemanticExtractor` — lexical analysis, token scoring, pattern
-  matching. Zero tokens, deterministic, fast, fully unit-tested. Used by `auto` and by
-  `extract` unless overridden.
-- **LLM (opt-in):** `_llm_extract` calls an Ollama / OpenAI-compatible endpoint
-  (`NS_LLM_ENDPOINT`, `NS_LLM_MODEL`). Exposed only via the `extract` tool with
-  `use_llm=true`; the `auto` pipeline never enables it.
-
-**Design decision — heuristic stays the default; LLM is not enabled on the live path.**
-The `auto` pipeline runs every turn, so an LLM call there would add a synchronous HTTP
-round-trip per turn, introduce a hard dependency on a running model endpoint, and make the
-path non-deterministic. The heuristic already covers topic/keywords/domain/intent/sentiment.
-Use `extract(use_llm=true)` when higher-quality concepts are worth the latency/cost for a
-specific call. ⚠️ Known issue: `_llm_extract` is synchronous and is currently called from
-the async `call_tool` handler without `asyncio.to_thread`, so a `use_llm=true` call blocks
-the event loop until it returns. Wrapping it in `asyncio.to_thread` is tracked separately
-before LLM extraction is recommended for any high-throughput use.
+- **Heuristic only:** `SemanticExtractor` — lexical analysis, token scoring, pattern
+  matching. Zero tokens, deterministic, fast, fully unit-tested. Used by `auto` and `extract`.
+  Server-side LLM extraction was removed — LLM-based extraction is the calling LLM's
+  responsibility via `store_turn`.
 
 ### Keyword normalization and dedup
 
