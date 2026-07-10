@@ -27,6 +27,10 @@
     powershell -ExecutionPolicy Bypass -File scripts\configuration.ps1
 #>
 
+# Debug: set $true to see detailed operations instead of suppressing them with
+# | Out-Null. Uncomment the line below before running.
+# $NeuronDebug = $true
+
 # Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host so
 # it works under both Windows PowerShell (powershell.exe) AND PowerShell 7 (pwsh);
 # boxes with only pwsh have no `powershell` on PATH.
@@ -1203,7 +1207,7 @@ function Install-OpenCodeHandshakePlugin {
     $pluginDir = Join-Path $configDir "plugins"
     $dstPlugin = Join-Path $pluginDir "neuron-handshake.mjs"
     try {
-        if (-not (Test-Path $pluginDir)) { New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null }
+        if (-not (Test-Path $pluginDir)) { if ($NeuronDebug) { Write-Host "       Creating plugin dir: $pluginDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null }
         Copy-Item $srcPlugin $dstPlugin -Force -ErrorAction Stop
     } catch {
         Write-Host "  [X] Could not copy neuron-handshake.mjs to $pluginDir : $_" -ForegroundColor Red
@@ -1260,7 +1264,7 @@ function Install-ClaudeCodeSessionHook {
     $hookDir  = Join-Path $InstallDir "hooks"
     $dstHook  = Join-Path $hookDir "neuron_sessionstart_hook.py"
     try {
-        if (-not (Test-Path $hookDir)) { New-Item -ItemType Directory -Path $hookDir -Force | Out-Null }
+        if (-not (Test-Path $hookDir)) { if ($NeuronDebug) { Write-Host "       Creating hook dir: $hookDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $hookDir -Force | Out-Null }
         Copy-Item $srcHook $dstHook -Force -ErrorAction Stop
     } catch {
         Write-Host "  [X] Could not copy neuron_sessionstart_hook.py to $hookDir : $_" -ForegroundColor Red
@@ -1350,7 +1354,7 @@ function Install-CodexSessionHook {
     $hookDir  = Join-Path $InstallDir "hooks"
     $dstHook  = Join-Path $hookDir "neuron_sessionstart_hook.py"
     try {
-        if (-not (Test-Path $hookDir)) { New-Item -ItemType Directory -Path $hookDir -Force | Out-Null }
+        if (-not (Test-Path $hookDir)) { if ($NeuronDebug) { Write-Host "       Creating hook dir: $hookDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $hookDir -Force | Out-Null }
         Copy-Item $srcHook $dstHook -Force -ErrorAction Stop
     } catch {
         Write-Host "  [X] Could not copy hook to $dstHook : $_" -ForegroundColor Red; return $false
@@ -1359,7 +1363,7 @@ function Install-CodexSessionHook {
     $hookCommand = "`"$hookPython`" `"$dstHook`""
     $hookJsonPath = "$env:USERPROFILE\.codex\hooks.json"
     $hDir = Split-Path -Parent $hookJsonPath
-    if (-not (Test-Path $hDir)) { New-Item -ItemType Directory -Path $hDir -Force | Out-Null }
+    if (-not (Test-Path $hDir)) { if ($NeuronDebug) { Write-Host "       Creating hooks dir: $hDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $hDir -Force | Out-Null }
 
     # MERGE into any existing hooks.json (never clobber other tools' hooks), and
     # use Codex's actual schema: a top-level "hooks" object -> <Event> -> array of
@@ -1676,7 +1680,7 @@ function Write-ClientConfig {
         'codex' {
             $tomlPath = "$env:USERPROFILE\.codex\config.toml"
             $tomlDir = Split-Path -Parent $tomlPath
-            if (-not (Test-Path $tomlDir)) { New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
+            if (-not (Test-Path $tomlDir)) { if ($NeuronDebug) { Write-Host "       Creating toml dir: $tomlDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
             $escapedCmd = $vpy -replace '\\', '\\'
             # MERGE into the existing config.toml — NEVER overwrite it. The old code
             # used WriteAllText with only our block, which wiped the user's entire

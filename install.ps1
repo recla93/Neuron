@@ -30,6 +30,10 @@ param(
     [switch]$Yes                # non-interactive: assume defaults, no prompts
 )
 
+# Debug: set $true to see detailed operations (dir creation, file copies) instead of
+# suppressing them with | Out-Null. Uncomment the line below before running.
+# $NeuronDebug = $true
+
 # Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host
 # so it works whether launched via Windows PowerShell (powershell.exe) OR
 # PowerShell 7 (pwsh.exe). Machines with only pwsh don't have `powershell` on
@@ -226,7 +230,7 @@ Write-Host "   Tooling: python $maj.$min | uv=$HasUv | uvx=$HasUvx"
 # ===============================================================
 Write-Host "`n2. Virtual env..." -ForegroundColor Yellow
 Stop-NeuronServices -InstallDir $DestDir   # don't install over a running server (locked files)
-New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+if ($NeuronDebug) { Write-Host "  [..] Creating: $DestDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
 $venv = "$DestDir\.venv"
 if (-not (Test-Path "$venv\Scripts\python.exe")) {
     Write-Host "   Creating virtual env..." -ForegroundColor Yellow
@@ -413,7 +417,7 @@ if (-not $skipLlmProviders) {
         foreach ($idx in ($c -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })) {
             $n = [int]$idx - 1
             if ($n -ge 0 -and $n -lt $pkgs.Count) {
-                Invoke-Install -Target @($pkgs[$n]) -Name $pkgs[$n] | Out-Null
+                if ($NeuronDebug) { Invoke-Install -Target @($pkgs[$n]) -Name $pkgs[$n] } else { Invoke-Install -Target @($pkgs[$n]) -Name $pkgs[$n] | Out-Null }
             }
         }
     }
@@ -544,7 +548,7 @@ function Register-CodexMcp {
     param([string]$Vpy, [string]$Slug)
     $tomlPath = "$env:USERPROFILE\.codex\config.toml"
     $tomlDir = Split-Path -Parent $tomlPath
-    if (-not (Test-Path $tomlDir)) { New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
+    if (-not (Test-Path $tomlDir)) { if ($NeuronDebug) { Write-Host "       Creating: $tomlDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
     $escaped = $Vpy -replace '\\', '\\'
     $toml = "[mcp_servers.$Slug]`r`ncommand = `"$escaped`"`r`nargs = ['-m', 'neuron']`r`n"
     try { [System.IO.File]::WriteAllText($tomlPath, $toml, [System.Text.UTF8Encoding]::new($false)); Write-Host "   [OK] Codex CLI (TOML config)" }
@@ -569,7 +573,7 @@ $ocPluginSrc = Join-Path $SrcDir "clients\opencode-plugin\neuron-handshake.mjs"
 $ocPluginDst = Join-Path $ocDir "plugins\neuron-handshake.mjs"
 if ((Test-Path $ocPath) -and (Test-Path $ocPluginSrc)) {
     try {
-        if (-not (Test-Path (Split-Path -Parent $ocPluginDst))) { New-Item -ItemType Directory -Path (Split-Path -Parent $ocPluginDst) -Force | Out-Null }
+        if (-not (Test-Path (Split-Path -Parent $ocPluginDst))) { if ($NeuronDebug) { Write-Host "       Creating plugin dir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path (Split-Path -Parent $ocPluginDst) -Force | Out-Null }
         Copy-Item $ocPluginSrc $ocPluginDst -Force -ErrorAction Stop
         $raw = Get-Content $ocPath -Raw -ErrorAction SilentlyContinue
         if ($raw -and $raw.Trim()) { $ocCfg = $raw | ConvertFrom-Json -ErrorAction SilentlyContinue }
@@ -591,12 +595,12 @@ $ccHookDir = Join-Path $DestDir "hooks"
 $ccHookDst = Join-Path $ccHookDir "neuron_sessionstart_hook.py"
 if (Test-Path "$env:USERPROFILE\.claude.json") {
     try {
-        if (-not (Test-Path $ccHookDir)) { New-Item -ItemType Directory -Path $ccHookDir -Force | Out-Null }
+        if (-not (Test-Path $ccHookDir)) { if ($NeuronDebug) { Write-Host "       Creating hook dir: $ccHookDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $ccHookDir -Force | Out-Null }
         Copy-Item $ccHookSrc $ccHookDst -Force -ErrorAction Stop
         $hookCmd = "`"$runCmd`" `"$ccHookDst`""
         $settingsPath = "$env:USERPROFILE\.claude\settings.json"
         $sDir = Split-Path -Parent $settingsPath
-        if (-not (Test-Path $sDir)) { New-Item -ItemType Directory -Path $sDir -Force | Out-Null }
+        if (-not (Test-Path $sDir)) { if ($NeuronDebug) { Write-Host "       Creating settings dir: $sDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $sDir -Force | Out-Null }
         $sRaw = if (Test-Path $settingsPath) { Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue } else { "" }
         if ($sRaw -and $sRaw.Trim()) { $sCfg = $sRaw | ConvertFrom-Json -ErrorAction SilentlyContinue } else { $sCfg = New-Object psobject }
         if (-not $sCfg) { $sCfg = New-Object psobject }
@@ -626,7 +630,7 @@ if (Test-Path "$env:USERPROFILE\.claude.json") {
 # ===============================================================
 Write-Host "`n7. Start Menu shortcut..." -ForegroundColor Yellow
 $sd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$Slug"
-New-Item -ItemType Directory -Path $sd -Force | Out-Null
+if ($NeuronDebug) { Write-Host "  [..] Creating: $sd" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $sd -Force | Out-Null
 $w = New-Object -ComObject WScript.Shell
 $s = $w.CreateShortcut("$sd\$Slug.lnk")
 $s.TargetPath = "$venv\Scripts\python.exe"
