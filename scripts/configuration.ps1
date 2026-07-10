@@ -608,80 +608,54 @@ function Invoke-TursoConnect {
     Pause-Any
 }
 
-function Invoke-SwitchToLocal {
+function Invoke-ToggleDbMode {
     Clear-Host; Show-Banner
-    Write-Host "`n  Switch to LOCAL database`n" -ForegroundColor Yellow
-    if (-not (Test-CloudCredsConfigured)) {
-        Write-Host "  No active cloud credentials in .env — already using local mode." -ForegroundColor DarkGray
-        Pause-Any; return
-    }
-    Write-Host "  Comments out TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in .env so the" -ForegroundColor Gray
-    Write-Host "  server falls back to the local embedded engine on next startup." -ForegroundColor Gray
-    Write-Host "  Credentials are PRESERVED (commented) — use 'Switch to Cloud' to re-enable." -ForegroundColor Gray
-    Write-Host ""
-    if (-not (Confirm-YesNo "Switch to local mode now?")) {
-        Write-Host "  Cancelled." -ForegroundColor DarkYellow
-        Pause-Any; return
-    }
-    $envFile = Join-Path $Repo ".env"
-    $lines = [System.Collections.ArrayList]@(Get-Content $envFile)
-    $commented = 0
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        $line = $lines[$i]
-        if ($line -match '^\s*TURSO_DATABASE_URL\s*=' -and $line -notmatch '^\s*#') {
-            $lines[$i] = "# $line"; $commented++
-        }
-        elseif ($line -match '^\s*TURSO_AUTH_TOKEN\s*=' -and $line -notmatch '^\s*#') {
-            $lines[$i] = "# $line"; $commented++
-        }
-    }
-    if ($commented -le 0) {
-        Write-Host "  Nothing to comment — TURSO_DATABASE_URL / TURSO_AUTH_TOKEN not found (or already commented)." -ForegroundColor DarkGray
-        Pause-Any; return
-    }
-    Copy-Item -LiteralPath $envFile "$envFile.neuron-bak" -Force -ErrorAction SilentlyContinue
-    Write-Utf8NoBom -Path $envFile -Content $lines
-    Write-Host "  [OK] Commented $commented credential line(s) in .env (backup: $envFile.neuron-bak)" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "  Restart your AI app (or use Start/Stop MCP server -> Stop) so Neuron picks up" -ForegroundColor Yellow
-    Write-Host "  the local engine on next launch." -ForegroundColor Yellow
-    Pause-Any
-}
+    $cloudActive = Test-CloudCredsConfigured
+    $mode = if ($cloudActive) { "CLOUD" } else { "LOCAL" }
+    $target = if ($cloudActive) { "LOCAL" } else { "CLOUD" }
+    Write-Host "`n  Switch to $target database`n" -ForegroundColor Yellow
 
-function Invoke-SwitchToCloud {
-    Clear-Host; Show-Banner
-    Write-Host "`n  Switch to CLOUD database`n" -ForegroundColor Yellow
-    if (Test-CloudCredsConfigured) {
-        Write-Host "  Cloud credentials are already active — nothing to do." -ForegroundColor DarkGray
-        Pause-Any; return
-    }
     $envFile = Join-Path $Repo ".env"
     if (-not (Test-Path $envFile)) {
         Write-Host "  No .env file found. Use 'Connect a Turso Cloud database' first." -ForegroundColor DarkYellow
         Pause-Any; return
     }
+
     $lines = [System.Collections.ArrayList]@(Get-Content $envFile)
-    $uncommented = 0
+
+    # Build pairs: uncomment active -> comment, uncomment commented -> activate.
+    $cloudKeys = @("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
+    $localKeys = @("TURSO_LOCAL_DATABASE_URL", "TURSO_LOCAL_AUTH_TOKEN")
+    $activeKeys = if ($cloudActive) { $cloudKeys } else { $localKeys }
+    $inactiveKeys = if ($cloudActive) { $localKeys } else { $cloudKeys }
+
+    $swapped = 0
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $line = $lines[$i]
-        if ($line -match '^\s*#\s*TURSO_DATABASE_URL\s*=') {
-            $lines[$i] = $line -replace '^\s*#\s*', ''; $uncommented++
+        $trimmed = $line.TrimStart()
+        $key = if ($trimmed -match '^([^#=]+)=') { $Matches[1].Trim() } else { '' }
+        if (-not $key) { continue }
+
+        if ($key -in $activeKeys -and $trimmed -notmatch '^#') {
+            $lines[$i] = "# $line"; $swapped++
         }
-        elseif ($line -match '^\s*#\s*TURSO_AUTH_TOKEN\s*=') {
-            $lines[$i] = $line -replace '^\s*#\s*', ''; $uncommented++
+        elseif ($key -in $inactiveKeys -and $trimmed -match '^#') {
+            $lines[$i] = $line -replace '^\s*#\s*', ''; $swapped++
         }
     }
-    if ($uncommented -le 0) {
-        Write-Host "  No commented TURSO_* lines found in .env." -ForegroundColor DarkGray
+
+    if ($swapped -le 0) {
+        Write-Host "  Nothing to toggle — no matching active/commented credential lines found." -ForegroundColor DarkGray
         Write-Host "  Use 'Connect a Turso Cloud database' to set credentials from scratch." -ForegroundColor DarkYellow
         Pause-Any; return
     }
+
     Copy-Item -LiteralPath $envFile "$envFile.neuron-bak" -Force -ErrorAction SilentlyContinue
     Write-Utf8NoBom -Path $envFile -Content $lines
-    Write-Host "  [OK] Uncommented $uncommented credential line(s) in .env (backup: $envFile.neuron-bak)" -ForegroundColor Green
+    Write-Host "  [OK] Toggled $swapped line(s) in .env — now using $target (backup: $envFile.neuron-bak)" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Restart your AI app (or use Start/Stop MCP server -> Stop) so Neuron picks up" -ForegroundColor Yellow
-    Write-Host "  the cloud engine on next launch." -ForegroundColor Yellow
+    Write-Host "  the $target engine on next launch." -ForegroundColor Yellow
     Pause-Any
 }
 
@@ -715,17 +689,6 @@ function Test-CloudCredsConfigured {
         return ($u.Success -and $t.Success)
     }
     return $false
-}
-
-# Are there commented-out Turso credentials in .env (ready to re-enable)?
-function Test-CloudCredsCommented {
-    $envFile = Join-Path $Repo ".env"
-    if (-not (Test-Path $envFile)) { return $false }
-    $txt = Get-Content $envFile -Raw -ErrorAction SilentlyContinue
-    if (-not $txt) { return $false }
-    $u = [regex]::Match($txt, '(?m)^\s*#\s*TURSO_DATABASE_URL\s*=')
-    $t = [regex]::Match($txt, '(?m)^\s*#\s*TURSO_AUTH_TOKEN\s*=')
-    return ($u.Success -and $t.Success)
 }
 
 # ---------------------------------------------------------------------------
@@ -1112,23 +1075,17 @@ function Invoke-Bridge {
 function Show-BridgeCloudMenu {
     while ($true) {
         $cloudActive = Test-CloudCredsConfigured
-        $cloudCommented = (Test-CloudCredsCommented)
         $modeTag = if ($cloudActive) { "Cloud" } else { "Local" }
+        $switchTarget = if ($cloudActive) { "LOCAL" } else { "CLOUD" }
 
         $options = @(
-            "Connect a Turso Cloud database (connect + test + save to .env)"
+            "Connect a Turso Cloud database (connect + test + save to .env)",
+            "Switch to $switchTarget database"
         )
         $descs = @(
-            "Join a shared Turso Cloud DB so memory survives across machines."
+            "Join a shared Turso Cloud DB so memory survives across machines.",
+            "Swap active credentials in .env — no re-entry needed."
         )
-        if ($cloudActive) {
-            $options += "Switch to LOCAL database (comment out cloud creds in .env)"
-            $descs   += "Commenta le credenziali in .env — il server torna al motore locale al prossimo avvio."
-        }
-        elseif ($cloudCommented) {
-            $options += "Switch to CLOUD database (uncomment credenziali in .env)"
-            $descs   += "Riattiva le credenziali commentate in .env — il server torna in cloud al prossimo avvio."
-        }
         $options += @(
             "Check cloud config (offline, never connects)",
             "Launch the HTTP bridge (ChatGPT / remote connectors)",
@@ -1144,21 +1101,11 @@ function Show-BridgeCloudMenu {
 
         if ($idx -eq -1) { return }
         if ($idx -eq 0) { Invoke-TursoConnect; continue }
+        if ($idx -eq 1) { Invoke-ToggleDbMode; continue }
 
-        $switchIdx = -1
-        if ($cloudActive -or $cloudCommented) {
-            if ($idx -eq 1) {
-                if ($cloudActive) { Invoke-SwitchToLocal } else { Invoke-SwitchToCloud }
-                continue
-            }
-            $bridgeIdx = $idx - 1
-        } else {
-            $bridgeIdx = $idx
-        }
-
-        switch ($bridgeIdx) {
-            1 { Invoke-CloudCheck }
-            2 { Invoke-Bridge }
+        switch ($idx) {
+            2 { Invoke-CloudCheck }
+            3 { Invoke-Bridge }
             default { return }
         }
     }

@@ -196,6 +196,33 @@ def probe_connection(url: str, token: str) -> tuple[bool, str | None, str]:
 # .env writing — update the two keys in place, preserve everything else.
 # ---------------------------------------------------------------------------
 
+def _ensure_local_placeholders(env_path: str) -> None:
+    """Add commented-out TURSO_LOCAL_* lines if they don't exist yet.
+
+    The Configuration.bat toggle (Switch to LOCAL / CLOUD) swaps active
+    comments between the cloud and local variable pairs, so both must
+    be present in .env for the toggle to work without re-entry.
+    """
+    local_keys = ("TURSO_LOCAL_DATABASE_URL", "TURSO_LOCAL_AUTH_TOKEN")
+    lines: list[str] = []
+    if os.path.exists(env_path):
+        with open(env_path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+    existing = {line.lstrip().split("=", 1)[0].strip()
+                for line in lines if "=" in line}
+    added = 0
+    for key in local_keys:
+        if key not in existing:
+            lines.append(f"# {key}=")
+            added += 1
+    if added > 0:
+        tmp = env_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(tmp, env_path)
+
+
 def update_env_file(path: str, values: dict[str, str]) -> None:
     """Set each key=value in the .env at `path`, updating existing lines in
     place and appending any that are missing. Other lines are preserved."""
@@ -306,6 +333,11 @@ def main(argv: list[str] | None = None) -> int:
         "TURSO_DATABASE_URL": save_url,
         "TURSO_AUTH_TOKEN": token,
     })
+
+    # Ensure commented local-mode placeholders exist so the Configuration.bat
+    # toggle (Switch to LOCAL / CLOUD) can swap between them without re-entry.
+    _ensure_local_placeholders(args.env_file)
+
     print(f"\nSaved to {args.env_file}. The token is stored there — keep the file "
           "private (it is gitignored).")
     print("Neuron will use the shared cloud DB the next time it starts with this env.")
