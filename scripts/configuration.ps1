@@ -629,6 +629,19 @@ function Invoke-ToggleDbMode {
     $activeKeys = if ($cloudActive) { $cloudKeys } else { $localKeys }
     $inactiveKeys = if ($cloudActive) { $localKeys } else { $cloudKeys }
 
+    # Ensure all four keys exist as lines (active or commented) so the toggle
+    # always has something to swap — even if the user never ran connect_turso.py.
+    $existingKeys = @()
+    foreach ($l in $lines) {
+        $t = $l.TrimStart()
+        if ($t -match '^#?\s*([^#=]+)=') { $existingKeys += $Matches[1].Trim() }
+    }
+    foreach ($k in ($cloudKeys + $localKeys)) {
+        if ($k -notin $existingKeys) {
+            $lines.Add("# $k=") | Out-Null
+        }
+    }
+
     $swapped = 0
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $line = $lines[$i]
