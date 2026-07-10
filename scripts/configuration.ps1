@@ -610,65 +610,50 @@ function Invoke-TursoConnect {
 
 function Invoke-ToggleDbMode {
     Clear-Host; Show-Banner
-    $cloudActive = Test-CloudCredsConfigured
-    $mode = if ($cloudActive) { "CLOUD" } else { "LOCAL" }
-    $target = if ($cloudActive) { "LOCAL" } else { "CLOUD" }
-    Write-Host "`n  Switch to $target database`n" -ForegroundColor Yellow
-
     $envFile = Join-Path $Repo ".env"
     if (-not (Test-Path $envFile)) {
-        Write-Host "  No .env file found. Use 'Connect a Turso Cloud database' first." -ForegroundColor DarkYellow
+        Write-Host "`n  No .env file found. Use 'Connect a Turso Cloud database' first." -ForegroundColor DarkYellow
         Pause-Any; return
     }
 
-    $lines = [System.Collections.ArrayList]@(Get-Content $envFile)
+    $lines = @(Get-Content $envFile -ErrorAction SilentlyContinue)
+    if ($lines.Count -eq 0) {
+        Write-Host "`n  .env is empty." -ForegroundColor DarkGray
+        Pause-Any; return
+    }
 
-    # Build pairs: uncomment active -> comment, uncomment commented -> activate.
-    $cloudKeys = @("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
-    $localKeys = @("TURSO_LOCAL_DATABASE_URL", "TURSO_LOCAL_AUTH_TOKEN")
-    $activeKeys = if ($cloudActive) { $cloudKeys } else { $localKeys }
-    $inactiveKeys = if ($cloudActive) { $localKeys } else { $cloudKeys }
+    # Simple: toggle # on every TURSO_* line. Commented -> uncomment, uncommented -> comment.
+    $toggled = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $t = $lines[$i].TrimStart()
+        if ($t -notmatch '^#?\s*TURSO_\w+\s*=') { continue }
+        if ($t -match '^#') {
+            $lines[$i] = $lines[$i] -replace '^\s*#\s*', ''
+        } else {
+            $lines[$i] = "# $($lines[$i])"
+        }
+        $toggled++
+    }
 
-    # Ensure all four keys exist as lines (active or commented) so the toggle
-    # always has something to swap — even if the user never ran connect_turso.py.
-    $existingKeys = @()
+    if ($toggled -eq 0) {
+        Write-Host "`n  No TURSO_* lines found in .env." -ForegroundColor DarkGray
+        Pause-Any; return
+    }
+
+    # Determine resulting mode: cloud = TURSO_DATABASE_URL uncommented.
+    $cloudOn = $false
     foreach ($l in $lines) {
         $t = $l.TrimStart()
-        if ($t -match '^#?\s*([^#=]+)=') { $existingKeys += $Matches[1].Trim() }
+        if ($t -match '^TURSO_DATABASE_URL\s*=') { $cloudOn = $true; break }
     }
-    foreach ($k in ($cloudKeys + $localKeys)) {
-        if ($k -notin $existingKeys) {
-            $lines.Add("# $k=") | Out-Null
-        }
-    }
-
-    $swapped = 0
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        $line = $lines[$i]
-        $trimmed = $line.TrimStart()
-        $key = if ($trimmed -match '^([^#=]+)=') { $Matches[1].Trim() } else { '' }
-        if (-not $key) { continue }
-
-        if ($key -in $activeKeys -and $trimmed -notmatch '^#') {
-            $lines[$i] = "# $line"; $swapped++
-        }
-        elseif ($key -in $inactiveKeys -and $trimmed -match '^#') {
-            $lines[$i] = $line -replace '^\s*#\s*', ''; $swapped++
-        }
-    }
-
-    if ($swapped -le 0) {
-        Write-Host "  Nothing to toggle — no matching active/commented credential lines found." -ForegroundColor DarkGray
-        Write-Host "  Use 'Connect a Turso Cloud database' to set credentials from scratch." -ForegroundColor DarkYellow
-        Pause-Any; return
-    }
+    $mode = if ($cloudOn) { "Cloud" } else { "Local" }
 
     Copy-Item -LiteralPath $envFile "$envFile.neuron-bak" -Force -ErrorAction SilentlyContinue
     Write-Utf8NoBom -Path $envFile -Content $lines
-    Write-Host "  [OK] Toggled $swapped line(s) in .env — now using $target (backup: $envFile.neuron-bak)" -ForegroundColor Green
+    Write-Host "`n  [OK] Toggled $toggled TURSO_* line(s) — now: $mode (backup: $envFile.neuron-bak)" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Restart your AI app (or use Start/Stop MCP server -> Stop) so Neuron picks up" -ForegroundColor Yellow
-    Write-Host "  the $target engine on next launch." -ForegroundColor Yellow
+    Write-Host "  the $mode engine on next launch." -ForegroundColor Yellow
     Pause-Any
 }
 
