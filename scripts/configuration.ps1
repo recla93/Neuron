@@ -1373,6 +1373,12 @@ function Install-CodexSessionHook {
     if ($hooksObj.PSObject.Properties['SessionStart'] -and $null -ne $hooksObj.SessionStart) {
         $sessionStart = @($hooksObj.SessionStart)
     }
+    # Drop our own legacy entries: pre-5.1.1 installs wrote { matcher; shell }
+    # (wrong key) pointing at our hook, which survive the merge below and fire
+    # stale. Remove only Neuron's own legacy entries; leave other tools' hooks.
+    $sessionStart = @($sessionStart | Where-Object {
+        -not ($_.PSObject.Properties['shell'] -and $_.shell -like '*neuron_sessionstart_hook*')
+    })
     # One group matching every startup source ('.*'), dedup by command.
     $group = $sessionStart | Where-Object { $_.matcher -eq '.*' } | Select-Object -First 1
     if ($null -eq $group) {
