@@ -27,14 +27,6 @@
     powershell -ExecutionPolicy Bypass -File scripts\configuration.ps1
 #>
 
-# Debug mode: loaded from .env (NEURON_DEBUG=true/false), togglable via the
-# "Debug Mode" menu option below. When ON, detailed filesystem operations
-# (dir creation, file copies) are shown instead of suppressed with | Out-Null.
-$script:NeuronDebug = $false
-$_envFile = Join-Path $Repo ".env"
-$_envRaw = if (Test-Path $_envFile) { Get-Content $_envFile -Raw -ErrorAction SilentlyContinue } else { "" }
-if ($_envRaw -and ($_envRaw -match '(?m)^NEURON_DEBUG=(.+)$')) { $script:NeuronDebug = ($Matches[1].Trim() -eq 'true') }
-
 # Self-reinvoke with ExecutionPolicy Bypass, using the CURRENT PowerShell host so
 # it works under both Windows PowerShell (powershell.exe) AND PowerShell 7 (pwsh);
 # boxes with only pwsh have no `powershell` on PATH.
@@ -2595,5 +2587,11 @@ function Main {
     Clear-Host
     Write-Host "`n  Thanks for using Neuron. Bye!`n" -ForegroundColor Cyan
 }
+
+# Load debug mode from .env (NEURON_DEBUG=true/false), togglable via menu → 9) Debug Mode.
+# Placed AFTER $Repo is initialised (line ~70) so Join-Path resolves correctly.
+$script:NeuronDebug = $false
+$_envContent = Get-Content (Join-Path $Repo ".env") -ErrorAction SilentlyContinue
+foreach ($_ in $_envContent) { if ($_ -match '^NEURON_DEBUG=true') { $script:NeuronDebug = $true; break } }
 
 Main
