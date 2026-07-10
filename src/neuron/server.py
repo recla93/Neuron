@@ -13,6 +13,7 @@ import json
 import os
 import re
 import unicodedata
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -755,7 +756,10 @@ def _embed_one(text: str) -> list[float]:
     embedder across cases, and a re-arming guard would make a mismatch in one
     test cascade into every later one."""
     global _embed_dim_checked
-    vec = list(_get_embedder().embed([text]))[0]
+    # fastembed yields numpy arrays; coerce to a plain list of floats so that
+    # downstream truthiness checks (``if not v``), JSON export and struct
+    # packing never see an ndarray ("truth value of an array is ambiguous").
+    vec = [float(x) for x in list(_get_embedder().embed([text]))[0]]
     if not _embed_dim_checked:
         _embed_dim_checked = True
         if len(vec) != VECTOR_DIM:
@@ -837,12 +841,28 @@ def _drop_seed_connection(path: str) -> None:
             pass
 
 
+# A2 (Piano 05): memo of _search_embeddings results, valid for the duration of
+# a single tool call (cleared by the call_tool wrapper). Within one store_turn
+# the chain auto_link → _build_context_window re-runs the same searches; within
+# one pre_turn _resolve_context does too. The graph can't change mid-call in a
+# way that invalidates results (mutations happen before the searches or after).
+# Each entry stores a weakref to the graph it was computed for: id() alone is
+# NOT a stable identity (CPython reuses ids after GC — two short-lived Graph()
+# objects can collide, found by test_seed_connection_reused_active_not_cached),
+# so a hit counts only if the cached ref still points at the SAME live object.
+_turn_search_cache: dict[tuple, tuple["weakref.ref", list[tuple[str, float]]]] = {}
+
+
 def _search_embeddings(
     query_keywords: list[str],
     top_n: int = 8,
     graph: Graph | None = None,
 ) -> list[tuple[str, float]]:
     g = graph or _g.get()
+    _cache_key = (id(g), tuple(sorted(query_keywords)), top_n)
+    _cached = _turn_search_cache.get(_cache_key)
+    if _cached is not None and _cached[0]() is g:
+        return _cached[1]
     query_vec = _get_embedding(" ".join(query_keywords))
     query_blob = pack_vector(query_vec)
 
@@ -890,7 +910,9 @@ def _search_embeddings(
                 # never crash the tool.
                 pass
         if merged:
-            return sorted(merged.items(), key=lambda kv: -kv[1])[:top_n]
+            result = sorted(merged.items(), key=lambda kv: -kv[1])[:top_n]
+            _turn_search_cache[_cache_key] = (weakref.ref(g), result)
+            return result
 
     # --- Python fallback (non-Turso, or every Turso query failed) ---
     # Score with TRUE cosine. The old code used a raw dot product on
@@ -905,7 +927,9 @@ def _search_embeddings(
             nd.vector = _get_embedding(nd.keyword)
             g.mark_vector_dirty(nd.keyword)
         v = nd.vector
-        if not v:
+        # NB: length check, not truthiness — a numpy array (e.g. loaded by an
+        # older build) raises "truth value of an array is ambiguous" on `not v`.
+        if v is None or len(v) == 0:
             continue
         dot = sum(qi * vi for qi, vi in zip(query_vec, v))
         denom = q_norm * ((sum(x * x for x in v) ** 0.5) or 1.0)
@@ -913,7 +937,9 @@ def _search_embeddings(
         if sim > 0:
             scores.append((nd.keyword, round(sim, 4)))
     scores.sort(key=lambda x: -x[1])
-    return scores[:top_n]
+    result = scores[:top_n]
+    _turn_search_cache[_cache_key] = (weakref.ref(g), result)
+    return result
 
 
 def _normalize_domain(domain: str) -> str:
@@ -1790,6 +1816,9 @@ _LOOP_HINT = (
     "\n(Neuron loop: pre_turn before replying, store_turn after — `help` for "
     "the full playbook.)"
 )
+# A4 (Piano 05): the hint is a one-shot per process/session — after the model
+# has seen it once, repeating it on every response only burns tokens.
+_loop_hint_sent = False
 
 
 @app.call_tool()
@@ -1801,9 +1830,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     points it at the right workflow. Skipped for pre_turn/store_turn (they
     already build a richer, context-aware stimulus block) and for skill/help
     (already the full manual)."""
+    global _loop_hint_sent
+    _turn_search_cache.clear()   # A2: the memo lives for ONE tool call
     result = await _call_tool_impl(name, arguments)
     if (
-        name not in ("pre_turn", "store_turn", "skill", "help")
+        not _loop_hint_sent
+        and name not in ("pre_turn", "store_turn", "skill", "help")
         and len(result) == 1
         and result[0].type == "text"
         and result[0].text.lstrip()[:1] not in ("{", "[")  # don't corrupt JSON outputs (export/consolidate/...)
@@ -1811,6 +1843,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         and "pre_turn" not in result[0].text
     ):
         result = [TextContent(type="text", text=result[0].text + _LOOP_HINT)]
+        _loop_hint_sent = True
     return result
 
 
@@ -2342,10 +2375,17 @@ async def _call_tool_impl(name: str, arguments: dict) -> list[TextContent]:
         # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.
         staged = g_pt.take_staged_stimulus()
         staged_line = f"\n🧠 staged: {staged}" if staged else ""
-        out_pt = out_pt[:char_budget_pt] + staged_line + _stimulus_block(g_pt, search_kws_pt) + (
-            "\n→ next: fold this context into your reply silently, then call "
-            "store_turn(topic, keywords, links) to persist the turn."
-        )
+        stim_line = _stimulus_block(g_pt, search_kws_pt)
+        # A4: don't stack staged + live stimulus + a long guide line. When any
+        # stimulus is present the short tail is enough; the long teaching
+        # sentence is reserved for stimulus-free responses.
+        if staged_line and stim_line:
+            stim_line = ""   # staged is one-shot; the live stimulus returns next turn
+        tail = ("\n→ then store_turn(topic, keywords, links)."
+                if (staged_line or stim_line) else
+                "\n→ next: fold this context into your reply silently, then call "
+                "store_turn(topic, keywords, links) to persist the turn.")
+        out_pt = out_pt[:char_budget_pt] + staged_line + stim_line + tail
         return [TextContent(type="text", text=out_pt)]
 
     if name == "confirm":
@@ -2434,12 +2474,24 @@ async def _call_tool_impl(name: str, arguments: dict) -> list[TextContent]:
 
 async def main() -> None:
     from neuron import __version__
+    # A3 (Piano 05): pre-warm the embedding model in a worker thread so the
+    # FIRST pre_turn of the session doesn't pay the ~3s model load. Best-effort:
+    # any failure is swallowed (the lazy path in _get_embedder still applies).
+    async def _prewarm() -> None:
+        try:
+            await asyncio.to_thread(_get_embedder)
+        except Exception:
+            pass
+    warm_task = asyncio.ensure_future(_prewarm())
+    warm_task.add_done_callback(lambda t: t.exception())  # never "unretrieved"
     async with stdio_server() as (read_stream, write_stream):
         await app.run(
             read_stream,
             write_stream,
             InitializationOptions(
-                server_name="neuron",
+                # A6: the server identity must match the install slug (v5 =
+                # "neuron5", v4 = "neuron") — was hardcoded "neuron".
+                server_name=_resolve_slug(),
                 server_version=__version__,
                 # The signpost: injected once at the handshake, present for the
                 # whole session on every client that surfaces server instructions.

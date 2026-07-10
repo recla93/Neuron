@@ -3,6 +3,8 @@
 Default (no subcommand) runs the MCP stdio server, so existing launchers that call
 ``python -m neuron`` (e.g. bridge.py) keep working unchanged. Subcommands:
   ``neuron init ...``        — client wiring (no heavy server import).
+  ``neuron register ...``    — register the MCP server in AI clients (Piano 05 B1).
+  ``neuron doctor ...``      — diagnose/repair client registrations (Piano 05 B6).
   ``neuron consolidate ...`` — merge near-duplicates + archive orphans (E1.4).
 """
 
@@ -45,6 +47,9 @@ def cli() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         from neuron.init import main as init_main
         raise SystemExit(init_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in ("register", "doctor"):
+        from neuron.clients import cli as clients_cli   # stdlib-only, no server import
+        raise SystemExit(clients_cli(sys.argv[1:]))
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         raise SystemExit(_consolidate_cli(sys.argv[2:]))
     import asyncio

@@ -15,6 +15,64 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.2.0] "Piano 05" — 2026-07-10
+
+Core efficiency + centralized installer. The memory engine now writes only
+active links per turn (A1), caches vector searches within a tool call (A2),
+pre-warms the embedding model on startup (A3), and trims the loop hint to
+one-shot (A4). The installer and client configs gain verify-after-write with
+rollback (B5), a JSONC/MSIX-aware Python registration engine (B1-B4), and
+section-aware Codex TOML merging. A new CoWork plugin delivers the Neuron
+handshake to Claude Code sessions. No data migration needed.
+
+### Added
+- **`neuron register` / `neuron doctor` CLI.** Central Python engine
+  (`src/neuron/clients.py`) for registering Neuron in every supported AI
+  client: Claude Desktop (MSIX-aware), Claude Code (`claude mcp add`), Cursor,
+  VS Code, Zed, Codex CLI. Non-destructive merge, verify-after-write, backup
+  before every mutation, JSONC-safe manual snippets.
+- **CoWork plugin for Claude Code** (`clients/cowork-plugin/`). Delivers the
+  Neuron handshake via the standard plugin hook system; keeps the session
+  start dependency-free (no neuron import, no venv).
+- **Anti-misuse rules in handshake.** All client hooks now include explicit
+  curation rules (3-5 concept nouns, typed links, no self-links, no secrets)
+  to prevent shared-memory pollution from models that over-store.
+- **Pre-warm embedding model (A3).** `_get_embedder()` runs in a worker thread
+  during MCP server startup so the first `pre_turn` of a session doesn't pay
+  the ~3s model load penalty.
+
+### Changed
+- **Link writes O(total) → O(active) per turn (A1).** `models.py` only marks
+  links dirty when their `last_active_turn` changes; `inactive_turns` is
+  derived at load time from the invariant `turn_count - last_active_turn`.
+  On Turso Cloud this eliminates O(L) network rows per turn.
+- **Vector search memoized per tool call (A2).** `_search_embeddings` caches
+  results for the duration of one `call_tool` invocation; within `store_turn`
+  the chain `auto_link → _build_context_window` no longer re-runs the same
+  searches. Cache is invalidated on every new tool call.
+- **Loop hint one-shot (A4).** The `→ next: fold this context…` teaching line
+  is appended only once per process lifetime; subsequent tool calls skip it.
+  When staged or live stimulus is present, a shorter tail is used instead.
+- **Server identity = install slug (A6).** The MCP `server_name` now reads
+  the installed slug (`neuron5` for v5, `neuron` for v4) instead of the
+  hardcoded string `"neuron"`.
+- **fastembed vectors coerced to `list[float]` (A5).** `_embed_one` now yields
+  plain Python lists instead of numpy arrays, preventing downstream
+  "truth value of an array is ambiguous" errors on truthiness checks and
+  JSON export.
+- **Codex TOML section-aware merge.** `Register-CodexMcp` in `install.ps1`
+  now replaces only the `[mcp_servers.<slug>]` section, preserving every
+  other server in the user's `config.toml`. Backup + verify + rollback.
+- **`Register-McpNested` verify-after-write (B5).** JSON configs are
+  re-read after writing; on failure the previous backup is restored.
+
+### Fixed
+- **Codex installer clobbered `config.toml`.** (continuation of 5.1.1 fix)
+  `Register-CodexMcp` now merges non-destructively instead of overwriting.
+- **VS Code `Register-McpNested` had no rollback.** A JSON-roundtrip failure
+  after writing `settings.json` could leave a broken config; now restores
+  the backup automatically.
+
 ## [5.1.1] — 2026-07-10
 
 Bugfix release: client-config and installer fixes discovered after 5.1.0 shipped.

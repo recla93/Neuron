@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
-"""Neuron SessionStart hook for Claude Code.
+"""neuron-guard SessionStart hook (Cowork / Claude Code plugin edition).
 
-Registered by scripts/configuration.ps1 (Install-ClaudeCodeSessionHook) in
-~/.claude/settings.json under hooks.SessionStart, for the "startup", "resume",
-"clear" and "compact" matchers. Claude Code runs this script and adds its
-stdout directly to context at the start of the conversation (SessionStart is
-one of the hook events where plain stdout, not just the hookSpecificOutput
-JSON, is accepted as context -- see docs.claude.com/en/docs/claude-code/hooks).
+Prints the Neuron handshake to stdout; at SessionStart the host adds plain
+stdout directly to the model's context. Static and dependency-free on purpose
+(no import of neuron, no venv): it must never fail or slow down session start,
+even when the Neuron install is broken.
 
-Why this exists: the MCP `instructions` field (Neuron's dynamic SIGNPOST, see
-server.py) is host-optional -- nothing in the MCP spec obligates a client to
-surface it to the model. This hook is a second, independent delivery path for
-the same handshake reminder, using a mechanism Claude Code documents and
-guarantees (a registered hook's stdout at SessionStart). Kept as a static,
-self-contained string (no import of neuron / no venv dependency) so it never
-fails or slows down session start, even if the Neuron install is broken.
+Same text as clients/claude-code-hook/neuron_sessionstart_hook.py (the
+non-plugin variant registered by the installer); keep the two in sync.
+Tool names use the `mcp__neuron5__<tool>` convention (server key "neuron5").
 
-Tool names below use Claude Code's `mcp__<server>__<tool>` convention for a
-server registered under the key "neuron5" in ~/.claude.json.
+Degrades gracefully: if Neuron is not connected in this session, the model
+simply finds no mcp__neuron5__* tools and ignores the instructions.
 """
 
 import sys
@@ -48,7 +42,9 @@ NEURON_HANDSHAKE = (
     "- before creating a concept that may already exist, check with "
     "mcp__neuron5__vector_search or mcp__neuron5__find_candidates instead "
     "of minting near-duplicates;\n"
-    "- NEVER store secrets, tokens, passwords or personal data as concepts."
+    "- NEVER store secrets, tokens, passwords or personal data as concepts.\n"
+    "If none of the mcp__neuron5__* tools exist in this session, Neuron is "
+    "not connected: ignore all of the above silently."
 )
 
 

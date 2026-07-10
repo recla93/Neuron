@@ -1145,7 +1145,11 @@ function Show-CannotMerge {
     Write-Host "      To avoid wiping your settings, I did NOT modify it." -ForegroundColor DarkYellow
     Write-Host "      Add this '$Slug' entry to the MCP servers section by hand:" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "        `"$Slug`": { `"command`": `"$Vpy`", `"args`": [`"-m`", `"neuron`"] }" -ForegroundColor Gray
+    # B4 (Piano 05): the snippet must be VALID JSON. The old version interpolated
+    # the raw Windows path (single backslashes) — pasting it produced invalid
+    # JSON on the teammate's machine. ConvertTo-Json escapes it correctly.
+    $snippet = (@{ $Slug = @{ command = $Vpy; args = @('-m','neuron') } } | ConvertTo-Json -Depth 5)
+    foreach ($ln in ($snippet -split "`r?`n")) { Write-Host "        $ln" -ForegroundColor Gray }
     Write-Host ""
 }
 
@@ -2510,6 +2514,33 @@ function Invoke-ServerControl {
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
+# B6 (Piano 05): thin UI over the Python engine (`neuron doctor`,
+# src/neuron/clients.py) — the single source of truth for client registrations.
+# Scans every known AI config for broken/duplicate/stale Neuron entries
+# (e.g. a leftover key pointing at a deleted venv, or 'neuron' AND 'neuron5'
+# both active) and optionally repairs them with backups.
+function Invoke-Doctor {
+    $py = $InstallVenvPy
+    if (-not (Test-NeuronReady $py)) { Show-NotInstalled "The registration doctor"; Pause-Any; return }
+    Write-Host "`n  Scanning AI client configs AND running Neuron processes (slug '$Slug')..." -ForegroundColor Yellow
+    Write-Host "  (a few servers running is NORMAL: every AI app starts its own; the doctor" -ForegroundColor DarkGray
+    Write-Host "   flags only real problems - orphans, old versions, duplicate registrations)" -ForegroundColor DarkGray
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    & $py -m neuron doctor --slug $Slug --python $py --install-dir $InstallDir
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($code -ne 0) {
+        if (Confirm-YesNo "Problems found. Apply the repairs now (backups are taken, JSONC files are never rewritten)?") {
+            $ErrorActionPreference = 'Continue'
+            & $py -m neuron doctor --fix --slug $Slug --python $py --install-dir $InstallDir
+            $ErrorActionPreference = $prevEap
+        }
+    } else {
+        Write-Host "  All registrations look healthy." -ForegroundColor Green
+    }
+    Pause-Any
+}
+
 function Main {
     while ($true) {
         # Recompute install status once per menu entry (cheap: a single import probe).
@@ -2535,6 +2566,7 @@ function Main {
             "7) Live Graph Console",
             "8) Embedding model (multilingual vs lightweight)",
             "9) Debug Mode",
+            "-  Check & repair AI registrations (doctor)",
             "-  Start/Stop MCP server",
             "-  Clean install / Uninstall Neuron",
             "Exit"
@@ -2549,6 +2581,7 @@ function Main {
             "Live graph view (nodes/links/health) - refreshes only when it changes.",
             "Switch between the ~380MB multilingual default and a ~90MB English-only model.",
             "Toggle detailed terminal output ON/OFF (dir creation, file copies — useful to debug 'Add to your AI'). Persisted in .env.",
+            "One-button health check: scans every AI config (broken/duplicate/stale entries) AND running Neuron processes (who launched them, orphans, old versions still in RAM). Offers to repair everything, always with backups.",
             "Manually start python -m neuron (diagnostic) or stop lingering server processes.",
             "Remove the install (venv, shortcut, app registrations); optionally reinstall fresh.",
             "Close the Configuration Center."
@@ -2571,12 +2604,13 @@ function Main {
             6 { Invoke-Console }
             7 { Invoke-EmbedModelMenu }
             8 { Invoke-DebugModeToggle }
-            9 { Invoke-ServerControl }
-            10 { Invoke-CleanUninstall }
-            11      { break }
+            9 { Invoke-Doctor }
+            10 { Invoke-ServerControl }
+            11 { Invoke-CleanUninstall }
+            12      { break }
             default { break }
         }
-        if ($real -eq 11) { break }
+        if ($real -eq 12) { break }
     }
     # Housekeeping: don't silently orphan a background bridge on exit.
     if (Test-BridgeAlive) {

@@ -540,31 +540,110 @@ function Register-McpNested {
     $cur | Add-Member -Force -MemberType NoteProperty -Name $Key -Value $Entry
     try { $json = ($cfg | ConvertTo-Json -Depth 100); [System.IO.File]::WriteAllText($Path, $json, [System.Text.UTF8Encoding]::new($false)) }
     catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
+    # B5 (Piano 05): verify-after-write + rollback (same guarantee Register-Mcp
+    # already had — a JSON-roundtrip failure must never leave a broken config).
+    $verifyOk = $true
+    try {
+        $reread = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $walk = $reread
+        foreach ($pk in $ParentKeys) { $walk = if ($walk) { $walk.$pk } else { $null } }
+        if (-not $walk -or -not $walk.PSObject.Properties[$Key]) { $verifyOk = $false }
+    } catch { $verifyOk = $false }
+    if (-not $verifyOk) {
+        Copy-Item $backup $Path -Force -ErrorAction SilentlyContinue
+        Write-Host "   [X] $App - write verification failed, restored the previous file." -ForegroundColor Red
+        return
+    }
     Write-Host "   [OK] $App (key '$Key'; backup: $backup)"
 }
 
 # Codex CLI uses TOML instead of JSON for MCP config.
+# B5 (Piano 05): section-aware MERGE. The old version wrote the file with ONLY
+# the neuron block, silently DESTROYING every other server in the user's
+# config.toml. Now: replace our [mcp_servers.<slug>] section if present, append
+# it otherwise, preserve everything else, backup + verify + rollback.
 function Register-CodexMcp {
     param([string]$Vpy, [string]$Slug)
     $tomlPath = "$env:USERPROFILE\.codex\config.toml"
     $tomlDir = Split-Path -Parent $tomlPath
     if (-not (Test-Path $tomlDir)) { if ($NeuronDebug) { Write-Host "       Creating: $tomlDir" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $tomlDir -Force | Out-Null }
     $escaped = $Vpy -replace '\\', '\\'
-    $toml = "[mcp_servers.$Slug]`r`ncommand = `"$escaped`"`r`nargs = ['-m', 'neuron']`r`n"
-    try { [System.IO.File]::WriteAllText($tomlPath, $toml, [System.Text.UTF8Encoding]::new($false)); Write-Host "   [OK] Codex CLI (TOML config)" }
-    catch { Write-Host "   [X] Codex CLI - could not write $tomlPath : $_" -ForegroundColor Red }
+    $block = "[mcp_servers.$Slug]`r`ncommand = `"$escaped`"`r`nargs = ['-m', 'neuron']`r`n"
+    $old = ""
+    if (Test-Path $tomlPath) {
+        $old = Get-Content $tomlPath -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $old) { $old = "" }
+        Copy-Item $tomlPath "$tomlPath.neuron-bak" -Force -ErrorAction SilentlyContinue
+    }
+    $header = "[mcp_servers." + $Slug + "]"
+    if ($old.Contains($header)) {
+        # Replace ONLY our section (up to the next [section] or EOF).
+        $pattern = "(?ms)^\[mcp_servers\." + [regex]::Escape($Slug) + "\]\s*?\r?\n.*?(?=^\[|\z)"
+        $safeBlock = $block.Replace('$', '$$')   # literal $ in a regex replacement
+        $new = [regex]::Replace($old, $pattern, $safeBlock)
+    } else {
+        $new = $old
+        if ($new -and -not $new.EndsWith("`n")) { $new += "`r`n" }
+        $new += $block
+    }
+    try {
+        [System.IO.File]::WriteAllText($tomlPath, $new, [System.Text.UTF8Encoding]::new($false))
+        $after = Get-Content $tomlPath -Raw
+        if (-not $after.Contains($header)) { throw "section missing after write" }
+        Write-Host "   [OK] Codex CLI (TOML section merge; backup: $tomlPath.neuron-bak)"
+    }
+    catch {
+        if (Test-Path "$tomlPath.neuron-bak") { Copy-Item "$tomlPath.neuron-bak" $tomlPath -Force }
+        Write-Host "   [X] Codex CLI - write failed, restored backup: $_" -ForegroundColor Red
+    }
 }
 
 # --- MCP registrations ---
-Register-Mcp -App "Claude Desktop" -Path "$env:APPDATA\Claude\claude_desktop_config.json" -Entry $mcpEntryStd -Key $Slug
-Register-Mcp -App "Claude Code"    -Path "$env:USERPROFILE\.claude.json"                   -Entry $mcpEntryStd -Key $Slug
-Register-Mcp -App "Cursor"         -Path "$env:USERPROFILE\.cursor\mcp.json"               -Entry $mcpEntryStd -Key $Slug
-Register-McpNested -App "VS Code"  -Path "$env:APPDATA\Code\User\settings.json"            -ParentKeys @('mcp','servers') -Entry @{ type='stdio'; command=$runCmd; args=@('-m','neuron') } -Key $Slug
+# B1 (Piano 05): the Python engine (`neuron register` in src/neuron/clients.py)
+# is the single source of truth — JSONC-safe (valid manual snippets), MSIX-aware
+# for Claude Desktop, `claude mcp add` for Claude Code (never edits the live
+# state file when the CLI is available), verify+rollback, install manifest.
+# The legacy PS functions below run only if the engine can't import.
+$engineOk = $false
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+try { & $runCmd -c "import neuron.clients" *> $null; if ($LASTEXITCODE -eq 0) { $engineOk = $true } } catch {}
+$ErrorActionPreference = $prevEap
+if ($engineOk) {
+    & $runCmd -m neuron register --client all --slug $Slug --python $runCmd --install-dir $DestDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   [!] Some clients need a manual step - see the snippets above (they are valid JSON, safe to paste)." -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "   [!] Python register engine not importable - using legacy in-script registration." -ForegroundColor DarkYellow
+    # B2: Claude Desktop config may live under the MSIX/Store package instead of %APPDATA%.
+    $cdPath = "$env:APPDATA\Claude\claude_desktop_config.json"
+    if (-not (Test-Path $cdPath)) {
+        $msix = Get-ChildItem "$env:LOCALAPPDATA\Packages\Claude_*" -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName 'LocalCache\Roaming\Claude\claude_desktop_config.json' } |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($msix) { $cdPath = $msix; Write-Host "   [i] Claude Desktop: using the MSIX/Store config path" -ForegroundColor DarkGray }
+    }
+    Register-Mcp -App "Claude Desktop" -Path $cdPath -Entry $mcpEntryStd -Key $Slug
+    Register-Mcp -App "Claude Code"    -Path "$env:USERPROFILE\.claude.json"                   -Entry $mcpEntryStd -Key $Slug
+    Register-Mcp -App "Cursor"         -Path "$env:USERPROFILE\.cursor\mcp.json"               -Entry $mcpEntryStd -Key $Slug
+    Register-McpNested -App "VS Code"  -Path "$env:APPDATA\Code\User\settings.json"            -ParentKeys @('mcp','servers') -Entry @{ type='stdio'; command=$runCmd; args=@('-m','neuron') } -Key $Slug
+    $ocPathLegacy = "$env:USERPROFILE\.config\opencode\opencode.json"
+    if (Test-Path "$env:USERPROFILE\.config\opencode\opencode.jsonc") { $ocPathLegacy = "$env:USERPROFILE\.config\opencode\opencode.jsonc" }
+    Register-McpNested -App "OpenCode" -Path $ocPathLegacy -ParentKeys @('mcp') -Entry @{ command=@($runCmd, '-m','neuron'); type='local' } -Key $Slug
+    Register-McpNested -App "Zed"      -Path "$env:APPDATA\Zed\settings.json"                  -ParentKeys @('context_servers') -Entry @{ command=$runCmd; args=@('-m','neuron') } -Key $Slug
+    Register-CodexMcp -Vpy $runCmd -Slug $Slug
+}
+# B6: converge-and-verify — the doctor scans every client config and flags
+# stale/duplicate/broken entries (e.g. a leftover key pointing at a dead venv).
+if ($engineOk) {
+    & $runCmd -m neuron doctor --slug $Slug --python $runCmd --install-dir $DestDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   [!] Doctor found problems (above). Repair with:" -ForegroundColor DarkYellow
+        Write-Host "       `"$runCmd`" -m neuron doctor --fix --slug $Slug --python `"$runCmd`"" -ForegroundColor White
+    }
+}
 $ocPath = "$env:USERPROFILE\.config\opencode\opencode.json"
 if (Test-Path "$env:USERPROFILE\.config\opencode\opencode.jsonc") { $ocPath = "$env:USERPROFILE\.config\opencode\opencode.jsonc" }
-Register-McpNested -App "OpenCode" -Path $ocPath -ParentKeys @('mcp') -Entry @{ command=@($runCmd, '-m','neuron'); type='local' } -Key $Slug
-Register-McpNested -App "Zed"      -Path "$env:APPDATA\Zed\settings.json"                  -ParentKeys @('context_servers') -Entry @{ command=$runCmd; args=@('-m','neuron') } -Key $Slug
-Register-CodexMcp -Vpy $runCmd -Slug $Slug
 Write-Host "   Restart your AI app(s) to activate Neuron." -ForegroundColor DarkGray
 
 # --- OpenCode handshake plugin (deploy + register) ---

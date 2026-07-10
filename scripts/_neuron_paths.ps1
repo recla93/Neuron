@@ -156,6 +156,28 @@ function Stop-NeuronServices {
     Start-Sleep -Seconds 1
 }
 
+# B2 (Piano 05): Claude Desktop's config lives under %APPDATA%\Claude on classic
+# installs, but under the MSIX/Store package LocalCache on Store installs
+# (%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude) — seen on a real
+# teammate machine. Prefer whichever EXISTS; if both do, the most recently
+# modified one wins. Falls back to the classic path when neither exists yet.
+function Get-ClaudeDesktopConfigPath {
+    $classic = "$env:APPDATA\Claude\claude_desktop_config.json"
+    $cands = @()
+    if (Test-Path $classic) { $cands += Get-Item $classic }
+    $local = Get-LocalAppData
+    $pkgs = Get-ChildItem (Join-Path $local 'Packages') -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue
+    foreach ($p in @($pkgs)) {
+        $c = Join-Path $p.FullName 'LocalCache\Roaming\Claude\claude_desktop_config.json'
+        if (Test-Path $c) { $cands += Get-Item $c }
+    }
+    if ($cands.Count -eq 0) { return $classic }
+    if ($cands.Count -gt 1) {
+        Write-Host "   [i] Claude Desktop: multiple configs found (classic + Store); using the most recent." -ForegroundColor DarkGray
+    }
+    return ($cands | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+}
+
 function Get-NeuronPaths {
     param([string]$Slug)
     if (-not $Slug) { if ($env:NEURON_SLUG) { $Slug = $env:NEURON_SLUG } else { $Slug = 'neuron5' } }
@@ -187,7 +209,7 @@ function Get-NeuronPaths {
         # Every place 'Add Neuron to your AI' can register the server (mirror of
         # configuration.ps1::Get-RegistrationTargets). key path is app-specific.
         RegistrationTargets = @(
-            @{ app='Claude Desktop'; path="$env:APPDATA\Claude\claude_desktop_config.json"; keys=@('mcpServers', $Slug) },
+            @{ app='Claude Desktop'; path=(Get-ClaudeDesktopConfigPath); keys=@('mcpServers', $Slug) },
             @{ app='Claude Code';    path="$env:USERPROFILE\.claude.json";                   keys=@('mcpServers', $Slug) },
             @{ app='Cursor';         path="$env:USERPROFILE\.cursor\mcp.json";               keys=@('mcpServers', $Slug) },
             @{ app='VS Code';        path="$env:APPDATA\Code\User\settings.json";            keys=@('mcp','servers', $Slug) },

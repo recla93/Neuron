@@ -67,6 +67,9 @@ config.json
 # committed even before that happens.
 _to_delete/
 
+# Local benchmark / perf scripts — not for distribution.
+scripts/bench_turn.py
+
 # Graphify output
 graphify-out/
 

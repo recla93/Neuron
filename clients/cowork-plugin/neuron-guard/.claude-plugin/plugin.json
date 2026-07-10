@@ -1,0 +1,9 @@
+{
+  "name": "neuron-guard",
+  "version": "0.1.0",
+  "description": "Correct-usage guard for the Neuron semantic memory MCP: injects the pre_turn/store_turn loop and anti-misuse rules at session start, plus an on-demand usage playbook skill.",
+  "author": {
+    "name": "Neuron project"
+  },
+  "keywords": ["neuron", "memory", "mcp", "semantic-memory"]
+}

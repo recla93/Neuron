@@ -647,19 +647,21 @@ class Graph:
         return removed
 
     def increment_inactivity(self, active_sources: set[str]) -> None:
-        # NOTE (T12 / Fase 2): every link's ``inactive_turns`` changes each turn,
-        # so every link is marked dirty and re-upserted per turn. This still
-        # avoids the destructive global DELETE, but doesn't shrink link writes.
-        # A future optimization (Fase 2) is to stop persisting inactive_turns and
-        # derive it on load as ``turn_count - last_active_turn`` (an invariant
-        # this loop preserves), so only the few *active* links need a write.
+        # A1 (Piano 05, closes the T12/Fase 2 residual): only the links that are
+        # ACTIVE this turn get persisted (their last_active_turn changes). The
+        # in-memory ``inactive_turns`` of every other link still ticks up — the
+        # runtime logic (prune, ordering, orphan drop) relies on it — but the
+        # stored value is now derived at load time as
+        # ``turn_count - last_active_turn`` (an invariant this loop preserves),
+        # so inactive links no longer need an O(total links) re-upsert per turn.
+        # On Turso Cloud that was O(L) network rows per turn.
         for lk in self.links:
             if lk.source in active_sources or lk.target in active_sources:
                 lk.inactive_turns = 0
                 lk.last_active_turn = self.turn_count
+                self._dirty_links.add(self._link_key(lk))
             else:
-                lk.inactive_turns += 1
-            self._dirty_links.add(self._link_key(lk))
+                lk.inactive_turns += 1   # in-memory only; derived on load
         for nd in self.nodes:
             if nd.keyword not in active_sources and nd.salience > 0:
                 if (self.turn_count - nd.turn) > SALIENCE_DECAY_THRESHOLD:
@@ -1311,12 +1313,21 @@ class Graph:
             for row in link_rows:
                 if domain_filter and row[0] not in node_kws and row[1] not in node_kws:
                     continue
+                _last_active = row[6] or 0
+                # A1 (Piano 05): the persisted inactive_turns can be stale by
+                # design (inactive links are no longer re-upserted every turn).
+                # Derive it from the invariant turn_count - last_active_turn,
+                # clamped >= stored value for safety (shared stores mix writers
+                # with different per-user turn_counts; legacy rows may have
+                # last_active_turn=0).
+                _derived = max(0, self.turn_count - _last_active) if _last_active > 0 \
+                    else (row[7] or 0)
                 link = Link(
                     source=row[0], target=row[1], link_type=row[2], weight=row[3],
                     rationale=row[4] or "",
                     created_turn=row[5] or 0,
-                    last_active_turn=row[6] or 0,
-                    inactive_turns=row[7] or 0,
+                    last_active_turn=_last_active,
+                    inactive_turns=max(_derived, row[7] or 0) if _last_active > 0 else _derived,
                     co_activation_count=row[8] or 0,
                     target_context=row[9],
                 )

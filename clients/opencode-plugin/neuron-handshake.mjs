@@ -40,7 +40,18 @@ const NEURON_HANDSHAKE = (
   "persist what is new -- curate concept nouns, not verbs; typed links; " +
   "never a self-link.\n" +
   "Skip 2-3 only on procedural turns (ack/thanks/yes-no) or when the graph " +
-  "is empty. Step 1 still applies even then."
+  "is empty. Step 1 still applies even then.\n" +
+  "Anti-misuse rules (violating these pollutes the shared memory):\n" +
+  "- keywords: 3-5 singular concept NOUNS (entities/tech/ideas) -- never " +
+  "verbs, sentences, file paths or whole phrases;\n" +
+  "- links: only between THIS turn's keywords, always typed, never a " +
+  "self-link, weight honest (tangential if unsure);\n" +
+  "- one pre_turn per user turn, silently -- never announce or quote raw " +
+  "tool output in your reply;\n" +
+  "- before creating a concept that may already exist, check with " +
+  "neuron5_vector_search or neuron5_find_candidates instead of minting " +
+  "near-duplicates;\n" +
+  "- NEVER store secrets, tokens, passwords or personal data as concepts."
 );
 
 export const NeuronHandshake = async () => {
