@@ -493,19 +493,26 @@ function Show-InstallMenu {
     while ($true) {
         $idx = Show-Menu -Title "Install / Update Neuron" -Options @(
             "Install / Update Neuron (FULL - recommended)",
+            "Deploy update (sync repo -> install, then pytest -q)",
             "Dependencies only (Python + venv)",
             "PyTurso engine only",
             "Back"
         ) -Descriptions @(
             "Does everything: prerequisites -> PyTurso -> Neuron + model. Also UPDATES an existing install.",
+            "Fast update for an EXISTING install: scripts\deploy.ps1 copies the changed source files into the installed venv and runs the test suite there. Use after a git pull.",
             "Just verify Python and create the install venv (no packages yet).",
             "Just (re)install the PyTurso database engine from the bundled wheel.",
             ""
         )
         switch ($idx) {
             0 { Invoke-Logged -Name "install-full" -Action { Invoke-InstallEverything } }
-            1 { Invoke-Logged -Name "install-deps" -Action { Invoke-Prereqs } }
-            2 { Invoke-Logged -Name "install-pyturso" -Action { Invoke-PyTurso } }
+            1 { Invoke-Logged -Name "deploy-update" -Action {
+                    & "$ScriptDir\deploy.ps1" -RunTests -Yes
+                    if ($LASTEXITCODE -ne 0) { Write-Host "  [!] Deploy reported problems - see output above." -ForegroundColor DarkYellow }
+                }
+                Pause-Any }
+            2 { Invoke-Logged -Name "install-deps" -Action { Invoke-Prereqs } }
+            3 { Invoke-Logged -Name "install-pyturso" -Action { Invoke-PyTurso } }
             default { return }
         }
     }
@@ -563,12 +570,19 @@ function Invoke-Check {
 function Invoke-Tests {
     Clear-Host; Show-Banner
     $idx = Show-Menu -Title "Run the test suite" -Options @(
+        "pytest -q  (quick - the exact CI command)",
         "Core tests only (fast, no model download)",
-        "Full suite (downloads the ~80MB embedding model on first run)",
+        "Full suite (downloads the embedding model on first run)",
         "Back"
     )
-    if ($idx -eq 0) { & "$ScriptDir\run_tests.ps1" -Core }
-    elseif ($idx -eq 1) { & "$ScriptDir\run_tests.ps1" }
+    if ($idx -eq 0) {
+        $py = Get-RunnerPython
+        if (-not $py) { Write-Host "  [X] No Python available - install Neuron first." -ForegroundColor Red; Pause-Any; return }
+        Push-Location $Repo
+        try { & $py -m pytest -q } finally { Pop-Location }
+    }
+    elseif ($idx -eq 1) { & "$ScriptDir\run_tests.ps1" -Core }
+    elseif ($idx -eq 2) { & "$ScriptDir\run_tests.ps1" }
     else { return }
     Pause-Any
 }
@@ -583,6 +597,24 @@ function Invoke-Console {
     # --watch polls quietly and only re-prints when node/link/vector counts change.
     Push-Location $Repo
     try { & $py "$ScriptDir\neuron_console.py" --watch=3 } catch {} finally { Pop-Location }
+    Pause-Any
+}
+
+function Invoke-GraphVisualizer {
+    Clear-Host; Show-Banner
+    Write-Host "`n  Graph Visualizer - generate interactive HTML graph`n" -ForegroundColor Yellow
+    $py = Get-RunnerPython
+    if (-not $py) { Write-Host "  [X] No Python available." -ForegroundColor Red; Pause-Any; return }
+    if (-not (Test-NeuronReady $py)) { Show-NotInstalled "The Graph Visualizer"; Pause-Any; return }
+    $script = Join-Path $ScriptDir "generate_graph_html.py"
+    if (-not (Test-Path $script)) {
+        Write-Host "  [X] generate_graph_html.py not found in scripts\" -ForegroundColor Red
+        Pause-Any; return
+    }
+    Push-Location $Repo
+    try { & $py $script } catch {
+        Write-Host "  [X] Error: $_" -ForegroundColor Red
+    } finally { Pop-Location }
     Pause-Any
 }
 
@@ -1739,6 +1771,56 @@ function Invoke-AddToAllAI {
     Pause-Any
 }
 
+# Claude Cowork loads plugins from its own UI (Settings -> Plugins) — there is
+# no config file an installer can merge into. So "add to Cowork" = package the
+# neuron-guard plugin from the repo into a stable path, open Explorer on it,
+# and walk the user through the one-click install. (T58 follow-up)
+function Install-CoworkPlugin {
+    Clear-Host; Show-Banner
+    Write-Host "`n  Claude Cowork - install the neuron-guard plugin`n" -ForegroundColor Yellow
+    $src = Join-Path $Repo "clients\cowork-plugin\neuron-guard"
+    if (-not (Test-Path (Join-Path $src ".claude-plugin\plugin.json"))) {
+        Write-Host "  [X] Plugin source not found: $src" -ForegroundColor Red; Pause-Any; return
+    }
+    if (-not (Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null }
+    $dst = Join-Path $InstallDir "neuron-guard.plugin"
+    $tmp = Join-Path $env:TEMP "neuron-guard-plugin.zip"
+    try {
+        if (Test-Path $tmp) { Remove-Item $tmp -Force }
+        # NOT Compress-Archive: on Windows it writes zip entry names with '\'
+        # as the separator, and Cowork's plugin loader rejects them ("Zip file
+        # contains path with invalid characters"). The zip spec mandates '/',
+        # so build the archive with .NET ZipFile and forward-slash entries.
+        Add-Type -AssemblyName System.IO.Compression | Out-Null
+        Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+        $zip = [System.IO.Compression.ZipFile]::Open($tmp, 'Create')
+        try {
+            $srcFull = (Get-Item $src).FullName.TrimEnd('\')
+            Get-ChildItem $srcFull -Recurse -File -Force | ForEach-Object {
+                $rel = $_.FullName.Substring($srcFull.Length + 1).Replace('\', '/')
+                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                    $zip, $_.FullName, $rel) | Out-Null
+            }
+        } finally { $zip.Dispose() }
+        Move-Item $tmp $dst -Force
+        Write-Host "  [OK] Plugin packaged: $dst" -ForegroundColor Green
+    } catch { Write-Host "  [X] Could not package the plugin: $_" -ForegroundColor Red; Pause-Any; return }
+    Write-Host ""
+    Write-Host "  How to install it (VERIFIED on a real machine):" -ForegroundColor Gray
+    Write-Host "    1. Open Claude (Cowork) and DRAG the .plugin file into any chat" -ForegroundColor White
+    Write-Host "    2. The file renders as a card with an Install button - click it" -ForegroundColor White
+    Write-Host "    3. New sessions start with the Neuron handshake + usage rules" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  NOTE: do NOT upload it in Settings -> 'Personalizza e Plugin' - that" -ForegroundColor DarkYellow
+    Write-Host "  section expects marketplaces, and rejects the zip with a misleading" -ForegroundColor DarkYellow
+    Write-Host "  'invalid characters' error. The chat card is the supported path." -ForegroundColor DarkYellow
+    Write-Host ""
+    Write-Host "  What it adds: SessionStart handshake (help -> pre_turn -> store_turn +" -ForegroundColor DarkGray
+    Write-Host "  anti-misuse rules) and the on-demand 'neuron-usage' skill." -ForegroundColor DarkGray
+    try { Start-Process explorer.exe "/select,`"$dst`"" } catch {}
+    Pause-Any
+}
+
 function Invoke-AddToAI {
     while ($true) {
         $idx = Show-Menu -Title "Add Neuron to your AI - which app do you use?" -Options @(
@@ -1749,6 +1831,7 @@ function Invoke-AddToAI {
             "OpenCode",
             "Zed",
             "Codex CLI (OpenAI)",
+            "Claude Cowork (neuron-guard plugin)",
             "ALL supported AI clients (one shot)",
             "ChatGPT or another remote connector",
             "Back"
@@ -1760,6 +1843,7 @@ function Invoke-AddToAI {
             "Local MCP app. No API key needed - Neuron runs on your machine.",
             "Local MCP app. No API key needed - Neuron runs on your machine.",
             "OpenAI's open-source terminal agent (Tauri). TOML config + SessionStart hooks.",
+            "Packages the neuron-guard plugin (handshake + anti-misuse + usage skill) and guides the 3-click install from Cowork's Settings -> Plugins.",
             "Wire Neuron into every supported app at once — Claude Desktop, Code, Cursor, VS Code, OpenCode, Zed, Codex CLI.",
             "Can't run local stdio - needs the HTTP bridge + a public HTTPS URL.",
             ""
@@ -1767,6 +1851,7 @@ function Invoke-AddToAI {
 
         $map = @{ 0='claude-desktop'; 1='claude-code'; 2='cursor'; 3='vscode'; 4='opencode'; 5='zed'; 6='codex' }
 
+        if ($idx -eq 7) { Install-CoworkPlugin; continue }
         if ($idx -ge 0 -and $idx -le 6) {
             Clear-Host; Show-Banner
             Write-Host "`n  Configuring: $($map[$idx])`n" -ForegroundColor Yellow
@@ -1776,10 +1861,10 @@ function Invoke-AddToAI {
             Maybe-StoreLlmKey
             Pause-Any
         }
-        elseif ($idx -eq 7) {
+        elseif ($idx -eq 8) {
             Invoke-AddToAllAI
         }
-        elseif ($idx -eq 8) {
+        elseif ($idx -eq 9) {
             Show-RemoteHelp
         }
         else { return }
@@ -2566,6 +2651,7 @@ function Main {
             "7) Live Graph Console",
             "8) Embedding model (multilingual vs lightweight)",
             "9) Debug Mode",
+            "10) Graph Visualizer (interactive HTML)",
             "-  Check & repair AI registrations (doctor)",
             "-  Start/Stop MCP server",
             "-  Clean install / Uninstall Neuron",
@@ -2581,6 +2667,7 @@ function Main {
             "Live graph view (nodes/links/health) - refreshes only when it changes.",
             "Switch between the ~380MB multilingual default and a ~90MB English-only model.",
             "Toggle detailed terminal output ON/OFF (dir creation, file copies — useful to debug 'Add to your AI'). Persisted in .env.",
+            "Generate an interactive HTML graph from your memory. Opens in browser with zoom, filters, tooltips. Edit colors in the config JS.",
             "One-button health check: scans every AI config (broken/duplicate/stale entries) AND running Neuron processes (who launched them, orphans, old versions still in RAM). Offers to repair everything, always with backups.",
             "Manually start python -m neuron (diagnostic) or stop lingering server processes.",
             "Remove the install (venv, shortcut, app registrations); optionally reinstall fresh.",
@@ -2604,13 +2691,14 @@ function Main {
             6 { Invoke-Console }
             7 { Invoke-EmbedModelMenu }
             8 { Invoke-DebugModeToggle }
-            9 { Invoke-Doctor }
-            10 { Invoke-ServerControl }
-            11 { Invoke-CleanUninstall }
-            12      { break }
+            9 { Invoke-GraphVisualizer }
+            10 { Invoke-Doctor }
+            11 { Invoke-ServerControl }
+            12 { Invoke-CleanUninstall }
+            13      { break }
             default { break }
         }
-        if ($real -eq 12) { break }
+        if ($real -eq 13) { break }
     }
     # Housekeeping: don't silently orphan a background bridge on exit.
     if (Test-BridgeAlive) {
