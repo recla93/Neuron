@@ -15,6 +15,13 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.3.1] — 2026-07-11
+
+### Fixed
+- Graph Visualizer: the 🎨 node-size slider had no effect — nodes carried a
+  vis-network `value`, which switches to value-based scaling and silently
+  ignores `size`. Dropped `value`; sizes are computed (salience × slider).
+
 ## [5.3.0] "Quality at the door" — 2026-07-11
 
 Memory-quality release: the server now *enforces* good curation instead of
@@ -67,6 +74,9 @@ Two more modules leave the server monolith. No data migration needed (the
 - Numpy-array truthiness crash in the vector-search fallback (`pre_turn`
   "truth value of an array is ambiguous").
 - A2 search-cache key collisions after garbage collection (weakref guard).
+- `neuron doctor`/`register` crashed with UnicodeEncodeError on cp1252
+  consoles (the → glyph) when run with a non-venv python — same UTF-8
+  self-guard the other CLI scripts already had.
 
 ## [5.2.0] "Piano 05" — 2026-07-10
 

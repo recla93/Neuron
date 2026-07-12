@@ -701,6 +701,15 @@ def process_doctor(slug: str, python_exe: str, fix: bool = False,
 
 
 def cli(argv: list[str]) -> int:
+    # Self-safe UTF-8 guard (same pattern as the T17 scripts): doctor/register
+    # output contains → and ⚠-style glyphs, and a default Windows console
+    # (cp1252) makes print() crash with UnicodeEncodeError when this runs
+    # under a python other than the UTF-8-configured venv one. Best-effort.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     import argparse
     ap = argparse.ArgumentParser(prog="neuron register|doctor")
     ap.add_argument("cmd", choices=["register", "doctor"])

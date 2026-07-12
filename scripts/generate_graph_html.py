@@ -325,7 +325,10 @@ function visNode(n){
   const c = styledDomColor(n.domain), hot = isHot(n), dorm = isDormant(n);
   return {
     id:n.keyword, label: labelsOn ? n.keyword : " ",
-    value:n.salience, size:nodeSize(n.salience), shape:"dot",
+    // NO `value:` here — with value set, vis-network switches to value-based
+    // scaling (nodes.scaling min/max) and SILENTLY IGNORES `size`, which made
+    // the 🎨 node-size slider a no-op. We size nodes ourselves.
+    size:nodeSize(n.salience), shape:"dot",
     color:{background:c, border: hot ? "#ffffff" : (dorm ? "#39406b" : c),
            highlight:{background:c, border:"#ffffff"},
            hover:{background:c, border:"#c9d2ff"}},
@@ -387,7 +390,6 @@ function boot(){
                           springConstant:0.07, damping:0.5, avoidOverlap:0.6},
         stabilization:{iterations:180, fit:true}},
       interaction:{hover:true, tooltipDelay:120, multiselect:false, navigationButtons:false},
-      nodes:{scaling:{min:8,max:44}},
     });
   rebuild(); wire(); setInterval(pulse, 900);
 }
