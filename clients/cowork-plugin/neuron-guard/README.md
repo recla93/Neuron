@@ -26,7 +26,16 @@ server (v5 "Synapse", server key `neuron5`).
 
 ## Install
 
-Cowork: Settings → Plugins → install `neuron-guard.plugin`.
+**Drag `neuron-guard.plugin` into any Cowork chat** — it renders as a card with
+an Install button. Click it, done. (Verified path.)
+
+Do **not** upload it under Settings → "Personalizza e Plugin": that section
+expects plugin *marketplaces* and rejects the zip with a misleading
+"invalid characters" error.
+
+Team distribution at scale: publish a marketplace (a git repo with
+`.claude-plugin/marketplace.json` listing this plugin) and have teammates add
+it once from the Plugins settings; installs and updates then flow from there.
 
 ## Relation to the non-plugin hooks
 

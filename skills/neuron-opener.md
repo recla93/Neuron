@@ -35,3 +35,15 @@ is empty. Cheap fallback when you won't curate yourself:
 
 Neuron degrades gracefully — if a tool returns nothing, just proceed; never block the
 conversation on it.
+
+## Anti-misuse (hard rules — violating them pollutes the shared memory)
+
+- keywords: 3-5 singular concept NOUNS (entities/tech/ideas) — never verbs,
+  sentences, file paths or whole phrases;
+- links: only between THIS turn's keywords, always typed, never a self-link,
+  weight honest (tangential if unsure);
+- one `pre_turn` per user turn, silently — never announce or quote raw tool
+  output in your reply;
+- before creating a concept that may already exist, check `vector_search` /
+  `find_candidates` instead of minting near-duplicates;
+- NEVER store secrets, tokens, passwords or personal data as concepts.

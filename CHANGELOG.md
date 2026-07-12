@@ -15,6 +15,59 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.3.0] "Quality at the door" — 2026-07-11
+
+Memory-quality release: the server now *enforces* good curation instead of
+hoping for it, nodes carry facts (episodes) and loop compliance is measurable.
+Two more modules leave the server monolith. No data migration needed (the
+`episodes` table is created idempotently on first save).
+
+### Added
+- **Curation gate (T54).** `store_turn` keywords pass through
+  `neuron/curation.py`: filler verbs, phrases and file paths are dropped with
+  an in-context corrective note; near-duplicates are remapped onto the
+  existing node (case/accents/EN-IT plural folding); link endpoints are
+  canonicalized and dangling/self links refused. Soft gate: the turn goes
+  through whenever at least one keyword survives.
+- **Episodic payload (T56).** New `episodes(context, keyword, turn, text)`
+  table; `store_turn` accepts an `episode` fact sentence, `pre_turn` returns
+  the top node's recent facts (`facts: ...`). Capped per node, cleaned up with
+  node removal, tolerant of legacy stores.
+- **Loop-compliance telemetry (T55).** `status` reports per-session
+  pre_turn/store_turn/other counts with a warning when stores outpace loads.
+- **Doctor: live-process section (B6b).** `neuron doctor` also lists running
+  `python -m neuron` servers with their parent app, kills orphans with
+  `--fix`, flags stale-venv servers and per-app duplicates.
+- **Graph Visualizer v2.** Reads through Neuron's own storage engine — so it
+  now sees **Turso Cloud** too (the old version was raw-sqlite, local only) —
+  exports every context with episodes/facts, and renders a redesigned
+  interactive HTML: salience-sized domain-colored nodes, Hebbian-thickened
+  edges, drift-link styling, dormant fading, hot-node halo, neighborhood
+  highlight, search, domain/type filter chips, insights panel (hubs, most
+  salient, dormant, strongest synapses, cross-context bridges), heartbeat
+  pulse and a time-travel Replay slider that shows the memory growing.
+  Includes an Obsidian-style 🎨 appearance editor: node/link/label size and
+  physics sliders plus per-domain color pickers, persisted in the browser.
+- **Menu:** `pytest -q` entry in the test menu; "Deploy update" entry
+  (`deploy.ps1 -RunTests -Yes`) in Install/Update; "Claude Cowork
+  (neuron-guard plugin)" in Add-to-AI — packages the plugin with
+  forward-slash zip entries and guides the drag-into-chat install (the
+  Settings uploader only accepts marketplaces).
+
+### Changed
+- **server.py modularization (T57, phases 1-3).** `extraction.py`
+  (SemanticExtractor + lexicons) and `funnel.py` (signpost, skill registry)
+  extracted verbatim with full re-export — ~2550 → ~2150 lines, test-suite
+  untouched. `search`/`stimulus` remain (ADR-006).
+- **Signpost compressed to 810 chars** (with live status ≤ ~912, cap 1000):
+  anti-misuse rules included telegraphically; full rules live in the gate,
+  opener, skills and client hooks.
+
+### Fixed
+- Numpy-array truthiness crash in the vector-search fallback (`pre_turn`
+  "truth value of an array is ambiguous").
+- A2 search-cache key collisions after garbage collection (weakref guard).
+
 ## [5.2.0] "Piano 05" — 2026-07-10
 
 Core efficiency + centralized installer. The memory engine now writes only

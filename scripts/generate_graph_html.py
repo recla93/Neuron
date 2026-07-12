@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """
-generate_graph_html.py — Genera neuron-graph.html autocontenuto + config JS.
+generate_graph_html.py — Neuron Graph Visualizer (v2, T61).
 
-Trova automaticamente la directory di installazione di Neuron, legge il grafo
-dal database SQLite, e genera un HTML interattivo con vis-network embedded.
+Reads the graph through Neuron's OWN storage engine (neuron.models.Graph), so
+it works on every tier — local SQLite, local Turso file, and **Turso Cloud**
+(the previous version used raw sqlite3 and was blind to the cloud). Exports
+EVERY context (nodes, links, episodes/facts) and generates a self-contained
+interactive HTML: force-directed physics (kept), domain palette, salience
+sizing, drift-link styling, neighborhood highlight, search, domain/type
+filters, an insights panel (hubs, dormant, strongest synapses) and a
+time-travel slider that replays the graph growing turn by turn.
 
 Usage:
-    python scripts/generate_graph_html.py
+    python scripts/generate_graph_html.py [--context NAME] [--no-open]
 """
 
+import argparse
+import glob as _glob
 import json
 import os
-import sqlite3
 import sys
 import urllib.request
 from pathlib import Path
@@ -40,871 +47,633 @@ INSTALL_DIR = _default_install_dir()
 OUTPUT_DIR = INSTALL_DIR / "NeuronGraphExportHTML"
 
 # ---------------------------------------------------------------------------
-# Graph export from SQLite
+# Extraction — through Neuron's engine (cloud-aware), sqlite3 fallback
 # ---------------------------------------------------------------------------
-def export_graph(context: str = "default") -> dict:
-    """Export graph data from Neuron's SQLite database."""
-    db_path = GRAPHS_DIR / f"graph_{context}.db"
-    if not db_path.exists():
-        print(f"  [!] Database not found: {db_path}")
-        sys.exit(1)
+# Import neuron: venv (installed) first, then repo src/ (source checkout).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+try:
+    from neuron import db as _db                     # loads .env too (neuron/__init__)
+    from neuron.models import Graph
+    _ENGINE = getattr(_db, "ENGINE_NAME", "sqlite")
+    _REMOTE = bool(getattr(_db, "REMOTE_TURSO", False))
+    _HAVE_NEURON = True
+except Exception as _e:                              # pragma: no cover
+    _db = None
+    _ENGINE, _REMOTE, _HAVE_NEURON = "sqlite3 (fallback)", False, False
+    print(f"  [!] neuron package not importable ({_e}); local-only sqlite fallback.")
 
-    conn = sqlite3.connect(str(db_path))
-    try:
-        # Meta
-        meta = {}
+
+def list_contexts() -> list[str]:
+    """Every context: local graph_*.db files + (on cloud) DISTINCT context."""
+    ctxs: set[str] = set()
+    for p in _glob.glob(str(GRAPHS_DIR / "graph_*.db")):
+        name = Path(p).stem[len("graph_"):]
+        ctxs.add(name.replace("__", "/"))            # registry path flattening
+    if _HAVE_NEURON and _REMOTE:
         try:
-            cursor = conn.execute("SELECT key, value FROM meta")
-            meta = dict(cursor.fetchall())
-        except Exception:
-            pass
+            conn = _db.connect("")                    # remote tier ignores path
+            try:
+                for (c,) in conn.execute("SELECT DISTINCT context FROM nodes").fetchall():
+                    if c:
+                        ctxs.add(c)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"  [!] cloud context listing failed: {e}")
+    return sorted(ctxs) or ["default"]
 
-        # Nodes
-        nodes = []
-        cols_info = {c[1]: c[2] for c in conn.execute("PRAGMA table_info(nodes)").fetchall()}
-        has_entities = "entities" in cols_info
-        for row in conn.execute(
+
+def export_graph(context: str = "default") -> dict:
+    """Export one context via the engine (any tier). Includes episodes/facts."""
+    local_path = str(GRAPHS_DIR / f"graph_{context.replace('/', '__')}.db")
+    if _HAVE_NEURON:
+        g = Graph()
+        g.load_sqlite(local_path, context=context)   # remote tier reads the cloud
+        nodes = [{
+            "keyword": nd.keyword, "turn": nd.turn, "topic": nd.topic or "",
+            "domain": nd.domain or "general", "sentiment": nd.sentiment or "neutral",
+            "salience": nd.salience or 1,
+            "entities": nd.entities or [], "tags": nd.tags or [],
+            "episodes": [e["text"] for e in
+                         sorted(g.episodes.get(nd.keyword, []), key=lambda e: -e["turn"])][:5],
+        } for nd in g.nodes]
+        links = [{
+            "source": lk.source, "target": lk.target,
+            "link_type": lk.link_type or "deepening", "weight": lk.weight or "medium",
+            "rationale": lk.rationale or "",
+            "created_turn": lk.created_turn or 0,
+            "last_active_turn": lk.last_active_turn or 0,
+            "coact": getattr(lk, "co_activation_count", 0) or 0,
+            "drift": getattr(lk, "target_context", None),
+        } for lk in g.links]
+        return {"context": context, "turn_count": g.turn_count,
+                "nodes": nodes, "links": links}
+
+    # --- raw sqlite3 fallback (no neuron import) ---
+    import sqlite3
+    if not os.path.exists(local_path):
+        return {"context": context, "turn_count": 0, "nodes": [], "links": []}
+    conn = sqlite3.connect(local_path)
+    try:
+        meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+        nodes = [{
+            "keyword": r[0], "turn": r[1], "topic": r[2] or "", "domain": r[3] or "general",
+            "sentiment": r[4] or "neutral", "salience": r[5] or 1,
+            "entities": json.loads(r[6] or "[]"), "tags": json.loads(r[7] or "[]"),
+            "episodes": [],
+        } for r in conn.execute(
             "SELECT keyword, turn, topic, domain, sentiment, salience, "
             "COALESCE(entities,'[]'), COALESCE(tags,'[]'), COALESCE(refs,'[]') "
-            "FROM nodes ORDER BY id"
-        ):
-            entities = json.loads(row[6]) if row[6] else []
-            tags = json.loads(row[7]) if row[7] else []
-            refs = json.loads(row[8]) if row[8] else []
-            nodes.append({
-                "keyword": row[0],
-                "turn": row[1],
-                "topic": row[2] or "",
-                "domain": row[3] or "general",
-                "sentiment": row[4] or "neutral",
-                "salience": row[5] or 1,
-                "entities": entities,
-                "tags": tags,
-                "references": refs,
-            })
-
-        # Links
-        links = []
-        for row in conn.execute(
+            "FROM nodes ORDER BY id")]
+        links = [{
+            "source": r[0], "target": r[1], "link_type": r[2] or "deepening",
+            "weight": r[3] or "medium", "rationale": r[4] or "",
+            "created_turn": r[5] or 0, "last_active_turn": r[6] or 0,
+            "coact": 0, "drift": None,
+        } for r in conn.execute(
             "SELECT source, target, link_type, weight, rationale, "
-            "created_turn, last_active_turn, inactive_turns "
-            "FROM links ORDER BY id"
-        ):
-            links.append({
-                "source": row[0],
-                "target": row[1],
-                "link_type": row[2] or "deepening",
-                "weight": row[3] or "medium",
-                "rationale": row[4] or "",
-                "created_turn": row[5] or 0,
-                "last_active_turn": row[6] or 0,
-                "inactive_turns": row[7] or 0,
-            })
-
-        return {
-            "session_id": meta.get("session_id", context),
-            "turn_count": int(meta.get("turn_count", "0")),
-            "nodes": nodes,
-            "links": links,
-        }
+            "created_turn, last_active_turn FROM links ORDER BY id")]
+        return {"context": context, "turn_count": int(meta.get("turn_count", "0") or 0),
+                "nodes": nodes, "links": links}
     finally:
         conn.close()
 
+
 # ---------------------------------------------------------------------------
-# Download vis-network (cached)
+# vis-network (cached download; CDN <script src> as last resort)
 # ---------------------------------------------------------------------------
-VIS_NETWORK_URL = "https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"
+VIS_NETWORK_URL = "https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"
 VIS_NETWORK_FILE = OUTPUT_DIR / "vis-network.min.js"
 
-def download_vis_network() -> str:
-    """Download vis-network.min.js (cached locally)."""
-    if VIS_NETWORK_FILE.exists():
+def get_vis_network() -> "str | None":
+    if VIS_NETWORK_FILE.exists() and VIS_NETWORK_FILE.stat().st_size > 100_000:
         return VIS_NETWORK_FILE.read_text(encoding="utf-8")
-
-    print(f"  Downloading vis-network from CDN (one-time)...")
     try:
-        req = urllib.request.Request(VIS_NETWORK_URL, headers={"User-Agent": "NeuronGraph/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = resp.read().decode("utf-8")
-        VIS_NETWORK_FILE.write_text(data, encoding="utf-8")
-        print(f"  [OK] vis-network cached: {VIS_NETWORK_FILE}")
-        return data
+        print("  Downloading vis-network (one-time, cached)...")
+        code = urllib.request.urlopen(VIS_NETWORK_URL, timeout=30).read().decode("utf-8")
+        VIS_NETWORK_FILE.write_text(code, encoding="utf-8")
+        return code
     except Exception as e:
-        print(f"  [X] Download failed: {e}")
-        print(f"      Download manually from {VIS_NETWORK_URL}")
-        print(f"      Save as: {VIS_NETWORK_FILE}")
-        sys.exit(1)
+        print(f"  [!] download failed ({e}) — the HTML will load it from the CDN instead.")
+        return None
+
 
 # ---------------------------------------------------------------------------
-# Config JS generation
+# HTML
 # ---------------------------------------------------------------------------
-CONFIG_JS = """\
-// ============================================================
-// NEURON GRAPH — CONFIGURAZIONE COLORI
-// ============================================================
-// Modifica i valori qui sotto. Ogni riga ha un placeholder
-// che spiega cosa controlla. Salva e ricarica il browser.
-//
-// SCALA IMPORTANZA:
-//   Caldo = nodi/legami forti, alta importanza
-//   Neutro = media importanza
-//   Freddo = nodi/legami deboli, relazioni indirette
-// ============================================================
 
-window.NEURON_GRAPH_CONFIG = {
+def generate_html(all_graphs: dict, active_ctx: str, vis_code: "str | None") -> str:
+    vis_tag = (f"<script>{vis_code}</script>" if vis_code
+               else f'<script src="{VIS_NETWORK_URL}"></script>')
+    data_json = json.dumps(all_graphs, ensure_ascii=False)
+    engine = _ENGINE
+    return HTML_TEMPLATE \
+        .replace("__VIS_TAG__", vis_tag) \
+        .replace("__DATA__", data_json) \
+        .replace("__ACTIVE_CTX__", json.dumps(active_ctx)) \
+        .replace("__ENGINE__", engine)
 
-    // --- COLORI NODI (salienza) ---
-    // alta salienza (8+)    -> caldo
-    nodeHigh:     "#FF6B35",  // arancione vivo
 
-    // media salienza (4-7)  -> neutro
-    nodeMedium:   "#CE93D8",  // viola medio
-
-    // bassa salienza (1-3)  -> freddo
-    nodeLow:      "#4FC3F7",  // azzurro
-
-    // --- COLORI LEGAMI (weight) ---
-    // strong  -> caldo
-    linkStrong:   "#FF4444",  // rosso
-
-    // medium -> neutro
-    linkMedium:   "#FFB74D",  // ambra
-
-    // tangential -> freddo
-    linkTangential: "#4DD0E1", // ciano
-
-    // --- TEMA ---
-    background:   "#0d1117",  // sfondo scuro
-    panelBg:      "#161b22",  // pannello laterale
-    text:         "#c9d1d9",  // testo principale
-    textMuted:    "#8b949e",  // testo secondario
-    border:       "#30363d",  // bordi pannelli
-
-    // --- LAYOUT ---
-    physics:      true,       // true = simulazione fisica, false = statico
-    iterations:   2000,       // iterazioni physics
-    gravity:      -8000,      // gravita repulsiva tra nodi (negativo = respinge)
-};
-"""
-
-# ---------------------------------------------------------------------------
-# HTML generation
-# ---------------------------------------------------------------------------
-def generate_html(graph_data: dict, vis_network_code: str) -> str:
-    """Generate the full HTML with embedded vis-network and graph data."""
-    graph_json = json.dumps(graph_data, ensure_ascii=False, indent=2)
-
-    return f"""<!DOCTYPE html>
-<html lang="it">
+HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Neuron Graph Visualizer</title>
+<meta charset="utf-8">
+<title>Neuron — Memory Graph</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+__VIS_TAG__
 <style>
-* {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{
-    background: #0d1117;
-    color: #c9d1d9;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    overflow: hidden;
-    height: 100vh;
-}}
-
-/* Header */
-.header {{
-    background: #161b22;
-    border-bottom: 1px solid #30363d;
-    padding: 8px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 48px;
-    z-index: 100;
-}}
-.header h1 {{
-    font-size: 16px;
-    font-weight: 600;
-    color: #58a6ff;
-}}
-.header .stats {{
-    font-size: 12px;
-    color: #8b949e;
-}}
-.header .controls {{
-    display: flex;
-    gap: 8px;
-}}
-.header .controls button {{
-    background: #21262d;
-    border: 1px solid #30363d;
-    color: #c9d1d9;
-    padding: 4px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 12px;
-}}
-.header .controls button:hover {{
-    background: #30363d;
-    border-color: #58a6ff;
-}}
-
-/* Main layout */
-.main {{
-    display: flex;
-    height: calc(100vh - 48px);
-}}
-
-/* Graph container */
-#graph-container {{
-    flex: 1;
-    position: relative;
-    width: 100%;
-    height: 100%;
-}}
-
-/* Sidebar */
-.sidebar {{
-    width: 360px;
-    background: #161b22;
-    border-left: 1px solid #30363d;
-    overflow-y: auto;
-    display: none;
-}}
-.sidebar.active {{
-    display: block;
-}}
-.sidebar-header {{
-    padding: 12px 16px;
-    border-bottom: 1px solid #30363d;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}}
-.sidebar-header h2 {{
-    font-size: 14px;
-    color: #58a6ff;
-}}
-.sidebar-close {{
-    background: none;
-    border: none;
-    color: #8b949e;
-    cursor: pointer;
-    font-size: 18px;
-}}
-.sidebar-close:hover {{ color: #c9d1d9; }}
-.sidebar-content {{
-    padding: 16px;
-}}
-.detail-section {{
-    margin-bottom: 16px;
-}}
-.detail-section h3 {{
-    font-size: 11px;
-    text-transform: uppercase;
-    color: #8b949e;
-    margin-bottom: 8px;
-    letter-spacing: 0.5px;
-}}
-.detail-row {{
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 0;
-    font-size: 13px;
-}}
-.detail-row .label {{
-    color: #8b949e;
-}}
-.detail-row .value {{
-    color: #c9d1d9;
-    text-align: right;
-    max-width: 200px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}}
-.link-item {{
-    background: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 8px 12px;
-    margin-bottom: 6px;
-    font-size: 12px;
-}}
-.link-item .link-header {{
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 4px;
-}}
-.link-item .link-type {{
-    font-weight: 600;
-}}
-.link-item .link-weight {{
-    font-size: 11px;
-    padding: 1px 6px;
-    border-radius: 10px;
-}}
-.link-item .link-rationale {{
-    color: #8b949e;
-    font-style: italic;
-}}
-.weight-strong {{ background: #FF444422; color: #FF4444; }}
-.weight-medium {{ background: #FFB74D22; color: #FFB74D; }}
-.weight-tangential {{ background: #4DD0E122; color: #4DD0E1; }}
-
-/* Bottom panel: filters + legend */
-.bottom-panel {{
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: #161b22ee;
-    border-top: 1px solid #30363d;
-    padding: 8px 16px;
-    display: flex;
-    gap: 24px;
-    align-items: center;
-    font-size: 12px;
-    z-index: 50;
-    backdrop-filter: blur(8px);
-}}
-.filter-group {{
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    flex-wrap: wrap;
-}}
-.filter-item {{
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}}
-.filter-item input[type="checkbox"] {{
-    accent-color: #58a6ff;
-}}
-.legend {{
-    display: flex;
-    gap: 16px;
-    margin-left: auto;
-    color: #8b949e;
-}}
-.legend-item {{
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}}
-.legend-line {{
-    width: 24px;
-    height: 2px;
-    border-radius: 1px;
-}}
-.legend-line.strong {{ background: #FF4444; height: 3px; }}
-.legend-line.medium {{ background: #FFB74D; }}
-.legend-line.tangential {{ background: #4DD0E1; height: 1px; border-top: 1px dashed #4DD0E1; background: none; }}
-
-/* Tooltip */
-.tooltip {{
-    position: absolute;
-    background: #1c2128;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 12px;
-    pointer-events: none;
-    z-index: 200;
-    max-width: 300px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    display: none;
-}}
-.tooltip .tt-keyword {{
-    font-weight: 600;
-    color: #58a6ff;
-    margin-bottom: 4px;
-}}
-.tooltip .tt-row {{
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 1px 0;
-}}
-.tooltip .tt-label {{
-    color: #8b949e;
-}}
-.tooltip .tt-value {{
-    color: #c9d1d9;
-}}
+:root{
+  --bg0:#0b0e1a; --bg1:#121933; --panel:rgba(18,24,48,.82); --panel-br:rgba(120,140,255,.18);
+  --tx:#e8ecff; --tx-dim:#8b93b8; --accent:#7c8cff;
+}
+*{box-sizing:border-box; margin:0}
+html,body{height:100%; overflow:hidden}
+body{font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif; color:var(--tx);
+     background:radial-gradient(1200px 800px at 70% 20%, var(--bg1), var(--bg0) 70%);}
+#net{position:absolute; inset:0}
+.panel{position:absolute; background:var(--panel); border:1px solid var(--panel-br);
+       border-radius:14px; backdrop-filter:blur(10px); box-shadow:0 8px 32px rgba(0,0,0,.45)}
+#topbar{top:14px; left:14px; right:14px; padding:10px 14px; display:flex; gap:10px;
+        align-items:center; flex-wrap:wrap; z-index:10}
+#topbar b{font-size:15px; letter-spacing:.4px}
+#topbar .brain{font-size:18px}
+#stats{color:var(--tx-dim); font-size:12px; margin-right:auto}
+select,input[type=text]{background:#0e1430; color:var(--tx); border:1px solid var(--panel-br);
+        border-radius:8px; padding:6px 10px; font:inherit; outline:none}
+input[type=text]{width:190px}
+input[type=text]:focus{border-color:var(--accent)}
+button{background:#1a2350; color:var(--tx); border:1px solid var(--panel-br); border-radius:8px;
+       padding:6px 12px; font:inherit; cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.on{background:var(--accent); color:#0b0e1a; font-weight:600}
+.chip{display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
+      border:1px solid var(--panel-br); cursor:pointer; font-size:12px; user-select:none}
+.chip .dot{width:9px;height:9px;border-radius:50%}
+.chip.off{opacity:.28}
+#chips{display:flex; gap:6px; flex-wrap:wrap}
+#insights{left:14px; top:78px; bottom:88px; width:265px; padding:14px; overflow-y:auto; z-index:9}
+#insights h3{font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--tx-dim);
+             margin:14px 0 6px}
+#insights h3:first-child{margin-top:0}
+.item{padding:5px 8px; border-radius:8px; cursor:pointer; display:flex; justify-content:space-between; gap:8px}
+.item:hover{background:rgba(124,140,255,.12)}
+.item .v{color:var(--tx-dim); font-size:12px; white-space:nowrap}
+.item .k{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+#side{right:14px; top:78px; width:300px; max-height:calc(100% - 180px); padding:16px;
+      overflow-y:auto; display:none; z-index:9}
+#side h2{font-size:17px; margin-bottom:2px; overflow-wrap:anywhere}
+#side .sub{color:var(--tx-dim); font-size:12px; margin-bottom:10px}
+#side .row{margin:7px 0; font-size:13px}
+#side .lbl{color:var(--tx-dim); font-size:11px; text-transform:uppercase; letter-spacing:1px}
+.salbar{height:6px; border-radius:4px; background:#0e1430; margin-top:4px; overflow:hidden}
+.salbar>div{height:100%; border-radius:4px; background:linear-gradient(90deg,#4be1a0,#7c8cff)}
+.fact{background:rgba(124,140,255,.08); border-left:3px solid var(--accent); border-radius:0 8px 8px 0;
+      padding:6px 9px; margin:6px 0; font-size:12.5px}
+.tag{display:inline-block; background:#1a2350; border-radius:6px; padding:1px 8px; margin:2px 3px 0 0;
+     font-size:11.5px; color:var(--tx-dim)}
+#timebar{bottom:14px; left:14px; right:14px; padding:10px 16px; display:flex; gap:14px;
+         align-items:center; z-index:10}
+#turnlbl{min-width:120px; color:var(--tx-dim); font-size:12.5px}
+input[type=range]{flex:1; accent-color:var(--accent)}
+#legend{position:absolute; right:20px; bottom:88px; font-size:11.5px; color:var(--tx-dim); z-index:8;
+        text-align:right}
+#legend span{margin-left:10px}
+#toast{position:absolute; left:50%; top:84px; transform:translateX(-50%); background:var(--panel);
+       border:1px solid var(--panel-br); border-radius:10px; padding:8px 16px; display:none; z-index:20}
+#stylepanel{right:14px; top:78px; width:290px; max-height:calc(100% - 180px); padding:16px;
+            overflow-y:auto; display:none; z-index:11}
+#stylepanel h3{font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--tx-dim); margin:12px 0 6px}
+#stylepanel h3:first-child{margin-top:0}
+.sl{display:flex; align-items:center; gap:10px; margin:6px 0; font-size:12.5px}
+.sl label{width:110px; color:var(--tx-dim)}
+.sl input[type=range]{flex:1}
+.sl .val{width:38px; text-align:right; color:var(--tx-dim); font-size:11.5px}
+.colrow{display:flex; align-items:center; gap:8px; margin:4px 0; font-size:12.5px}
+.colrow input[type=color]{width:26px; height:22px; border:none; border-radius:6px; background:none; padding:0; cursor:pointer}
+#stylepanel .foot{display:flex; gap:8px; margin-top:14px}
+::-webkit-scrollbar{width:8px} ::-webkit-scrollbar-thumb{background:#26305e; border-radius:4px}
 </style>
 </head>
 <body>
+<div id="net"></div>
 
-<div class="header">
-    <h1>Neuron Graph Visualizer</h1>
-    <span class="stats" id="stats"></span>
-    <div class="controls">
-        <button onclick="fitGraph()">Fit</button>
-        <button onclick="togglePhysics()">Physics</button>
-    </div>
+<div id="topbar" class="panel">
+  <span class="brain">🧠</span><b>Neuron</b>
+  <select id="ctxsel" title="context"></select>
+  <span id="stats"></span>
+  <div id="chips"></div>
+  <input type="text" id="search" placeholder="🔍 find a concept…">
+  <button id="btn-insights" class="on" title="toggle insights panel">Insights</button>
+  <button id="btn-physics" class="on" title="toggle physics">Physics</button>
+  <button id="btn-labels" class="on" title="toggle labels">Labels</button>
+  <button id="btn-pulse" class="on" title="heartbeat on the most salient nodes">Pulse</button>
+  <button id="btn-style" title="edit appearance (Obsidian-style)">🎨 Style</button>
 </div>
 
-<div class="main">
-    <div id="graph-container"></div>
-    <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <h2 id="sidebar-title">Dettaglio</h2>
-            <button class="sidebar-close" onclick="closeSidebar()">&times;</button>
-        </div>
-        <div class="sidebar-content" id="sidebar-content"></div>
-    </div>
+<div id="insights" class="panel"></div>
+<div id="side" class="panel"></div>
+<div id="stylepanel" class="panel"></div>
+
+<div id="timebar" class="panel">
+  <button id="btn-play" title="replay the memory growing">▶ Replay</button>
+  <input type="range" id="timeline" min="1" max="1" value="1">
+  <span id="turnlbl"></span>
 </div>
-
-<div class="bottom-panel">
-    <div class="filter-group" id="filters"></div>
-    <div class="legend">
-        <span class="legend-item"><span class="legend-line strong"></span> strong</span>
-        <span class="legend-item"><span class="legend-line medium"></span> medium</span>
-        <span class="legend-item"><span class="legend-line tangential"></span> tangential</span>
-    </div>
-</div>
-
-<div class="tooltip" id="tooltip"></div>
-
-<script src="./vis-network.min.js"></script>
+<div id="legend"></div>
+<div id="toast"></div>
 
 <script>
-// ============================================================
-// CONFIG
-// ============================================================
-</script>
-<script src="./neuron-graph-config.js"></script>
+const GRAPHS = __DATA__;
+let CTX = __ACTIVE_CTX__;
+const ENGINE = "__ENGINE__";
 
-<script>
-// ============================================================
-// GRAPH DATA (embedded)
-// ============================================================
-const GRAPH_DATA = {graph_json};
+// ---- theme ---------------------------------------------------------------
+const DOMAIN_COLORS = {
+  AI:"#b07cff", backend:"#4be1a0", frontend:"#ffb84d", gaming:"#ff6b9d",
+  architecture:"#53c7ff", general:"#8b93b8", devops:"#4be1a0", finance:"#ffd166",
+};
+function domColor(d){
+  if(DOMAIN_COLORS[d]) return DOMAIN_COLORS[d];
+  let h=0; for(const c of d) h=(h*31+c.charCodeAt(0))>>>0;   // stable hash → hue
+  return `hsl(${h%360} 70% 62%)`;
+}
+const TYPE_COLORS = {"cause-effect":"#ff6b6b", analogy:"#53c7ff", evolution:"#4be1a0",
+                     contrast:"#ffb84d", deepening:"#8b93b8", "instance-of":"#b07cff"};
+const WEIGHT_W = {tangential:1, medium:2.4, strong:4.2};
 
-// ============================================================
-// COLOR HELPERS
-// ============================================================
-function getConfig() {{
-    const def = {{
-        nodeHigh: "#FF6B35", nodeMedium: "#CE93D8", nodeLow: "#4FC3F7",
-        linkStrong: "#FF4444", linkMedium: "#FFB74D", linkTangential: "#4DD0E1",
-        background: "#0d1117", panelBg: "#161b22", text: "#c9d1d9",
-        textMuted: "#8b949e", border: "#30363d",
-        physics: true, iterations: 2000, gravity: -8000
-    }};
-    if (typeof window.NEURON_GRAPH_CONFIG !== 'undefined') {{
-        return Object.assign(def, window.NEURON_GRAPH_CONFIG);
-    }}
-    return def;
-}}
+// ---- editable style (Obsidian-like, persisted in localStorage) -------------
+const STYLE_DEFAULTS = {nodeScale:1, edgeScale:1, fontScale:1, springLength:110,
+                        gravity:-42, colors:{}};
+let STYLE = loadStyle();
+function loadStyle(){
+  try{ return {...STYLE_DEFAULTS, colors:{}, ...JSON.parse(localStorage.getItem("neuron-graph-style")||"{}")}; }
+  catch(e){ return {...STYLE_DEFAULTS, colors:{}}; }
+}
+function saveStyle(){ try{ localStorage.setItem("neuron-graph-style", JSON.stringify(STYLE)); }catch(e){} }
+function styledDomColor(d){ return (STYLE.colors && STYLE.colors[d]) || domColor(d); }
 
-const CFG = getConfig();
+// ---- state ---------------------------------------------------------------
+let G, network, nodesDS, edgesDS, maxSal=1, maxTurn=1;
+let domainOff = new Set(), typeOff = new Set(), tMax = 1e9;
+let pulseOn = true, labelsOn = true, pulseTick = 0, selected = null;
 
-function nodeColor(salience) {{
-    if (salience >= 8) return CFG.nodeHigh;
-    if (salience >= 4) return CFG.nodeMedium;
-    return CFG.nodeLow;
-}}
+function nodeSize(s){ return (10 + Math.sqrt(s/maxSal)*26) * STYLE.nodeScale; }
+function isHot(n){ return (maxTurn - n.turn) <= 2; }
+function isDormant(n){ return (maxTurn - n.turn) >= 6 && n.salience >= 2; }
 
-function linkColor(weight) {{
-    if (weight === "strong") return CFG.linkStrong;
-    if (weight === "tangential") return CFG.linkTangential;
-    return CFG.linkMedium;
-}}
+function visNode(n){
+  const c = styledDomColor(n.domain), hot = isHot(n), dorm = isDormant(n);
+  return {
+    id:n.keyword, label: labelsOn ? n.keyword : " ",
+    value:n.salience, size:nodeSize(n.salience), shape:"dot",
+    color:{background:c, border: hot ? "#ffffff" : (dorm ? "#39406b" : c),
+           highlight:{background:c, border:"#ffffff"},
+           hover:{background:c, border:"#c9d2ff"}},
+    borderWidth: hot ? 3 : 1.5,
+    opacity: dorm ? 0.55 : 1,
+    font:{color: dorm ? "#6b739a" : "#e8ecff",
+          size: (12 + Math.sqrt(n.salience/maxSal)*10) * STYLE.fontScale,
+          strokeWidth:4, strokeColor:"#0b0e1a"},
+    title:undefined, _n:n,
+  };
+}
+function visEdge(l,i){
+  const drift = !!l.drift;
+  const c = drift ? "#e17cff" : (TYPE_COLORS[l.link_type]||"#8b93b8");
+  return {
+    id:"e"+i, from:l.source, to:l.target,
+    width:((WEIGHT_W[l.weight]||2) + Math.min(l.coact*0.35, 3)) * STYLE.edgeScale,   // Hebbian: co-activation thickens
+    color:{color:c, opacity: l.weight==="tangential"?0.35:0.7, highlight:"#ffffff"},
+    dashes: drift ? [2,6] : (l.weight==="tangential" ? [4,4] : false),
+    arrows: drift ? {to:{enabled:true, scaleFactor:.5}} : undefined,
+    smooth:{type:"continuous", roundness:.35}, _l:l,
+  };
+}
 
-function linkWidth(weight) {{
-    if (weight === "strong") return 3;
-    if (weight === "tangential") return 1;
-    return 2;
-}}
+function rebuild(){
+  G = GRAPHS[CTX];
+  maxSal = Math.max(1, ...G.nodes.map(n=>n.salience));
+  maxTurn = Math.max(1, G.turn_count, ...G.nodes.map(n=>n.turn));
+  const tl = document.getElementById("timeline");
+  tl.max = maxTurn; if(+tl.value>maxTurn || +tl.value===1) tl.value = maxTurn;
+  tMax = +tl.value;
+  const keep = n => !domainOff.has(n.domain) && n.turn<=tMax ? true : false;
+  const nset = new Set(G.nodes.filter(keep).map(n=>n.keyword));
+  nodesDS = new vis.DataSet(G.nodes.filter(keep).map(visNode));
+  edgesDS = new vis.DataSet(G.links
+    .map((l,i)=>[l,i]).filter(([l])=> nset.has(l.source)&&nset.has(l.target)
+      && !typeOff.has(l.drift?"drift":l.link_type) && (l.created_turn||0)<=tMax)
+    .map(([l,i])=>visEdge(l,i)));
+  if(network){ network.setData({nodes:nodesDS, edges:edgesDS}); }
+  renderStats(); renderInsights(); renderTurnLabel();
+}
 
-function linkDash(weight) {{
-    if (weight === "tangential") return [5, 5];
-    return undefined;
-}}
+// ---- boot ------------------------------------------------------------------
+function boot(){
+  const sel = document.getElementById("ctxsel");
+  for(const c of Object.keys(GRAPHS)){
+    const o=document.createElement("option"); o.value=c; o.textContent="ctx: "+c;
+    if(c===CTX) o.selected=true; sel.appendChild(o);
+  }
+  sel.onchange = e => { CTX=e.target.value; selected=null; hideSide(); domainOff.clear(); typeOff.clear(); renderChips(); rebuild(); network.fit(); };
 
-// ============================================================
-// BUILD GRAPH
-// ============================================================
-const nodeMap = {{}};
-const nodes = new vis.DataSet(GRAPH_DATA.nodes.map(n => {{
-    const id = n.keyword;
-    nodeMap[id] = n;
-    const sal = n.salience || 1;
-    const size = Math.max(8, Math.min(40, sal * 4));
-    return {{
-        id,
-        label: id,
-        title: id,
-        size,
-        color: {{
-            background: nodeColor(sal),
-            border: nodeColor(sal),
-            highlight: {{ background: nodeColor(sal), border: "#ffffff" }},
-            hover: {{ background: nodeColor(sal), border: "#58a6ff" }}
-        }},
-        font: {{ color: CFG.text, size: Math.max(10, Math.min(14, sal + 6)) }},
-        borderWidth: 2,
-        shadow: true,
-        domain: n.domain,
-        salience: sal
-    }};
-}}));
+  G = GRAPHS[CTX];
+  rebuildChipsData(); renderChips();
+  nodesDS=new vis.DataSet(); edgesDS=new vis.DataSet();
+  network = new vis.Network(document.getElementById("net"),
+    {nodes:nodesDS, edges:edgesDS},
+    { physics:{ solver:"forceAtlas2Based",
+        forceAtlas2Based:{gravitationalConstant:STYLE.gravity, springLength:STYLE.springLength,
+                          springConstant:0.07, damping:0.5, avoidOverlap:0.6},
+        stabilization:{iterations:180, fit:true}},
+      interaction:{hover:true, tooltipDelay:120, multiselect:false, navigationButtons:false},
+      nodes:{scaling:{min:8,max:44}},
+    });
+  rebuild(); wire(); setInterval(pulse, 900);
+}
 
-const edges = new vis.DataSet(GRAPH_DATA.links.map(l => ({{
-    id: `${{l.source}}->${{l.target}}`,
-    from: l.source,
-    to: l.target,
-    label: l.link_type,
-    color: {{ color: linkColor(l.weight), highlight: "#FF0000", opacity: 0.6 }},
-    width: linkWidth(l.weight),
-    dashes: linkDash(l.weight),
-    arrows: {{ to: {{ enabled: true, scaleFactor: 0.5 }} }},
-    font: {{ color: CFG.textMuted, size: 9, strokeWidth: 0 }},
-    smooth: {{ type: "continuous", roundness: 0.2 }},
-    link_type: l.link_type,
-    weight: l.weight,
-    rationale: l.rationale,
-    created_turn: l.created_turn,
-    inactive_turns: l.inactive_turns
-}})));
+function rebuildChipsData(){
+  window._domains = [...new Set(Object.values(GRAPHS).flatMap(g=>g.nodes.map(n=>n.domain)))].sort();
+  window._types = [...new Set(Object.values(GRAPHS).flatMap(g=>g.links.map(l=>l.drift?"drift":l.link_type)))].sort();
+}
+function renderChips(){
+  const box=document.getElementById("chips"); box.innerHTML="";
+  for(const d of window._domains){
+    const el=document.createElement("span");
+    el.className="chip"+(domainOff.has(d)?" off":"");
+    el.innerHTML=`<span class="dot" style="background:${domColor(d)}"></span>${d}`;
+    el.onclick=()=>{ domainOff.has(d)?domainOff.delete(d):domainOff.add(d); renderChips(); rebuild(); };
+    box.appendChild(el);
+  }
+  for(const t of window._types){
+    const el=document.createElement("span");
+    el.className="chip"+(typeOff.has(t)?" off":"");
+    const c = t==="drift" ? "#e17cff" : (TYPE_COLORS[t]||"#8b93b8");
+    el.innerHTML=`<span class="dot" style="background:${c}; border-radius:2px"></span>${t}`;
+    el.onclick=()=>{ typeOff.has(t)?typeOff.delete(t):typeOff.add(t); renderChips(); rebuild(); };
+    box.appendChild(el);
+  }
+  document.getElementById("legend").innerHTML =
+    `<span>⚪ border = active in the last 2 turns</span><span>faded = dormant</span>` +
+    `<span>edge width = weight + co-activations</span><span style="color:#e17cff">- - → = drift (cross-context)</span>`;
+}
 
-// ============================================================
-// NETWORK
-// ============================================================
-const container = document.getElementById('graph-container');
-const network = new vis.Network(container, {{ nodes, edges }}, {{
-    physics: {{
-        enabled: CFG.physics,
-        solver: 'barnesHut',
-        barnesHut: {{
-            gravitationalConstant: CFG.gravity,
-            centralGravity: 0.1,
-            springLength: 150,
-            springConstant: 0.02,
-            damping: 0.4
-        }},
-        stabilization: {{ iterations: CFG.iterations }}
-    }},
-    interaction: {{
-        hover: true,
-        tooltipDelay: 100,
-        zoomView: true,
-        dragView: true,
-        navigationButtons: false,
-        keyboard: false
-    }},
-    edges: {{
-        smooth: {{ type: "continuous" }}
-    }}
-}});
+function renderStats(){
+  const visN=nodesDS.length, visE=edgesDS.length;
+  document.getElementById("stats").textContent =
+    `${visN}/${G.nodes.length} nodes · ${visE}/${G.links.length} links · turn ${G.turn_count} · ${ENGINE}`;
+}
+function renderTurnLabel(){
+  document.getElementById("turnlbl").textContent = tMax>=maxTurn ? `now (turn ${maxTurn})` : `turn ${tMax} / ${maxTurn}`;
+}
 
-// Stats
-document.getElementById('stats').textContent =
-    `${{GRAPH_DATA.nodes.length}} nodes  |  ${{GRAPH_DATA.links.length}} links  |  turn ${{GRAPH_DATA.turn_count}}`;
+// ---- insights ---------------------------------------------------------------
+function renderInsights(){
+  const deg={};
+  for(const l of G.links){ deg[l.source]=(deg[l.source]||0)+1; deg[l.target]=(deg[l.target]||0)+1; }
+  const item=(k,v)=>`<div class="item" onclick="focusNode('${k.replace(/'/g,"\\'")}')"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  const hubs=Object.entries(deg).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const sal=[...G.nodes].sort((a,b)=>b.salience-a.salience).slice(0,6);
+  const dorm=G.nodes.filter(isDormant).sort((a,b)=>b.salience-a.salience).slice(0,6);
+  const syn=[...G.links].filter(l=>l.coact>0).sort((a,b)=>b.coact-a.coact).slice(0,5);
+  const drift=G.links.filter(l=>l.drift).slice(0,5);
+  let h="";
+  h+="<h3>🕸 Hubs (most connected)</h3>"+(hubs.map(([k,v])=>item(k,v+" links")).join("")||"<div class='item'><span class='v'>—</span></div>");
+  h+="<h3>⭐ Most salient</h3>"+sal.map(n=>item(n.keyword,"sal "+n.salience)).join("");
+  if(dorm.length) h+="<h3>💤 Dormant (worth revisiting)</h3>"+dorm.map(n=>item(n.keyword,(maxTurn-n.turn)+" turns")).join("");
+  if(syn.length) h+="<h3>⚡ Strongest synapses</h3>"+syn.map(l=>item(l.source+" ↔ "+l.target,"×"+l.coact)).join("");
+  if(drift.length) h+="<h3>🌉 Cross-context bridges</h3>"+drift.map(l=>item(l.source+" → "+l.target,"@"+l.drift)).join("");
+  document.getElementById("insights").innerHTML=h;
+}
 
-// ============================================================
-// TOOLTIP
-// ============================================================
-const tooltip = document.getElementById('tooltip');
+// ---- side panel ---------------------------------------------------------------
+function showNode(id){
+  const n = G.nodes.find(x=>x.keyword===id); if(!n) return;
+  toggleStyle(false);
+  selected=id;
+  const deg = G.links.filter(l=>l.source===id||l.target===id).length;
+  let h=`<h2>${n.keyword}</h2><div class="sub">
+    <span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${domColor(n.domain)}"></span>
+    ${n.domain} · ${n.sentiment} · ${deg} links</div>`;
+  h+=`<div class="row"><span class="lbl">salience ${n.salience}</span>
+      <div class="salbar"><div style="width:${Math.round(100*n.salience/maxSal)}%"></div></div></div>`;
+  h+=`<div class="row"><span class="lbl">last seen</span> turn ${n.turn}`
+     +((maxTurn-n.turn)>=6?` <i style="color:#8b93b8">(dormant ${maxTurn-n.turn} turns)</i>`:"")+`</div>`;
+  if(n.topic) h+=`<div class="row"><span class="lbl">topic</span> ${n.topic}</div>`;
+  if(n.episodes && n.episodes.length){
+    h+=`<div class="row"><span class="lbl">facts (episodes)</span>`+
+       n.episodes.map(e=>`<div class="fact">${e}</div>`).join("")+`</div>`;
+  }
+  if(n.entities?.length) h+=`<div class="row"><span class="lbl">entities</span><br>`+n.entities.map(t=>`<span class="tag">${t}</span>`).join("")+`</div>`;
+  if(n.tags?.length) h+=`<div class="row"><span class="lbl">tags</span><br>`+n.tags.map(t=>`<span class="tag">${t}</span>`).join("")+`</div>`;
+  const nb = G.links.filter(l=>l.source===id||l.target===id).slice(0,10);
+  if(nb.length){
+    h+=`<div class="row"><span class="lbl">connections</span>`+
+      nb.map(l=>{const other=l.source===id?l.target:l.source;
+        return `<div class="item" onclick="focusNode('${other.replace(/'/g,"\\'")}')">
+          <span class="k">${other}</span><span class="v">${l.drift?"drift":l.link_type}</span></div>`;}).join("")+`</div>`;
+  }
+  const el=document.getElementById("side"); el.innerHTML=h; el.style.display="block";
+}
+function showEdge(eid){
+  const e=edgesDS.get(eid); if(!e) return; const l=e._l;
+  toggleStyle(false);
+  let h=`<h2>${l.source} → ${l.target}</h2><div class="sub">${l.drift?("drift → "+l.drift):l.link_type} · ${l.weight}`+
+        (l.coact?` · co-activated ×${l.coact}`:"")+`</div>`;
+  if(l.rationale) h+=`<div class="fact">${l.rationale}</div>`;
+  h+=`<div class="row"><span class="lbl">born</span> turn ${l.created_turn} · <span class="lbl">last active</span> turn ${l.last_active_turn}</div>`;
+  const el=document.getElementById("side"); el.innerHTML=h; el.style.display="block";
+}
+function hideSide(){ document.getElementById("side").style.display="none"; selected=null; }
+function focusNode(id){
+  if(!nodesDS.get(id)){ toast(`"${id}" is filtered out right now`); return; }
+  network.focus(id,{scale:1.25, animation:{duration:600, easingFunction:"easeInOutQuad"}});
+  network.selectNodes([id]); showNode(id); dimOthers(id);
+}
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.style.display="block";
+  clearTimeout(t._h); t._h=setTimeout(()=>t.style.display="none", 1800); }
 
-network.on("hoverNode", function(params) {{
-    const nodeId = params.node;
-    const n = nodeMap[nodeId];
-    if (!n) return;
-    let html = `<div class="tt-keyword">${{n.keyword}}</div>`;
-    html += `<div class="tt-row"><span class="tt-label">Domain</span><span class="tt-value">${{n.domain}}</span></div>`;
-    html += `<div class="tt-row"><span class="tt-label">Salience</span><span class="tt-value">${{n.salience}}</span></div>`;
-    html += `<div class="tt-row"><span class="tt-label">Turn</span><span class="tt-value">${{n.turn}}</span></div>`;
-    if (n.topic) html += `<div class="tt-row"><span class="tt-label">Topic</span><span class="tt-value">${{n.topic}}</span></div>`;
-    if (n.entities && n.entities.length) html += `<div class="tt-row"><span class="tt-label">Entities</span><span class="tt-value">${{n.entities.join(', ')}}</span></div>`;
-    if (n.tags && n.tags.length) html += `<div class="tt-row"><span class="tt-label">Tags</span><span class="tt-value">${{n.tags.join(', ')}}</span></div>`;
-    tooltip.innerHTML = html;
-    tooltip.style.display = 'block';
-}});
+// ---- neighborhood highlight -----------------------------------------------
+function dimOthers(id){
+  const keep=new Set([id]);
+  for(const e of edgesDS.get()){ if(e.from===id) keep.add(e.to); if(e.to===id) keep.add(e.from); }
+  nodesDS.update(nodesDS.get().map(n=>({id:n.id, opacity: keep.has(n.id)?1:0.12,
+    font:{...n.font, color: keep.has(n.id)?"#e8ecff":"rgba(139,147,184,.25)"}})));
+}
+function undim(){ rebuildNodesOnly(); }
+function rebuildNodesOnly(){
+  for(const n of nodesDS.get()){ const src=n._n; nodesDS.update(visNode(src)); }
+}
 
-network.on("hoverEdge", function(params) {{
-    const edgeId = params.edge;
-    const e = edges.get(edgeId);
-    if (!e) return;
-    let html = `<div class="tt-keyword">${{e.from}} &rarr; ${{e.to}}</div>`;
-    html += `<div class="tt-row"><span class="tt-label">Type</span><span class="tt-value">${{e.link_type}}</span></div>`;
-    html += `<div class="tt-row"><span class="tt-label">Weight</span><span class="tt-value">${{e.weight}}</span></div>`;
-    if (e.rationale) html += `<div class="tt-row"><span class="tt-label">Rationale</span><span class="tt-value">${{e.rationale}}</span></div>`;
-    html += `<div class="tt-row"><span class="tt-label">Created</span><span class="tt-value">turn ${{e.created_turn}}</span></div>`;
-    if (e.inactive_turns) html += `<div class="tt-row"><span class="tt-label">Inactive</span><span class="tt-value">${{e.inactive_turns}} turns</span></div>`;
-    tooltip.innerHTML = html;
-    tooltip.style.display = 'block';
-}});
+// ---- heartbeat pulse ---------------------------------------------------------
+function pulse(){
+  if(!pulseOn || selected) return;
+  pulseTick^=1;
+  const top=[...G.nodes].sort((a,b)=>b.salience-a.salience).slice(0,3);
+  for(const n of top){
+    if(!nodesDS.get(n.keyword)) continue;
+    nodesDS.update({id:n.keyword, borderWidth: pulseTick?5:1.5,
+      color:{background:domColor(n.domain), border: pulseTick?"#ffffff":domColor(n.domain)}});
+  }
+}
 
-network.on("blurNode", function() {{ tooltip.style.display = 'none'; }});
-network.on("blurEdge", function() {{ tooltip.style.display = 'none'; }});
+// ---- replay -----------------------------------------------------------------
+let playing=null;
+function togglePlay(){
+  const btn=document.getElementById("btn-play"), tl=document.getElementById("timeline");
+  if(playing){ clearInterval(playing); playing=null; btn.textContent="▶ Replay"; return; }
+  tl.value=1; tMax=1; rebuild();
+  btn.textContent="⏸ Stop";
+  playing=setInterval(()=>{
+    tMax=+tl.value+1; tl.value=tMax; rebuild();
+    if(tMax>=maxTurn){ clearInterval(playing); playing=null; btn.textContent="▶ Replay"; }
+  }, 450);
+}
 
-document.addEventListener("mousemove", function(e) {{
-    if (tooltip.style.display === 'block') {{
-        tooltip.style.left = (e.clientX + 12) + 'px';
-        tooltip.style.top = (e.clientY + 12) + 'px';
-    }}
-}});
+// ---- style editor (🎨, Obsidian-like) ----------------------------------------
+function renderStylePanel(){
+  const sl=(id,label,min,max,step,val)=>`
+    <div class="sl"><label>${label}</label>
+      <input type="range" id="st-${id}" min="${min}" max="${max}" step="${step}" value="${val}">
+      <span class="val" id="stv-${id}">${val}</span></div>`;
+  let h="<h3>🎛 Display</h3>";
+  h+=sl("nodeScale","node size",0.4,2.5,0.05,STYLE.nodeScale);
+  h+=sl("edgeScale","link thickness",0.3,3,0.05,STYLE.edgeScale);
+  h+=sl("fontScale","label size",0.4,2.2,0.05,STYLE.fontScale);
+  h+="<h3>🧲 Forces</h3>";
+  h+=sl("springLength","link distance",40,320,5,STYLE.springLength);
+  h+=sl("gravity","repel force",-160,-8,2,STYLE.gravity);
+  h+="<h3>🎨 Domain colors</h3>";
+  for(const d of window._domains){
+    h+=`<div class="colrow"><input type="color" id="stc-${d}" value="${toHex(styledDomColor(d))}">
+        <span>${d}</span></div>`;
+  }
+  h+=`<div class="foot"><button id="st-reset">Reset defaults</button>
+      <button id="st-close">Close</button></div>
+      <div style="color:var(--tx-dim); font-size:11px; margin-top:8px">
+      Saved automatically in this browser (localStorage).</div>`;
+  const p=document.getElementById("stylepanel"); p.innerHTML=h;
+  for(const id of ["nodeScale","edgeScale","fontScale"]){
+    const el=document.getElementById("st-"+id);
+    el.oninput=()=>{ STYLE[id]=+el.value; document.getElementById("stv-"+id).textContent=el.value;
+                     saveStyle(); rebuildNodesEdges(); };
+  }
+  for(const id of ["springLength","gravity"]){
+    const el=document.getElementById("st-"+id);
+    el.oninput=()=>{ STYLE[id]=+el.value; document.getElementById("stv-"+id).textContent=el.value;
+                     saveStyle(); applyPhysics(); };
+  }
+  for(const d of window._domains){
+    const el=document.getElementById("stc-"+d);
+    el.oninput=()=>{ STYLE.colors[d]=el.value; saveStyle(); rebuildNodesEdges(); renderChips(); renderInsights(); };
+  }
+  document.getElementById("st-reset").onclick=()=>{
+    STYLE={...STYLE_DEFAULTS, colors:{}}; saveStyle();
+    renderStylePanel(); rebuildNodesEdges(); applyPhysics(); renderChips(); };
+  document.getElementById("st-close").onclick=()=>toggleStyle(false);
+}
+function rebuildNodesEdges(){
+  rebuildNodesOnly();
+  for(const e of edgesDS.get()) edgesDS.update(visEdge(e._l, e.id.slice(1)));
+}
+function applyPhysics(){
+  network.setOptions({physics:{forceAtlas2Based:{
+    gravitationalConstant:STYLE.gravity, springLength:STYLE.springLength,
+    springConstant:0.07, damping:0.5, avoidOverlap:0.6}}});
+}
+function toHex(c){
+  if(c.startsWith("#")) return c;
+  const m=c.match(/hsl\((\d+)/); if(!m) return "#8b93b8";
+  const h=+m[1]/360, f=(n,k=(n+h*12)%12)=>0.62-0.35*Math.max(-1,Math.min(k-3,9-k,1));
+  const to=x=>Math.round(x*255).toString(16).padStart(2,"0");
+  return "#"+to(f(0))+to(f(8))+to(f(4));
+}
+function toggleStyle(force){
+  const p=document.getElementById("stylepanel"), b=document.getElementById("btn-style");
+  const show = force!==undefined ? force : p.style.display!=="block";
+  if(show){ hideSide(); renderStylePanel(); }
+  p.style.display=show?"block":"none"; b.classList.toggle("on", show);
+}
 
-// ============================================================
-// CLICK NODE -> SIDEBAR
-// ============================================================
-network.on("click", function(params) {{
-    if (params.nodes.length > 0) {{
-        const nodeId = params.nodes[0];
-        showNodeDetail(nodeId);
-    }} else if (params.edges.length > 0) {{
-        const edgeId = params.edges[0];
-        showEdgeDetail(edgeId);
-    }} else {{
-        closeSidebar();
-        resetHighlight();
-    }}
-}});
+// ---- wiring -----------------------------------------------------------------
+function wire(){
+  document.getElementById("btn-style").onclick=()=>toggleStyle();
+  network.on("click", p=>{
+    if(p.nodes.length){ showNode(p.nodes[0]); dimOthers(p.nodes[0]); }
+    else if(p.edges.length){ showEdge(p.edges[0]); }
+    else { hideSide(); undim(); }
+  });
+  network.on("doubleClick", p=>{ if(p.nodes.length) focusNode(p.nodes[0]); });
+  document.getElementById("search").addEventListener("keydown", e=>{
+    if(e.key!=="Enter") return;
+    const q=e.target.value.trim().toLowerCase(); if(!q) return;
+    const hit=G.nodes.find(n=>n.keyword.toLowerCase()===q)
+          || G.nodes.find(n=>n.keyword.toLowerCase().includes(q));
+    hit ? focusNode(hit.keyword) : toast("no concept matches "+JSON.stringify(q));
+  });
+  const tl=document.getElementById("timeline");
+  tl.addEventListener("input", ()=>{ tMax=+tl.value; rebuild(); });
+  bindToggle("btn-physics", on=>network.setOptions({physics:{enabled:on}}));
+  bindToggle("btn-labels", on=>{ labelsOn=on; rebuildNodesOnly(); });
+  bindToggle("btn-pulse", on=>{ pulseOn=on; if(!on) rebuildNodesOnly(); });
+  bindToggle("btn-insights", on=>{ document.getElementById("insights").style.display=on?"block":"none"; });
+  document.getElementById("btn-play").onclick=togglePlay;
+}
+function bindToggle(id, fn){
+  const b=document.getElementById(id);
+  b.onclick=()=>{ b.classList.toggle("on"); fn(b.classList.contains("on")); };
+}
 
-function showNodeDetail(nodeId) {{
-    const n = nodeMap[nodeId];
-    if (!n) return;
-
-    document.getElementById('sidebar-title').textContent = n.keyword;
-    const content = document.getElementById('sidebar-content');
-
-    let html = '';
-    // Info section
-    html += '<div class="detail-section">';
-    html += '<h3>Info</h3>';
-    html += `<div class="detail-row"><span class="label">Domain</span><span class="value">${{n.domain}}</span></div>`;
-    html += `<div class="detail-row"><span class="label">Salience</span><span class="value">${{n.salience}}</span></div>`;
-    html += `<div class="detail-row"><span class="label">Turn</span><span class="value">${{n.turn}}</span></div>`;
-    html += `<div class="detail-row"><span class="label">Sentiment</span><span class="value">${{n.sentiment}}</span></div>`;
-    if (n.topic) html += `<div class="detail-row"><span class="label">Topic</span><span class="value">${{n.topic}}</span></div>`;
-    if (n.entities && n.entities.length) html += `<div class="detail-row"><span class="label">Entities</span><span class="value">${{n.entities.join(', ')}}</span></div>`;
-    if (n.tags && n.tags.length) html += `<div class="detail-row"><span class="label">Tags</span><span class="value">${{n.tags.join(', ')}}</span></div>`;
-    html += '</div>';
-
-    // Links OUT
-    const outLinks = GRAPH_DATA.links.filter(l => l.source === nodeId);
-    if (outLinks.length) {{
-        html += '<div class="detail-section">';
-        html += `<h3>Links OUT (${{outLinks.length}})</h3>`;
-        outLinks.forEach(l => {{
-            html += `<div class="link-item">
-                <div class="link-header">
-                    <span class="link-type">${{l.link_type}}</span>
-                    <span class="link-weight weight-${{l.weight}}">${{l.weight}}</span>
-                </div>
-                <div>&rarr; ${{l.target}}</div>
-                ${{l.rationale ? '<div class="link-rationale">' + l.rationale + '</div>' : ''}}
-            </div>`;
-        }});
-        html += '</div>';
-    }}
-
-    // Links IN
-    const inLinks = GRAPH_DATA.links.filter(l => l.target === nodeId);
-    if (inLinks.length) {{
-        html += '<div class="detail-section">';
-        html += `<h3>Links IN (${{inLinks.length}})</h3>`;
-        inLinks.forEach(l => {{
-            html += `<div class="link-item">
-                <div class="link-header">
-                    <span class="link-type">${{l.link_type}}</span>
-                    <span class="link-weight weight-${{l.weight}}">${{l.weight}}</span>
-                </div>
-                <div>&larr; ${{l.source}}</div>
-                ${{l.rationale ? '<div class="link-rationale">' + l.rationale + '</div>' : ''}}
-            </div>`;
-        }});
-        html += '</div>';
-    }}
-
-    content.innerHTML = html;
-    document.getElementById('sidebar').classList.add('active');
-
-    // Highlight connected nodes
-    highlightNode(nodeId);
-}}
-
-function showEdgeDetail(edgeId) {{
-    const e = edges.get(edgeId);
-    if (!e) return;
-
-    document.getElementById('sidebar-title').textContent = `${{e.from}} → ${{e.to}}`;
-    const content = document.getElementById('sidebar-content');
-
-    let html = '<div class="detail-section">';
-    html += '<h3>Edge Info</h3>';
-    html += `<div class="detail-row"><span class="label">Source</span><span class="value">${{e.from}}</span></div>`;
-    html += `<div class="detail-row"><span class="label">Target</span><span class="value">${{e.to}}</span></div>`;
-    html += `<div class="detail-row"><span class="label">Type</span><span class="value">${{e.link_type}}</span></div>`;
-    html += `<div class="detail-row"><span class="label">Weight</span><span class="value">${{e.weight}}</span></div>`;
-    if (e.rationale) html += `<div class="detail-row"><span class="label">Rationale</span><span class="value">${{e.rationale}}</span></div>`;
-    html += `<div class="detail-row"><span class="label">Created</span><span class="value">turn ${{e.created_turn}}</span></div>`;
-    if (e.inactive_turns) html += `<div class="detail-row"><span class="label">Inactive</span><span class="value">${{e.inactive_turns}} turns</span></div>`;
-    html += '</div>';
-
-    content.innerHTML = html;
-    document.getElementById('sidebar').classList.add('active');
-
-    // Highlight edge
-    highlightEdge(e.from, e.to);
-}}
-
-function closeSidebar() {{
-    document.getElementById('sidebar').classList.remove('active');
-}}
-
-// ============================================================
-// HIGHLIGHT
-// ============================================================
-function highlightNode(nodeId) {{
-    const connected = new Set([nodeId]);
-    GRAPH_DATA.links.forEach(l => {{
-        if (l.source === nodeId) connected.add(l.target);
-        if (l.target === nodeId) connected.add(l.source);
-    }});
-
-    nodes.forEach(n => {{
-        nodes.update({{
-            id: n.id,
-            opacity: connected.has(n.id) ? 1.0 : 0.15
-        }});
-    }});
-    edges.forEach(e => {{
-        const isConnected = (e.from === nodeId || e.to === nodeId);
-        edges.update({{
-            id: e.id,
-            opacity: isConnected ? 1.0 : 0.05,
-            width: isConnected ? linkWidth(e.weight) * 1.5 : linkWidth(e.weight)
-        }});
-    }});
-}}
-
-function highlightEdge(fromId, toId) {{
-    nodes.forEach(n => {{
-        nodes.update({{
-            id: n.id,
-            opacity: (n.id === fromId || n.id === toId) ? 1.0 : 0.15
-        }});
-    }});
-    edges.forEach(e => {{
-        const isTarget = (e.from === fromId && e.to === toId);
-        edges.update({{
-            id: e.id,
-            opacity: isTarget ? 1.0 : 0.05,
-            width: isTarget ? linkWidth(e.weight) * 2 : linkWidth(e.weight)
-        }});
-    }});
-}}
-
-function resetHighlight() {{
-    nodes.forEach(n => nodes.update({{ id: n.id, opacity: 1.0 }}));
-    edges.forEach(e => edges.update({{ id: e.id, opacity: 0.6, width: linkWidth(e.weight) }}));
-}}
-
-// ============================================================
-// CONTROLS
-// ============================================================
-function fitGraph() {{
-    network.fit({{ animation: true }});
-}}
-
-let physicsEnabled = CFG.physics;
-function togglePhysics() {{
-    physicsEnabled = !physicsEnabled;
-    network.setOptions({{ physics: {{ enabled: physicsEnabled }} }});
-}}
-
-// ============================================================
-// FILTERS (dynamic from domains)
-// ============================================================
-const allDomains = [...new Set(GRAPH_DATA.nodes.map(n => n.domain))].sort();
-const activeDomains = new Set(allDomains);
-
-function buildFilters() {{
-    const container = document.getElementById('filters');
-    container.innerHTML = '<span style="color:#8b949e">Domain:</span>';
-    allDomains.forEach(d => {{
-        const count = GRAPH_DATA.nodes.filter(n => n.domain === d).length;
-        const item = document.createElement('label');
-        item.className = 'filter-item';
-        item.innerHTML = `<input type="checkbox" checked onchange="toggleDomain('${{d}}', this.checked)"> ${{d}} (${{count}})`;
-        container.appendChild(item);
-    }});
-}}
-
-function toggleDomain(domain, show) {{
-    if (show) {{
-        activeDomains.add(domain);
-    }} else {{
-        activeDomains.delete(domain);
-    }}
-    nodes.forEach(n => {{
-        const visible = activeDomains.has(n.domain);
-        nodes.update({{ id: n.id, hidden: !visible }});
-    }});
-    edges.forEach(e => {{
-        const fromNode = nodeMap[e.from];
-        const toNode = nodeMap[e.to];
-        const visible = (fromNode && activeDomains.has(fromNode.domain)) &&
-                        (toNode && activeDomains.has(toNode.domain));
-        edges.update({{ id: e.id, hidden: !visible }});
-    }});
-}}
-
-buildFilters();
+boot();
 </script>
 </body>
-</html>"""
+</html>
+"""
+
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    print("\n  Neuron Graph Visualizer - Generator\n")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--context", default=None, help="context to open first (default: 'default')")
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args()
 
-    # Ensure output directory exists
+    print("\n  Neuron Graph Visualizer — generator (v2, cloud-aware)\n")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"  Engine: {_ENGINE}{' (cloud)' if _REMOTE else ''}")
     print(f"  Output: {OUTPUT_DIR}")
 
-    # Export graph from default context
-    print("  Exporting graph from database...")
-    graph_data = export_graph("default")
-    print(f"  [OK] {len(graph_data['nodes'])} nodes, {len(graph_data['links'])} links, turn {graph_data['turn_count']}")
+    contexts = list_contexts()
+    print(f"  Contexts: {', '.join(contexts)}")
+    graphs = {}
+    for c in contexts:
+        gd = export_graph(c)
+        if gd["nodes"] or c == "default":
+            graphs[c] = gd
+            print(f"    [OK] {c}: {len(gd['nodes'])} nodes, {len(gd['links'])} links, turn {gd['turn_count']}")
+    if not graphs:
+        print("  [!] no graphs found — nothing to visualize."); sys.exit(1)
 
-    # Download vis-network (cached)
-    vis_code = download_vis_network()
-
-    # Write config JS
-    config_path = OUTPUT_DIR / "neuron-graph-config.js"
-    config_path.write_text(CONFIG_JS, encoding="utf-8")
-    print(f"  [OK] Config: {config_path}")
-
-    # Write HTML
-    html = generate_html(graph_data, vis_code)
+    active = args.context if args.context in graphs else \
+             ("default" if "default" in graphs else next(iter(graphs)))
+    vis_code = get_vis_network()
+    html = generate_html(graphs, active, vis_code)
     html_path = OUTPUT_DIR / "neuron-graph.html"
     html_path.write_text(html, encoding="utf-8")
-    print(f"  [OK] HTML: {html_path}")
+    print(f"\n  [SUCCESS] {html_path}")
 
-    # Success
-    print(f"\n  {'='*60}")
-    print(f"  [SUCCESS] Graph generated!")
-    print(f"  Location: {OUTPUT_DIR}")
-    print(f"  Open: {html_path}")
-    print(f"  {'='*60}\n")
+    if not args.no_open:
+        try:
+            if os.name == "nt":
+                os.startfile(str(html_path))
+            else:
+                import subprocess
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(html_path)])
+        except Exception as e:
+            print(f"  [!] could not auto-open: {e}\n      Open manually: {html_path}")
 
-    # Open the folder
-    try:
-        if os.name == "nt":
-            os.startfile(str(OUTPUT_DIR))
-        else:
-            import subprocess
-            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(OUTPUT_DIR)])
-    except Exception as e:
-        print(f"  [!] Could not open folder: {e}")
-        print(f"      Open manually: {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     main()

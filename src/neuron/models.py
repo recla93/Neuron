@@ -53,6 +53,10 @@ DRIFT_EXPIRY_TURNS       = 3   # inactive turns before a drift link is pruned
 # STAGE_FRESH_SECONDS (else it's dropped as stale).
 SLEEP_IDLE_SECONDS       = 1800     # 30 min idle → sleep-mode on next load
 STAGE_FRESH_SECONDS      = 6 * 3600 # staged stimulus valid for 6h
+
+# Episodic payload (T56): nodes carry compact FACTS, not just themes.
+EPISODES_PER_NODE = 5     # cap per node; oldest dropped (consolidation-lite)
+EPISODE_MAX_CHARS = 200   # one compact sentence, ~40 tokens
 # Embedding dimension. Default 384 (fastembed all-MiniLM-L6-v2 and the common
 # 384-dim multilingual models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
@@ -230,6 +234,12 @@ class Graph:
     _dirty_links:   set = field(default_factory=set)   # link keys to upsert
     _removed_nodes: set = field(default_factory=set)   # keywords to delete
     _removed_links: set = field(default_factory=set)   # link keys to delete
+    # Episodic payload (T56): keyword -> [{"turn": int, "text": str}], capped at
+    # EPISODES_PER_NODE. Nodes carry FACTS ("we chose https because wss got 400"),
+    # not just themes. Persisted in the `episodes` table, scoped by context.
+    episodes: dict = field(default_factory=dict)
+    _dirty_episodes:   set = field(default_factory=set)   # (keyword, turn) to upsert
+    _removed_episodes: set = field(default_factory=set)   # (keyword, turn) to delete
     # Archived nodes (merged near-duplicates / dropped orphans) — recoverable,
     # flushed to the _graveyard table on save, then cleared. (E1.2/E1.3)
     _graveyard: list = field(default_factory=list)
@@ -351,11 +361,49 @@ class Graph:
         self._dirty_links.clear()
         self._removed_nodes.clear()
         self._removed_links.clear()
+        self._dirty_episodes.clear()
+        self._removed_episodes.clear()
 
     def _snapshot_salience(self) -> None:
         """Record current salience per node as the baseline for the next
         incremental save's relative delta (T11 Fase 2b)."""
         self._salience_baseline = {nd.keyword: nd.salience for nd in self.nodes}
+
+    # ------------------------------------------------------------------
+    # Episodes (T56) — compact facts attached to a node
+    # ------------------------------------------------------------------
+
+    def add_episode(self, keyword: str, text: str, turn: "int | None" = None) -> bool:
+        """Attach one compact fact sentence to ``keyword`` for this turn.
+
+        Capped at EPISODES_PER_NODE per node (oldest dropped, its row deleted at
+        the next save). One episode per (keyword, turn): a second call in the
+        same turn overwrites. Returns False when the node doesn't exist —
+        episodes only ever decorate real concepts."""
+        keyword = self._norm(keyword)
+        if self._node_map.get(keyword) is None:
+            return False
+        text = (text or "").strip()[:EPISODE_MAX_CHARS]
+        if not text:
+            return False
+        turn = self.turn_count if turn is None else turn
+        eps = self.episodes.setdefault(keyword, [])
+        eps[:] = [e for e in eps if e["turn"] != turn]
+        eps.append({"turn": turn, "text": text})
+        eps.sort(key=lambda e: e["turn"])
+        while len(eps) > EPISODES_PER_NODE:
+            old = eps.pop(0)
+            self._removed_episodes.add((keyword, old["turn"]))
+            self._dirty_episodes.discard((keyword, old["turn"]))
+        self._dirty_episodes.add((keyword, turn))
+        self._removed_episodes.discard((keyword, turn))
+        self._dirty = True
+        return True
+
+    def recent_episodes(self, keyword: str, n: int = 2) -> list[str]:
+        """Latest ``n`` fact texts for a node, newest first (for pre_turn)."""
+        eps = self.episodes.get(self._norm(keyword), [])
+        return [e["text"] for e in sorted(eps, key=lambda e: -e["turn"])[:n]]
 
     # ------------------------------------------------------------------
     # Mutation — node
@@ -945,6 +993,12 @@ class Graph:
             CREATE TABLE IF NOT EXISTS _graveyard (
                 context TEXT, keyword TEXT, salience INTEGER, domain TEXT,
                 reason TEXT, turn INTEGER);
+            CREATE TABLE IF NOT EXISTS episodes (
+                context TEXT NOT NULL DEFAULT 'default',
+                keyword TEXT NOT NULL,
+                turn    INTEGER NOT NULL,
+                text    TEXT NOT NULL,
+                PRIMARY KEY (context, keyword, turn));
             CREATE INDEX IF NOT EXISTS idx_links_source ON links(source);
             CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
             CREATE INDEX IF NOT EXISTS idx_links_turn   ON links(created_turn);
@@ -1137,6 +1191,8 @@ class Graph:
                              [(context, k) for k in self._removed_nodes])
             conn.executemany("DELETE FROM node_vectors WHERE context=? AND keyword=?",
                              [(context, k) for k in self._removed_nodes])
+            conn.executemany("DELETE FROM episodes WHERE context=? AND keyword=?",
+                             [(context, k) for k in self._removed_nodes])
         if self._removed_links:
             conn.executemany(
                 "DELETE FROM links WHERE context=? AND source=? AND target=? AND link_type=?",
@@ -1161,6 +1217,26 @@ class Graph:
         if link_set:
             conn.executemany(_LINK_UPSERT_ATOMIC, [self._link_row(lk, context) for lk in link_set])
 
+        # Episodes (T56): targeted deletes (cap overflow) + upsert of new facts.
+        if self._removed_episodes:
+            conn.executemany(
+                "DELETE FROM episodes WHERE context=? AND keyword=? AND turn=?",
+                [(context, k, t) for (k, t) in self._removed_episodes])
+        ep_rows = []
+        if all_rows:
+            for kw, eps in self.episodes.items():
+                ep_rows += [(context, kw, e["turn"], e["text"]) for e in eps]
+        else:
+            for (kw, t) in self._dirty_episodes:
+                for e in self.episodes.get(kw, []):
+                    if e["turn"] == t:
+                        ep_rows.append((context, kw, t, e["text"]))
+        if ep_rows:
+            conn.executemany(
+                "INSERT INTO episodes(context, keyword, turn, text) VALUES(?,?,?,?) "
+                "ON CONFLICT(context, keyword, turn) DO UPDATE SET text=excluded.text",
+                ep_rows)
+
     def _save_reconcile(self, conn, context: str, *, write_vectors: bool = True) -> None:
         """Structural reconcile (merge only): absolute upsert of every in-memory
         row, then delete this context's store rows no longer present in memory
@@ -1174,6 +1250,16 @@ class Graph:
                 conn.executemany(_VEC_UPSERT, [self._vec_row(nd, context) for nd in self.nodes])
         if self.links:
             conn.executemany(_LINK_UPSERT, [self._link_row(lk, context) for lk in self.links])
+        # Episodes (T56): reconcile writes all in-memory facts; stale episode rows
+        # of surviving nodes are left alone (harmless), those of deleted nodes are
+        # removed below together with the node.
+        ep_rows = [(context, kw, e["turn"], e["text"])
+                   for kw, eps in self.episodes.items() for e in eps]
+        if ep_rows:
+            conn.executemany(
+                "INSERT INTO episodes(context, keyword, turn, text) VALUES(?,?,?,?) "
+                "ON CONFLICT(context, keyword, turn) DO UPDATE SET text=excluded.text",
+                ep_rows)
 
         mem_kw      = {nd.keyword for nd in self.nodes}
         existing_kw = {row[0] for row in
@@ -1183,6 +1269,8 @@ class Graph:
             conn.executemany("DELETE FROM nodes WHERE context=? AND keyword=?",
                              [(context, k) for k in stale_nodes])
             conn.executemany("DELETE FROM node_vectors WHERE context=? AND keyword=?",
+                             [(context, k) for k in stale_nodes])
+            conn.executemany("DELETE FROM episodes WHERE context=? AND keyword=?",
                              [(context, k) for k in stale_nodes])
 
         mem_lk      = {self._link_key(lk) for lk in self.links}
@@ -1332,6 +1420,21 @@ class Graph:
                     target_context=row[9],
                 )
                 self.links.append(link)
+
+            # Episodes (T56) — tolerate legacy/seed stores without the table.
+            self.episodes.clear()
+            try:
+                if has_context:
+                    erows = conn.execute(
+                        "SELECT keyword, turn, text FROM episodes WHERE context=? "
+                        "ORDER BY keyword, turn", (context,))
+                else:
+                    erows = conn.execute(
+                        "SELECT keyword, turn, text FROM episodes ORDER BY keyword, turn")
+                for kw, t, tx in erows:
+                    self.episodes.setdefault(kw, []).append({"turn": t, "text": tx})
+            except Exception:
+                pass
         finally:
             conn.close()
         self._rebuild_node_map()
