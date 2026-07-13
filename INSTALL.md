@@ -1,8 +1,17 @@
-# Installing Neuron
+# 📥 Installing Neuron
 
-Three ways to install, from easiest to most manual. If the automated installer
+> Part of **[Neuron](README.md)** — persistent semantic memory for AI. New here? Start with the
+> [README](README.md); this file is the full install reference.
+
+Several ways to install, from easiest to most manual. If the automated installer
 fails, the **Manual installation** and **Troubleshooting** sections below get
 you running by hand.
+
+**TL;DR**
+
+- **Windows** → double-click `Configuration.bat` → *Install / Update Neuron → FULL*.
+- **macOS / Linux** → `python3 -m venv .venv && source .venv/bin/activate && pip install ".[dev]"` → `python -m neuron`.
+- **Register with a client** → `neuron register` (interactive, cross-platform) — or let the Windows installer do it.
 
 Neuron is a local **stdio MCP server**: a client launches it as a subprocess
 (`python -m neuron`). There is no daemon and no network port. "Installing" means
@@ -177,9 +186,25 @@ this for you. On Linux/macOS it just works.
 
 ## Registering the MCP server with a client
 
-`install.ps1` auto-registers Claude Desktop and Cursor. For everything else, add
-the launch command manually. The command is your venv's Python running
-`-m neuron`.
+### The easy way — `neuron register` (cross-platform)
+
+Once the package is installed, the built-in registration CLI wires Neuron into every
+supported client on **Windows, macOS and Linux** — non-destructive merge, a backup before
+every change, and verify-after-write:
+
+```bash
+neuron register            # interactive: pick your client(s)
+neuron register --all      # register everywhere it can find
+neuron doctor              # check what's registered / spot problems
+neuron doctor --fix        # stop orphaned servers, clean duplicates
+```
+
+On Windows, `install.ps1` (and `Configuration.bat`) already run this for you for Claude
+Desktop and Cursor. For everything else, or on macOS/Linux, run `neuron register`.
+
+### By hand
+
+The launch command is just your venv's Python running `-m neuron`.
 
 **Claude Desktop** — `%APPDATA%\Claude\claude_desktop_config.json`:
 

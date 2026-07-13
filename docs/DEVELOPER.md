@@ -1,4 +1,9 @@
-# Developer Guide — Neuron
+# 📖 Developer Guide — Neuron
+
+> Part of **[Neuron](../README.md)** — persistent semantic memory for AI. This guide covers the
+> internals: architecture, the memory dynamics, the DB layer, per-client config and CI.
+> For installing, see **[INSTALL.md](../INSTALL.md)**; for the release story, see
+> **[CHANGELOG.md](../CHANGELOG.md)**.
 
 ## Table of Contents
 
@@ -26,13 +31,18 @@ YOUR MCP CLIENT (OpenCode, Claude Desktop, Cursor, etc.)
      │  calls MCP tools (stdin/stdout)
      ▼
 ┌──────────────────────────────────────────────────────────┐
-│  server.py  (Python)                                      │
-│  ├── 19 MCP tools                                         │
-│  ├── vector embedding (384-dim semantic, fastembed)        │
-│  └── search: Turso vector_distance_cos() or Python        │
+│  server.py  (Python) — MCP entry, ~22 tools               │
+│  ├── extraction.py — semantic extractor + lexicons        │
+│  ├── curation.py   — quality gate (filler/dup/link fixup) │
+│  ├── search.py / stimulus.py — retrieval + associative     │
+│  │                            stimulus engine             │
+│  ├── funnel.py     — signpost + skill registry            │
+│  └── vector embedding (384-dim, fastembed) · Turso         │
+│      vector_distance_cos() or Python fallback             │
 ├──────────────────────────────────────────────────────────┤
-│  models.py — Node, Link, Graph dataclasses                │
+│  models.py — Node, Link, Graph, episodes                  │
 │  registry.py — GraphRegistry (multi-context, inheritance) │
+│  clients.py — cross-platform client registration engine   │
 └────────────────────────────────┬─────────────────────────┘
                                  ▼
 ┌────────────────────────────────┬─────────────────────────┐
@@ -53,12 +63,19 @@ The MCP server runs as a **stdio subprocess** of the MCP client. No HTTP layer, 
 Neuron/
 ├── src/
 │   └── neuron/
-│       ├── __init__.py        # Package init, version
-│       ├── __main__.py        # `python -m neuron` entry point
+│       ├── __init__.py        # Package init, version, .env autoload
+│       ├── __main__.py        # `python -m neuron` entry point (server / CLI dispatch)
 │       ├── db.py              # DB tier selector: Turso cloud > local pyturso > sqlite3
-│       ├── models.py          # Node, Link, Graph dataclasses + SQLite persistence
+│       ├── models.py          # Node, Link, Graph + episodes + SQLite persistence
 │       ├── registry.py        # GraphRegistry — multi-context, resolve_chain inheritance
-│       ├── server.py          # MCP server — PRODUCTION path (19 tools, Turso/SQLite)
+│       ├── server.py          # MCP server — PRODUCTION path (~22 tools, Turso/SQLite)
+│       ├── extraction.py      # SemanticExtractor + lexicons (split from server.py)
+│       ├── curation.py        # Quality gate: filler/dup drop, link canonicalization
+│       ├── search.py          # Vector + graph retrieval
+│       ├── stimulus.py        # Spreading activation / associative stimulus engine
+│       ├── funnel.py          # Signpost + skill registry (the "door")
+│       ├── clients.py         # Cross-platform client registration engine
+│       ├── setup.py / manage.py / init.py  # `neuron setup|manage|register|doctor` CLIs
 │       └── engine.py          # Standalone CLI engine for run_interactive.py — NOT production
 ├── tests/
 │   ├── __init__.py
@@ -690,7 +707,7 @@ identity*:
 
 | Axis | v4 | v5 "Synapse" |
 |---|---|---|
-| Version | `4.x` | `5.x` (`__version__` 5.0.0.dev…) |
+| Version | `4.x` | `5.x` (current: **5.3.1**) |
 | MCP server name (`Server(...)`) | `neuron` | `neuron5` |
 | Default graph store | `%LOCALAPPDATA%\neuron\graphs` | `%LOCALAPPDATA%\neuron5\graphs` |
 | Install dir (target) | `%LOCALAPPDATA%\Programs\neuron` | `%LOCALAPPDATA%\Programs\neuron5` |
