@@ -1,4 +1,4 @@
-# Neuron v4.0 — Full Skill
+# Neuron — Full Skill
 
 Persistent semantic memory across conversations.
 Each exchange leaves traces in a concept graph; connections accumulate over
@@ -187,12 +187,14 @@ Optionally show the link summary at end of response (strong + medium only):
 | `neuron_auto(text)` | POST | Heuristic extraction + save (fallback for small models) |
 | `neuron_find_candidates(keywords)` | POST | Check for duplicate keywords before storing |
 | `neuron_merge(canonical, aliases)` | POST | Absorb alias nodes into a single canonical node |
+| `neuron_extract(text)` | Ad-hoc | Analyze text -> keyword/topic/domain/intent, no save (heuristic only) |
 | `neuron_vector_search(keywords)` | Ad-hoc | Semantic search without link traversal |
 | `neuron_summary` | Ad-hoc | Top nodes and recent links overview |
 | `neuron_switch_context(context)` | Ad-hoc | Switch domain context (e.g. `java/spring`) |
 | `neuron_list_contexts` | Ad-hoc | List all available contexts |
 | `neuron_forgotten` | Ad-hoc | Concepts not touched in N turns |
 | `neuron_prune` | Ad-hoc | Force pruning of expired tangential links |
+| `neuron_consolidate` | Ad-hoc | Merge near-duplicate concepts + archive low-salience orphans; safe to run periodically |
 | `neuron_flash` / `neuron_dedup` | Ad-hoc | Toggle semantic flash / dedup |
 | `neuron_export` / `neuron_reset` | Ad-hoc | Export full graph / clear graph |
 

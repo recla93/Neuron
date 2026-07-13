@@ -1,4 +1,4 @@
-# Neuron v4.0 — Base Skill
+# Neuron — Base Skill
 
 Persistent semantic memory across conversations.
 Each exchange leaves traces in a concept graph; connections accumulate over

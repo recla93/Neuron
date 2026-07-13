@@ -93,6 +93,7 @@ HELP_TEXT = (
     "  summary         Textual summary: top keywords, recent links, forgotten concepts.\n"
     "  confirm         Boost a keyword's salience (mark it important).\n"
     "  prune           Drop inactive tangential links now.\n"
+    "  consolidate     Merge near-duplicate concepts + archive low-salience orphans.\n"
     "  dedup           Toggle keyword de-duplication.\n"
     "  flash           Toggle semantic flashbacks (dormant / cross-domain sparks).\n"
     "\n"
