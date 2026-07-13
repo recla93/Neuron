@@ -47,6 +47,10 @@ jobs:
           python -m venv /tmp/venv
           /tmp/venv/bin/pip install dist/*.whl
           /tmp/venv/bin/python -c "import neuron; print('neuron', neuron.__version__)"
+      - name: Universal lifecycle CLI smoke (neuron setup --status, T63)
+        run: |
+          /tmp/venv/bin/python -m neuron setup --status
+          /tmp/venv/bin/python -m neuron doctor --slug neuron5
       - name: Skills are packaged inside the wheel
         run: |
           python -c "import zipfile, glob; w = glob.glob('dist/*.whl')[0]; names = zipfile.ZipFile(w).namelist(); md = [n for n in names if n.startswith('neuron/skills/') and n.endswith('.md')]; assert len(md) >= 5, f'skills missing from wheel (found {len(md)}): {md}'; print('skills packaged OK:', len(md))"

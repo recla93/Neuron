@@ -148,7 +148,8 @@ def _env(name: str) -> str:
 
 
 def claude_desktop_candidates() -> list[str]:
-    """B2: classic %APPDATA% install AND the Microsoft Store (MSIX) package."""
+    """B2: classic %APPDATA% install AND the Microsoft Store (MSIX) package.
+    T63: plus the macOS and Linux locations, so `neuron setup` is universal."""
     cands = []
     appdata = _env("APPDATA")
     if appdata:
@@ -159,6 +160,11 @@ def claude_desktop_candidates() -> list[str]:
             os.path.join(p, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json")
             for p in sorted(_glob.glob(os.path.join(localapp, "Packages", "Claude_*")))
         )
+    if sys.platform == "darwin":
+        cands.append(_home("Library", "Application Support", "Claude",
+                           "claude_desktop_config.json"))
+    elif os.name != "nt":
+        cands.append(_home(".config", "Claude", "claude_desktop_config.json"))
     return cands
 
 
@@ -208,7 +214,10 @@ CLIENTS: dict[str, dict[str, Any]] = {
         "label": "VS Code",
         "candidates": lambda: (
             [os.path.join(_env("APPDATA"), "Code", "User", "settings.json")]
-            if _env("APPDATA") else [_home(".config", "Code", "User", "settings.json")]
+            if _env("APPDATA")
+            else [_home("Library", "Application Support", "Code", "User", "settings.json")]
+            if sys.platform == "darwin"
+            else [_home(".config", "Code", "User", "settings.json")]
         ),
         "keys": ["mcp", "servers"],
         "entry": lambda py: {"type": "stdio", "command": py, "args": ["-m", "neuron"]},
@@ -446,6 +455,44 @@ def register(client: str, slug: str, python_exe: str,
 def register_all(slug: str, python_exe: str, install_dir: str = "",
                  dry_run: bool = False) -> list[Result]:
     return [register(c, slug, python_exe, install_dir, dry_run) for c in CLIENTS]
+
+
+def deregister(client: str, slug: str) -> Result:
+    """T63: remove OUR slug entry from a client config (uninstall path).
+    Non-destructive: JSON only (JSONC never rewritten), backup, verify.
+    Codex TOML: our [mcp_servers.<slug>] section is emptied via regex."""
+    spec = CLIENTS.get(client)
+    if spec is None:
+        return Result(client, False, "unknown client")
+    chosen, _ = pick_existing(list(spec["candidates"]()))
+    if chosen is None:
+        return Result(client, True, "skipped", "config not found")
+    if spec["format"] == "toml":
+        old = read_text(chosen)
+        pattern = re.compile(r"(?ms)^\[mcp_servers\." + re.escape(slug) + r"\]\s*?\r?\n.*?(?=^\[|\Z)")
+        if not pattern.search(old):
+            return Result(client, True, "skipped", "not registered")
+        backup(chosen)
+        with open(chosen, "w", encoding="utf-8") as fh:
+            fh.write(pattern.sub("", old))
+        return Result(client, True, "deregistered", path=chosen)
+    data, kind = load_config(chosen)
+    if kind in ("jsonc", "invalid"):
+        return Result(client, False, "manual step required",
+                      f"config is {kind}: remove the '{slug}' entry by hand", path=chosen)
+    node = data
+    for k in spec["keys"]:
+        node = node.get(k) if isinstance(node, dict) else None
+    if not isinstance(node, dict) or slug not in node:
+        return Result(client, True, "skipped", "not registered")
+    node.pop(slug, None)
+    backup(chosen)
+    save_json(chosen, data)
+    return Result(client, True, "deregistered", path=chosen)
+
+
+def deregister_all(slug: str) -> list[Result]:
+    return [deregister(c, slug) for c in CLIENTS]
 
 
 # ---------------------------------------------------------------------------

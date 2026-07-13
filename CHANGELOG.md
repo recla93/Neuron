@@ -15,9 +15,30 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [Unreleased] — 5.4 line
+
+### Added
+- **Universal lifecycle CLI: `neuron setup` (ADR-007).** Cross-platform
+  install/repair/status/uninstall for macOS, Linux and Windows:
+  `pipx install neuron && neuron setup`. Interactive numbered menu plus
+  non-interactive flags (`--register-all/--repair/--status/--uninstall
+  [--purge-data] --yes`, CI-friendly exit codes). Reuses the tested
+  registration engine; new `deregister()` (JSON-safe, backup, idempotent,
+  JSONC never rewritten, Codex TOML section removal). Client paths extended
+  to macOS/Linux (Claude Desktop, VS Code). CI now smoke-tests
+  `neuron setup --status` from the built wheel.
+- **`neuron manage` (ADR-007 fase 2).** Cross-platform day-to-day management:
+  contexts overview (local + cloud, with counts and top concept), JSON export,
+  consolidate, graph visualizer launcher, doctor — interactive menu or flags.
+
 ## [5.3.1] — 2026-07-11
 
 ### Fixed
+- `store_turn` crashed with "no such table: meta" on a pristine store:
+  pyturso creates an empty 0-byte file on connect, so the schemaless file
+  passed the exists-check and the unguarded meta read in `load_sqlite` blew
+  up the whole load. A schemaless store now loads as empty (the first save
+  creates the schema), matching the missing-file semantics.
 - Graph Visualizer: the 🎨 node-size slider had no effect — nodes carried a
   vis-network `value`, which switches to value-based scaling and silently
   ignores `size`. Dropped `value`; sizes are computed (salience × slider).

@@ -1290,7 +1290,17 @@ class Graph:
         conn = _db.connect(path)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
-            meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+            # T64: a PRISTINE store can exist without a schema — pyturso creates
+            # an empty 0-byte file on connect (see db._ensure_parent_dir notes),
+            # and a fresh shared cloud DB has no tables until the first save.
+            # Reading meta then raises "no such table: meta" and crashed the
+            # whole load (hence store_turn). Treat it as "empty store": load
+            # nothing; the first save creates the schema, exactly like the
+            # missing-file path above.
+            try:
+                meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+            except Exception:
+                return
 
             def _as_float(v):
                 try:

@@ -215,6 +215,38 @@ class TestDoctor(unittest.TestCase):
                                      fake_current)
 
 
+class TestDeregister(unittest.TestCase):
+    """T63 — uninstall path: remove only our slug, idempotent, backup taken."""
+
+    def test_deregister_removes_only_our_slug(self):
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("os.path.expanduser",
+                            side_effect=lambda p: p.replace("~", td)):
+                os.makedirs(os.path.join(td, ".cursor"))
+                p = os.path.join(td, ".cursor", "mcp.json")
+                C.save_json(p, {"mcpServers": {
+                    "neuron5": {"command": PY}, "other": {"command": "y"}}})
+                r = C.deregister("cursor", "neuron5")
+                self.assertTrue(r.ok and r.action == "deregistered")
+                cfg = json.load(open(p))
+                self.assertNotIn("neuron5", cfg["mcpServers"])
+                self.assertIn("other", cfg["mcpServers"])
+                self.assertTrue(os.path.exists(p + ".neuron-bak"))
+                self.assertEqual(C.deregister("cursor", "neuron5").action, "skipped")
+
+    def test_deregister_never_rewrites_jsonc(self):
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("os.path.expanduser",
+                            side_effect=lambda p: p.replace("~", td)):
+                os.makedirs(os.path.join(td, ".cursor"))
+                p = os.path.join(td, ".cursor", "mcp.json")
+                jsonc = '{\n  // hi\n  "mcpServers": {"neuron5": {"command": "x"}},\n}\n'
+                open(p, "w").write(jsonc)
+                r = C.deregister("cursor", "neuron5")
+                self.assertFalse(r.ok)
+                self.assertEqual(open(p).read(), jsonc)
+
+
 class TestProcessDoctor(unittest.TestCase):
     """B6b — live-process section coupled with the doctor."""
 

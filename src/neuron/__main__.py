@@ -50,6 +50,12 @@ def cli() -> None:
     if len(sys.argv) > 1 and sys.argv[1] in ("register", "doctor"):
         from neuron.clients import cli as clients_cli   # stdlib-only, no server import
         raise SystemExit(clients_cli(sys.argv[1:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        from neuron.setup import main as setup_main     # T63: universal lifecycle CLI
+        raise SystemExit(setup_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "manage":
+        from neuron.manage import main as manage_main   # T63 fase 2: management CLI
+        raise SystemExit(manage_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         raise SystemExit(_consolidate_cli(sys.argv[2:]))
     import asyncio

@@ -193,25 +193,27 @@ body{font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif; color:var(--t
 #net{position:absolute; inset:0}
 .panel{position:absolute; background:var(--panel); border:1px solid var(--panel-br);
        border-radius:14px; backdrop-filter:blur(10px); box-shadow:0 8px 32px rgba(0,0,0,.45)}
-#topbar{top:14px; left:14px; right:14px; padding:10px 14px; display:flex; gap:10px;
-        align-items:center; flex-wrap:wrap; z-index:10}
+#topbar{top:14px; left:14px; right:14px; padding:10px 14px; display:flex; gap:8px;
+        align-items:center; flex-wrap:nowrap; z-index:10; overflow:hidden}
 #topbar b{font-size:15px; letter-spacing:.4px}
 #topbar .brain{font-size:18px}
 #stats{color:var(--tx-dim); font-size:12px; margin-right:auto}
 select,input[type=text]{background:#0e1430; color:var(--tx); border:1px solid var(--panel-br);
         border-radius:8px; padding:6px 10px; font:inherit; outline:none}
-input[type=text]{width:190px}
+input[type=text]{width:160px}
 input[type=text]:focus{border-color:var(--accent)}
 button{background:#1a2350; color:var(--tx); border:1px solid var(--panel-br); border-radius:8px;
        padding:6px 12px; font:inherit; cursor:pointer}
 button:hover{border-color:var(--accent)}
 button.on{background:var(--accent); color:#0b0e1a; font-weight:600}
+button.small{padding:4px 8px; font-size:11px; min-width:36px}
 .chip{display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
       border:1px solid var(--panel-br); cursor:pointer; font-size:12px; user-select:none}
 .chip .dot{width:9px;height:9px;border-radius:50%}
 .chip.off{opacity:.28}
-#chips{display:flex; gap:6px; flex-wrap:wrap}
-#insights{left:14px; top:78px; bottom:88px; width:265px; padding:14px; overflow-y:auto; z-index:9}
+#chips{display:flex; gap:6px; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none}
+#chips::-webkit-scrollbar{display:none}
+#insights{left:14px; top:82px; bottom:82px; width:265px; padding:14px; overflow-y:auto; z-index:9}
 #insights h3{font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--tx-dim);
              margin:14px 0 6px}
 #insights h3:first-child{margin-top:0}
@@ -219,7 +221,7 @@ button.on{background:var(--accent); color:#0b0e1a; font-weight:600}
 .item:hover{background:rgba(124,140,255,.12)}
 .item .v{color:var(--tx-dim); font-size:12px; white-space:nowrap}
 .item .k{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-#side{right:14px; top:78px; width:300px; max-height:calc(100% - 180px); padding:16px;
+#side{right:14px; top:82px; bottom:82px; width:300px; padding:16px;
       overflow-y:auto; display:none; z-index:9}
 #side h2{font-size:17px; margin-bottom:2px; overflow-wrap:anywhere}
 #side .sub{color:var(--tx-dim); font-size:12px; margin-bottom:10px}
@@ -235,12 +237,12 @@ button.on{background:var(--accent); color:#0b0e1a; font-weight:600}
          align-items:center; z-index:10}
 #turnlbl{min-width:120px; color:var(--tx-dim); font-size:12.5px}
 input[type=range]{flex:1; accent-color:var(--accent)}
-#legend{position:absolute; right:20px; bottom:88px; font-size:11.5px; color:var(--tx-dim); z-index:8;
+#legend{position:absolute; right:20px; bottom:82px; font-size:11.5px; color:var(--tx-dim); z-index:8;
         text-align:right}
 #legend span{margin-left:10px}
-#toast{position:absolute; left:50%; top:84px; transform:translateX(-50%); background:var(--panel);
+#toast{position:absolute; left:50%; bottom:90px; transform:translateX(-50%); background:var(--panel);
        border:1px solid var(--panel-br); border-radius:10px; padding:8px 16px; display:none; z-index:20}
-#stylepanel{right:14px; top:78px; width:290px; max-height:calc(100% - 180px); padding:16px;
+#stylepanel{right:14px; top:82px; bottom:82px; width:290px; padding:16px;
             overflow-y:auto; display:none; z-index:11}
 #stylepanel h3{font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--tx-dim); margin:12px 0 6px}
 #stylepanel h3:first-child{margin-top:0}
@@ -252,6 +254,7 @@ input[type=range]{flex:1; accent-color:var(--accent)}
 .colrow input[type=color]{width:26px; height:22px; border:none; border-radius:6px; background:none; padding:0; cursor:pointer}
 #stylepanel .foot{display:flex; gap:8px; margin-top:14px}
 ::-webkit-scrollbar{width:8px} ::-webkit-scrollbar-thumb{background:#26305e; border-radius:4px}
+@keyframes nodeAppear{from{opacity:0;transform:scale(0)} to{opacity:1;transform:scale(1)}}
 </style>
 </head>
 <body>
@@ -260,6 +263,7 @@ input[type=range]{flex:1; accent-color:var(--accent)}
 <div id="topbar" class="panel">
   <span class="brain">🧠</span><b>Neuron</b>
   <select id="ctxsel" title="context"></select>
+  <button id="btn-allctx" title="show all contexts merged">🌐 All</button>
   <span id="stats"></span>
   <div id="chips"></div>
   <input type="text" id="search" placeholder="🔍 find a concept…">
@@ -276,6 +280,7 @@ input[type=range]{flex:1; accent-color:var(--accent)}
 
 <div id="timebar" class="panel">
   <button id="btn-play" title="replay the memory growing">▶ Replay</button>
+  <button id="btn-speed" title="replay speed">1×</button>
   <input type="range" id="timeline" min="1" max="1" value="1">
   <span id="turnlbl"></span>
 </div>
@@ -342,33 +347,43 @@ function visNode(n){
 }
 function visEdge(l,i){
   const drift = !!l.drift;
-  const c = drift ? "#e17cff" : (TYPE_COLORS[l.link_type]||"#8b93b8");
+  const bridge = !!l._bridge;
+  const c = bridge ? "#ffffff" : (drift ? "#e17cff" : (TYPE_COLORS[l.link_type]||"#8b93b8"));
   return {
     id:"e"+i, from:l.source, to:l.target,
     width:((WEIGHT_W[l.weight]||2) + Math.min(l.coact*0.35, 3)) * STYLE.edgeScale,   // Hebbian: co-activation thickens
     color:{color:c, opacity: l.weight==="tangential"?0.35:0.7, highlight:"#ffffff"},
-    dashes: drift ? [2,6] : (l.weight==="tangential" ? [4,4] : false),
+    dashes: bridge ? [3,3] : (drift ? [2,6] : (l.weight==="tangential" ? [4,4] : false)),
     arrows: drift ? {to:{enabled:true, scaleFactor:.5}} : undefined,
     smooth:{type:"continuous", roundness:.35}, _l:l,
   };
 }
 
-function rebuild(){
-  G = GRAPHS[CTX];
+// `light` (used by timeline scrubbing): skip the insights recompute, which is
+// invariant to the time cursor (hubs/salience/dormant come from the full graph,
+// not tMax) and only wastes O(links + N·logN) on every drag tick.
+function rebuild(light){
+  if(allCtxMode){
+    if(!allCtxGraph) buildAllCtxGraph();
+    G = allCtxGraph;
+  } else {
+    allCtxGraph = null;
+    G = GRAPHS[CTX];
+  }
   maxSal = Math.max(1, ...G.nodes.map(n=>n.salience));
   maxTurn = Math.max(1, G.turn_count, ...G.nodes.map(n=>n.turn));
   const tl = document.getElementById("timeline");
   tl.max = maxTurn; if(+tl.value>maxTurn || +tl.value===1) tl.value = maxTurn;
   tMax = +tl.value;
-  const keep = n => !domainOff.has(n.domain) && n.turn<=tMax ? true : false;
-  const nset = new Set(G.nodes.filter(keep).map(n=>n.keyword));
-  nodesDS = new vis.DataSet(G.nodes.filter(keep).map(visNode));
+  const kept = G.nodes.filter(n => !domainOff.has(n.domain) && n.turn<=tMax);  // one pass, reused below
+  const nset = new Set(kept.map(n=>n.keyword));
+  nodesDS = new vis.DataSet(kept.map(visNode));
   edgesDS = new vis.DataSet(G.links
     .map((l,i)=>[l,i]).filter(([l])=> nset.has(l.source)&&nset.has(l.target)
       && !typeOff.has(l.drift?"drift":l.link_type) && (l.created_turn||0)<=tMax)
     .map(([l,i])=>visEdge(l,i)));
   if(network){ network.setData({nodes:nodesDS, edges:edgesDS}); }
-  renderStats(); renderInsights(); renderTurnLabel();
+  renderStats(); if(!light) renderInsights(); renderTurnLabel();
 }
 
 // ---- boot ------------------------------------------------------------------
@@ -454,9 +469,10 @@ function showNode(id){
   toggleStyle(false);
   selected=id;
   const deg = G.links.filter(l=>l.source===id||l.target===id).length;
-  let h=`<h2>${n.keyword}</h2><div class="sub">
+  const ctxLabel = n._ctx ? `<span style="color:${n._ctxColor}">●</span> ${n._ctx} · ` : "";
+  let h=`<h2>${id.includes("::")?id.split("::")[1]:id}</h2><div class="sub">
     <span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${domColor(n.domain)}"></span>
-    ${n.domain} · ${n.sentiment} · ${deg} links</div>`;
+    ${ctxLabel}${n.domain} · ${n.sentiment} · ${deg} links</div>`;
   h+=`<div class="row"><span class="lbl">salience ${n.salience}</span>
       <div class="salbar"><div style="width:${Math.round(100*n.salience/maxSal)}%"></div></div></div>`;
   h+=`<div class="row"><span class="lbl">last seen</span> turn ${n.turn}`
@@ -509,7 +525,7 @@ function rebuildNodesOnly(){
 
 // ---- heartbeat pulse ---------------------------------------------------------
 function pulse(){
-  if(!pulseOn || selected) return;
+  if(!pulseOn || selected || document.hidden) return;   // don't animate a hidden tab
   pulseTick^=1;
   const top=[...G.nodes].sort((a,b)=>b.salience-a.salience).slice(0,3);
   for(const n of top){
@@ -521,15 +537,116 @@ function pulse(){
 
 // ---- replay -----------------------------------------------------------------
 let playing=null;
+let replaySpeed = 450;
+let nodesByTurn={};
+function precomputeTimeline(){
+  nodesByTurn={};
+  for(const n of G.nodes){
+    if(!nodesByTurn[n.turn]) nodesByTurn[n.turn]=[];
+    nodesByTurn[n.turn].push(n);
+  }
+}
 function togglePlay(){
   const btn=document.getElementById("btn-play"), tl=document.getElementById("timeline");
   if(playing){ clearInterval(playing); playing=null; btn.textContent="▶ Replay"; return; }
-  tl.value=1; tMax=1; rebuild();
+  nodesDS.clear(); edgesDS.clear();
+  if(network) network.setData({nodes:nodesDS, edges:edgesDS});
+  precomputeTimeline();
+  const addedEdges=new Set();
+  let cur=1; tMax=1; tl.value=1;
   btn.textContent="⏸ Stop";
-  playing=setInterval(()=>{
-    tMax=+tl.value+1; tl.value=tMax; rebuild();
-    if(tMax>=maxTurn){ clearInterval(playing); playing=null; btn.textContent="▶ Replay"; }
-  }, 450);
+  renderTurnLabel();
+  function step(){
+    cur++; tMax=cur; tl.value=cur;
+    const fresh=(nodesByTurn[cur]||[]).filter(n=>!domainOff.has(n.domain));
+    if(fresh.length){
+      nodesDS.add(fresh.map(n=>{
+        const v=visNode(n);
+        v.borderWidth=5; v.color={...v.color, border:"#ffffff"};
+        return v;
+      }));
+      setTimeout(()=>{
+        for(const n of fresh){
+          if(!nodesDS.get(n.keyword)) continue;
+          const hot=isHot(n);
+          nodesDS.update({id:n.keyword, borderWidth:hot?3:1.5,
+            color:{background:domColor(n.domain), border:hot?"#ffffff":domColor(n.domain),
+                   highlight:{background:domColor(n.domain),border:"#ffffff"},
+                   hover:{background:domColor(n.domain),border:"#c9d2ff"}}});
+        }
+      }, 350);
+    }
+    // Check ALL edges: add any whose endpoints exist now and created_turn<=cur
+    const nset=new Set(nodesDS.getIds());
+    const newEdges=[];
+    for(let i=0;i<G.links.length;i++){
+      if(addedEdges.has(i)) continue;
+      const l=G.links[i];
+      if(nset.has(l.source)&&nset.has(l.target)&&(l.created_turn||0)<=cur
+         &&!typeOff.has(l.drift?"drift":l.link_type)){
+        newEdges.push(visEdge(l,i));
+        addedEdges.add(i);
+      }
+    }
+    if(newEdges.length) edgesDS.add(newEdges);
+    renderStats(); renderInsights(); renderTurnLabel();
+    if(cur>=maxTurn){ clearInterval(playing); playing=null; btn.textContent="▶ Replay"; }
+  }
+  step();
+  playing=setInterval(step, replaySpeed);
+}
+
+// ---- all-contexts view ------------------------------------------------------
+let allCtxMode = false;
+let allCtxGraph = null;   // merged {nodes, links, turn_count}
+function toggleAllCtx(){
+  allCtxMode = !allCtxMode;
+  const btn = document.getElementById("btn-allctx");
+  const sel = document.getElementById("ctxsel");
+  btn.classList.toggle("on", allCtxMode);
+  sel.disabled = allCtxMode;
+  selected=null; hideSide();
+  rebuild();
+  network.fit();
+}
+function buildAllCtxGraph(){
+  const merged = {nodes:[], links:[], turn_count:0};
+  const ctxPalette = ["#7c8cff","#4be1a0","#ffb84d","#ff6b9d","#b07cff","#53c7ff"];
+  const ctxList = Object.keys(GRAPHS);
+  ctxList.forEach((c,i)=>{
+    const gd = GRAPHS[c];
+    const pfx = c.replace(/[^a-zA-Z0-9]/g,"_");
+    const cColor = ctxPalette[i % ctxPalette.length];
+    merged.turn_count = Math.max(merged.turn_count, gd.turn_count);
+    for(const n of gd.nodes){
+      merged.nodes.push({...n, keyword: pfx+"::"+n.keyword, _ctx:c, _ctxColor:cColor});
+    }
+    for(const l of gd.links){
+      merged.links.push({...l,
+        source: pfx+"::"+l.source, target: pfx+"::"+l.target,
+        _ctx:c, _edgeId: pfx+"::"+l.source+"→"+pfx+"::"+l.target,
+      });
+    }
+  });
+  // Cross-context bridges: same keyword in different contexts
+  const kwCtx = {};
+  for(const n of merged.nodes){
+    const kw = n.keyword.split("::")[1];
+    if(!kwCtx[kw]) kwCtx[kw]=[];
+    kwCtx[kw].push(n.keyword);
+  }
+  let bi = 0;
+  for(const [kw, ids] of Object.entries(kwCtx)){
+    if(ids.length < 2) continue;
+    for(let i=1;i<ids.length;i++){
+      merged.links.push({
+        source:ids[0], target:ids[i], link_type:"bridge", weight:"tangential",
+        rationale:"shared concept across contexts", created_turn:1, last_active_turn:merged.turn_count,
+        coact:0, drift:null, _bridge:true, _edgeId:"bridge::"+bi++,
+      });
+    }
+  }
+  allCtxGraph = merged;
 }
 
 // ---- style editor (🎨, Obsidian-like) ----------------------------------------
@@ -614,12 +731,31 @@ function wire(){
     hit ? focusNode(hit.keyword) : toast("no concept matches "+JSON.stringify(q));
   });
   const tl=document.getElementById("timeline");
-  tl.addEventListener("input", ()=>{ tMax=+tl.value; rebuild(); });
+  // Scrubbing fires 'input' on every pixel of drag. Coalesce those into at most
+  // one rebuild per animation frame (was a synchronous full DataSet rebuild +
+  // physics restart PER pixel — the main source of timeline jank). The 'change'
+  // event (fired once on release) does a full rebuild to refresh the panels.
+  let _tlRaf=0;
+  tl.addEventListener("input", ()=>{
+    if(_tlRaf) return;
+    _tlRaf=requestAnimationFrame(()=>{ _tlRaf=0; rebuild(true); });
+  });
+  tl.addEventListener("change", ()=>{ if(_tlRaf){ cancelAnimationFrame(_tlRaf); _tlRaf=0; } rebuild(); });
   bindToggle("btn-physics", on=>network.setOptions({physics:{enabled:on}}));
   bindToggle("btn-labels", on=>{ labelsOn=on; rebuildNodesOnly(); });
   bindToggle("btn-pulse", on=>{ pulseOn=on; if(!on) rebuildNodesOnly(); });
   bindToggle("btn-insights", on=>{ document.getElementById("insights").style.display=on?"block":"none"; });
   document.getElementById("btn-play").onclick=togglePlay;
+  document.getElementById("btn-allctx").onclick=toggleAllCtx;
+  // Speed cycle: 450ms (1×) → 900ms (0.5×) → 225ms (2×)
+  const speeds = [{label:"1×", ms:450},{label:"0.5×", ms:900},{label:"2×", ms:225}];
+  let speedIdx = 0;
+  document.getElementById("btn-speed").onclick=()=>{
+    speedIdx = (speedIdx+1) % speeds.length;
+    replaySpeed = speeds[speedIdx].ms;
+    document.getElementById("btn-speed").textContent = speeds[speedIdx].label;
+    if(playing){ clearInterval(playing); playing=null; togglePlay(); }
+  };
 }
 function bindToggle(id, fn){
   const b=document.getElementById(id);
