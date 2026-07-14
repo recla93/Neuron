@@ -31,14 +31,27 @@ FINDLINKS=""
 
 # Verify
 GUI_EXE="$NEURON_HOME/.venv/bin/neuron-gui"
-if [ -x "$GUI_EXE" ] || command -v neuron-gui >/dev/null 2>&1; then
+if [ ! -x "$GUI_EXE" ] && ! command -v neuron-gui >/dev/null 2>&1; then
+    echo ""
+    echo "  [!] neuron-gui not found. Check: pip show neuron | grep gui-scripts"
+    exit 1
+fi
+
+# Create Desktop symlink
+DESKTOP="${XDG_DESKTOP_DIR:-$HOME/Desktop}"
+LINK="$DESKTOP/neuron-gui"
+if [ -d "$DESKTOP" ]; then
+    ln -sf "$GUI_EXE" "$LINK"
     echo ""
     echo "============================================================"
-    echo "  neuron-gui installed."
-    echo "  Run:  neuron-gui"
-    echo "  Or:   python -m neuron gui"
+    echo "  Symlink created on Desktop: $LINK"
+    echo "  Target: $GUI_EXE"
+    echo ""
+    echo "  Click the link or run:  neuron-gui"
     echo "============================================================"
 else
     echo ""
-    echo "  [!] neuron-gui not found. Check: pip show neuron | grep gui-scripts"
+    echo "  neuron-gui installed."
+    echo "  Run:  neuron-gui"
+    echo "  Or:   python -m neuron gui"
 fi

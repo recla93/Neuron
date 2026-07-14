@@ -40,18 +40,36 @@ if errorlevel 1 (
 
 REM 2) Verify neuron-gui.exe was created
 set "GUIEXE=%LOCALAPPDATA%\Programs\neuron5\.venv\Scripts\neuron-gui.exe"
-if exist "%GUIEXE%" (
-    echo.
-    echo ============================================================
-    echo   neuron-gui.exe created at:
-    echo   %GUIEXE%
-    echo.
-    echo   Double-click it or run:  python -m neuron gui
-    echo ============================================================
-) else (
+if not exist "%GUIEXE%" (
     echo.
     echo   [!] neuron-gui.exe not found in venv Scripts/.
     echo       The gui-scripts entry may not have been processed.
     echo       Check: pip show neuron ^| findstr gui-scripts
+    pause
+    exit /b 1
+)
+
+REM 3) Create Desktop shortcut
+set "SHORTCUT=%USERPROFILE%\Desktop\Neuron GUI.lnk"
+powershell -NoProfile -Command ^
+    "$ws = New-Object -ComObject WScript.Shell; ^
+     $sc = $ws.CreateShortcut('%SHORTCUT%'); ^
+     $sc.TargetPath = '%GUIEXE%'; ^
+     $sc.WorkingDirectory = '%LOCALAPPDATA%\Programs\neuron5'; ^
+     $sc.Description = 'Neuron - Persistent Semantic Memory'; ^
+     $sc.Save()"
+
+if exist "%SHORTCUT%" (
+    echo.
+    echo ============================================================
+    echo   Shortcut created on Desktop: Neuron GUI.lnk
+    echo   Target: %GUIEXE%
+    echo.
+    echo   Double-click the shortcut or run:  python -m neuron gui
+    echo ============================================================
+) else (
+    echo.
+    echo   [!] Could not create Desktop shortcut.
+    echo       Run manually:  python -m neuron gui
 )
 pause

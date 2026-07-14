@@ -80,6 +80,23 @@ Useful flags:
 > needs Rust + MSVC + the Windows SDK. The release workflow builds that wheel
 > once on CI so you don't have to.
 
+### GUI only (no Rust, no MSVC)
+
+If you just want the Tkinter visual hub — no chat, no CLI tools:
+
+- **Windows:** double-click `Install-GUI.bat`
+- **macOS / Linux:** `chmod +x install-gui.sh && ./install-gui.sh`
+
+Both scripts run `pip install -e .` (editable), which triggers the
+`[project.gui-scripts]` entry in `pyproject.toml` and creates:
+
+| Platform | Executable | Desktop shortcut |
+|---|---|---|
+| Windows | `neuron-gui.exe` in venv `Scripts/` | `Neuron GUI.lnk` on Desktop |
+| macOS / Linux | `neuron-gui` in venv `bin/` | `neuron-gui` symlink on Desktop |
+
+No Rust toolchain, no MSVC — Python + pip only.
+
 ### Building the `vendor\` wheels (maintainers)
 
 `install.ps1` looks for pre-built `pyturso` wheels in a `vendor\` folder next to
