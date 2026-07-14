@@ -23,7 +23,7 @@ echo    ============================================
 echo.
 echo      1  Setup      (install / repair / uninstall)
 echo      2  Manage     (overview / export / visualizer / doctor)
-echo      3  Configuration Center  (full menu: bridge, cloud, tests...)
+echo      3  Configuration Center  (opens Manage: bridge, tunnel, cloud, console)
 echo      4  Quick health check    (doctor, read-only)
 echo      5  Exit
 echo.
@@ -35,6 +35,15 @@ if errorlevel 2 goto manage
 goto setup
 
 :setup
+REM First run (no install venv yet): hand off to the real installer.
+if not exist "%LOCALAPPDATA%\Programs\neuron5\.venv\Scripts\python.exe" (
+    if exist "%~dp0install.ps1" (
+        echo    First run - installing Neuron...
+        powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0install.ps1"
+        pause
+        goto menu
+    )
+)
 %VPY% -m neuron setup
 pause
 goto menu

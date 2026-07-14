@@ -9,7 +9,7 @@ you running by hand.
 
 **TL;DR**
 
-- **Windows** → double-click `Configuration.bat` → *Install / Update Neuron → FULL*.
+- **Windows** → double-click `Neuron.bat` → *Setup* (runs `install.ps1` on a fresh machine).
 - **macOS / Linux** → `python3 -m venv .venv && source .venv/bin/activate && pip install ".[dev]"` → `python -m neuron`.
 - **Register with a client** → `neuron register` (interactive, cross-platform) — or let the Windows installer do it.
 
@@ -36,8 +36,8 @@ the launch command with your MCP client.
 
 ## 1. Automated install (Windows)
 
-**One-click (no terminal):** double-click **`Configuration.bat`** in the project
-root. It opens an interactive menu (handles Windows' ExecutionPolicy for you)
+**One-click (no terminal):** double-click **`Neuron.bat`** in the project
+root and choose **Setup**. It opens an interactive menu (handles Windows' ExecutionPolicy for you)
 that walks you through everything in order — install prerequisites → PyTurso →
 full Neuron, add Neuron to your AI app, connect Turso Cloud / launch the bridge,
 run tests, the Live Log Console, and a clean uninstall. This is the recommended
@@ -199,7 +199,7 @@ neuron doctor              # check what's registered / spot problems
 neuron doctor --fix        # stop orphaned servers, clean duplicates
 ```
 
-On Windows, `install.ps1` (and `Configuration.bat`) already run this for you for Claude
+On Windows, `install.ps1` (via `Neuron.bat` → Setup) already runs this for you for Claude
 Desktop and Cursor. For everything else, or on macOS/Linux, run `neuron register`.
 
 ### By hand

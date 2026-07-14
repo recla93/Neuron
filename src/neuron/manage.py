@@ -121,9 +121,10 @@ def _menu() -> int:
               "  4) Graph visualizer (HTML)\n"
               "  5) Doctor (health check)\n"
               "  6) HTTP bridge (expose over HTTP for remote connectors)\n"
-              "  7) Live console (read-only graph diagnostics)\n"
-              "  8) Connect a Turso Cloud database\n"
-              "  9) Exit")
+              "  7) Cloudflare tunnel (public HTTPS via cloudflared)\n"
+              "  8) Live console (read-only graph diagnostics)\n"
+              "  9) Connect a Turso Cloud database\n"
+              " 10) Exit")
         try:
             ch = input("> ").strip()
         except EOFError:
@@ -148,9 +149,12 @@ def _menu() -> int:
             from neuron.bridge import main as bridge_main
             bridge_main([])
         elif ch == "7":
+            from neuron.tunnel import main as tunnel_main
+            tunnel_main([])
+        elif ch == "8":
             from neuron.console import main as console_main
             console_main([])
-        elif ch == "8":
+        elif ch == "9":
             from neuron.connect import main as connect_main
             connect_main([])
         else:

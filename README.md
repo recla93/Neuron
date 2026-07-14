@@ -100,9 +100,11 @@ literally matches.
 
 ### 🪟 Windows — one click
 
-Double-click **`Configuration.bat`** and choose **Install / Update Neuron → FULL**.
-It handles everything (prerequisites → PyTurso → Neuron + the embedding model), can wire
-Neuron into your AI app automatically, and logs every run. No terminal, no compiler.
+Double-click **`Neuron.bat`** and choose **Setup**. On a fresh machine it runs the
+installer (`install.ps1`) — prerequisites → PyTurso → Neuron + the embedding model,
+installing Python via winget if you don't have it — then wires Neuron into your AI apps.
+After that, `Neuron.bat` is also your hub for **Manage** (bridge, tunnel, cloud, console).
+No terminal, no compiler.
 
 <details>
 <summary>…or from a terminal</summary>
@@ -179,7 +181,7 @@ python scripts/connect_turso.py     # prompts, live-tests the connection, saves 
 ## 🕰️ Graph Visualizer
 
 Neuron ships an interactive, **self-contained HTML visualizer** — launch it from
-`Configuration.bat` (option 10) or `python scripts/generate_graph_html.py`. It reads through
+`neuron manage` (option 4, Graph visualizer) or `python scripts/generate_graph_html.py`. It reads through
 Neuron's own engine (so it sees the cloud too) and gives you:
 
 salience-sized, domain-colored nodes · Hebbian-thickened edges · drift-link styling ·

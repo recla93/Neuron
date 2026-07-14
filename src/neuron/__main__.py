@@ -71,6 +71,9 @@ def cli() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "console":
         from neuron.console import main as console_main  # read-only graph diagnostics
         raise SystemExit(console_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "tunnel":
+        from neuron.tunnel import main as tunnel_main    # cloudflared public HTTPS tunnel
+        raise SystemExit(tunnel_main(sys.argv[2:]))
     # T68: client-agnostic isolation flags. Some MCP hosts (OpenCode) don't
     # pass `env` to child processes at all, so a test/sandbox store couldn't be
     # isolated via NS_GRAPHS_DIR. Flags travel in the command array — which

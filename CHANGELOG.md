@@ -65,6 +65,13 @@ Release.
 - **New `install.sh` for macOS/Linux** — finds or installs Python 3.10+
   (brew/apt/dnf/pacman), installs Neuron via pipx or a venv, then runs
   `neuron setup`.
+- **Retired the 2,723-line `scripts/configuration.ps1`** — it duplicated
+  install/register/feature logic now owned by the Python CLI. It's now a 38-line
+  launcher that opens `neuron manage` (so `Configuration.bat` and existing
+  shortcuts keep working). Added `neuron tunnel` (cloudflared) so the last
+  Windows-only feature is cross-platform too; deleted the orphaned, dead
+  `scripts/_neuron_utils.ps1` (23 KB, dot-sourced by nothing). `Neuron.bat` is now
+  the one clickable hub — its **Setup** runs `install.ps1` on a fresh machine.
 
 ### Fixed
 - **`neuron setup --install --yes` hung on stdin.** The pre-warm prompt guard
