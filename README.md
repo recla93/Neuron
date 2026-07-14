@@ -66,7 +66,7 @@ Neuron builds a **concept graph**:
 | 🎯 | **Quality at the door** | A curation gate drops filler, folds duplicates and canonicalizes links, so the graph stays clean instead of bloating. |
 | 📖 | **Episodic facts** | Nodes carry short "what actually happened" facts, surfaced back into context on the next turn. |
 | 🕰️ | **Time-travel visualizer** | A self-contained interactive HTML graph — replay your memory growing turn by turn, filter by domain, inspect every node & link. |
-| 🩺 | **Batteries-included tooling** | Cross-platform CLI (`neuron register` / `doctor`), a one-click Windows Configuration Center, and a full test suite. |
+| 🩺 | **Batteries-included tooling** | Cross-platform CLI (`neuron register` / `doctor`), a Tkinter visual hub (`neuron gui`), and a full test suite. |
 
 ---
 

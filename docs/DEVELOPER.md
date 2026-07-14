@@ -114,9 +114,9 @@ Neuron/
 
 | Package | Required | Purpose |
 |---|---|---|
-| `mcp>=1.28.0` | yes | MCP SDK |
-| `fastembed>=0.5.0` | yes | 384-dim semantic embedding |
-| `pyturso>=0.6.1` | yes | Local Turso DB engine (vector_distance_cos) |
+| `mcp>=1.28.0,<2.0` | yes | MCP SDK |
+| `fastembed>=0.5.0,<1.0` | yes | 384-dim semantic embedding |
+| `pyturso==0.6.1` | yes | Local Turso DB engine (vector_distance_cos) |
 | `libsql-client>=0.3.1` | no (`neuron[cloud]`) | Real Turso cloud DB, used when `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` are set |
 | `ollama` | no | LLM provider for chat mode |
 | `openai` | no | LLM provider for chat mode |
@@ -332,7 +332,7 @@ On Linux/macOS, run from the project venv so `mcp`, `fastembed` and `pyturso` ar
 {
   "mcp": {
     "neuron": {
-      "command": ["cmd", "/c", "%LOCALAPPDATA%\\Programs\\neuron\\scripts\\run_mcp.bat"],
+      "command": ["cmd", "/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"],
       "type": "local"
     }
   }
@@ -346,7 +346,7 @@ On Linux/macOS, run from the project venv so `mcp`, `fastembed` and `pyturso` ar
   "mcpServers": {
     "neuron": {
       "command": "cmd",
-      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron\\scripts\\run_mcp.bat"]
+      "args": ["/c", "%LOCALAPPDATA%\\Programs\\neuron5\\scripts\\run_mcp.bat"]
     }
   }
 }
@@ -656,7 +656,7 @@ Two workflows:
 2. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new
    `## [X.Y.Z] - <date>` heading and fill in Added/Changed/Fixed/Removed.
 3. Run the full test suite (`scripts/run_tests.ps1`) and do a clean-machine install
-   smoke test via `Configuration.bat` → Install / Update → FULL. If you build the
+   smoke test via `Neuron.bat` → Setup / Manage. If you build the
    wheel/sdist locally to test, delete `build/`, `dist/`, and `src/*.egg-info`
    first — a stale `build/` staging dir or a cached `egg-info/SOURCES.txt` can
    bundle old files (CI builds from a fresh checkout, so the tagged Release is
@@ -673,7 +673,7 @@ Two workflows:
 ### Deploy / sync to the active install
 
 The MCP server actually used by clients runs from a **separate install dir**
-(`%LOCALAPPDATA%\Programs\neuron`), populated by `install.ps1`. That installer also sets up
+(`%LOCALAPPDATA%\Programs\neuron5`), populated by `install.ps1`. That installer also sets up
 the toolchain (Rust/MSVC), creates the venv and installs deps — heavy, and not what you want
 for a quick "push my code edits to the install" loop. Use `scripts/deploy.ps1` for that:
 

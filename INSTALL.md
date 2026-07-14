@@ -60,7 +60,7 @@ Or run the underlying installer directly from a terminal:
 What it does, in order:
 
 1. Verifies Python is 3.10–3.14.
-2. Creates a venv at `%LOCALAPPDATA%\Programs\neuron\.venv`.
+2. Creates a venv at `%LOCALAPPDATA%\Programs\neuron5\.venv`.
 3. `pip install`s the Neuron wheel, pointing pip at the **pre-built `pyturso`
    wheel** in `.\vendor` via `--find-links` — so **no C/Rust compiler is needed**.
 4. **Only if that fails** (e.g. an unsupported Python version), it installs the
@@ -293,7 +293,7 @@ pip install "neuron[cloud]"
 set TURSO_DATABASE_URL=libsql://your-db.turso.io
 set TURSO_AUTH_TOKEN=...
 ```
-See the README "Database engine" section.
+See the README "Storage" section.
 
 ---
 
