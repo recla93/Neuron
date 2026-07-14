@@ -51,13 +51,7 @@ if not exist "%GUIEXE%" (
 
 REM 3) Create Desktop shortcut
 set "SHORTCUT=%USERPROFILE%\Desktop\Neuron GUI.lnk"
-powershell -NoProfile -Command ^
-    "$ws = New-Object -ComObject WScript.Shell; ^
-     $sc = $ws.CreateShortcut('%SHORTCUT%'); ^
-     $sc.TargetPath = '%GUIEXE%'; ^
-     $sc.WorkingDirectory = '%LOCALAPPDATA%\Programs\neuron5'; ^
-     $sc.Description = 'Neuron - Persistent Semantic Memory'; ^
-     $sc.Save()"
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%SHORTCUT%'); $sc.TargetPath = '%GUIEXE%'; $sc.WorkingDirectory = '%LOCALAPPDATA%\Programs\neuron5'; $sc.Description = 'Neuron - Persistent Semantic Memory'; $sc.Save()"
 
 if exist "%SHORTCUT%" (
     echo.
