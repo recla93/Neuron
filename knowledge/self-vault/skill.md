@@ -6,19 +6,17 @@ Restituisce il testo integrale di una skill/playbook Neuron. Il playbook contien
 
 - Dopo [[help]]: quando l'indice non basta e serve la guida completa.
 - Una volta per sessione: caricare la skill e usarla come reference.
-- Nomi validi: `auto-context` (consigliato), `curated`, `base`, `full`.
+- Nomi validi: `playbook` (consigliato), `curated`.
 - Token-cheap: caricata on-demand, non always-on.
 
 ## Come si usa
 
 ```
-skill(name="auto-context")
+skill(name="playbook")
 ```
 
-- `auto-context`: PRE+POST flow (uso normale)
-- `curated`: regole per grafo pulito
-- `base`: versione essenziale
-- `full`: reference completo con tutti i moduli opzionali
+- `playbook`: workflow completo PRE+POST (uso normale)
+- `curated`: regole per grafo pulito (concept nouns, link tipati, no self-link)
 
 ## Vantaggio
 

@@ -1,4 +1,4 @@
-# Neuron — Auto-Context Skill
+# Neuron — Playbook
 
 Persistent semantic memory across conversations.
 Every exchange leaves traces in a graph; connections accumulate over time,

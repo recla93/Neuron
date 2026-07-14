@@ -439,7 +439,7 @@ async def list_tools() -> list[Tool]:
                 "Current graph state: nodes, links, health, configuration. Safe first "
                 "call to see if the memory holds anything. New to Neuron? The core "
                 "workflow is a 2-step loop each substantive turn: pre_turn (before) then "
-                "store_turn (after); call `help` or skill(name='auto-context') for the "
+                "store_turn (after); call `help` or skill(name='playbook') for the "
                 "full playbook."
             ),
             inputSchema={"type": "object", "properties": {}},
@@ -800,7 +800,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="help",
-            description="Show every Neuron command (one line each) plus how to use Neuron well. Call once at the start if unsure; full playbook: call skill(name='auto-context').",
+            description="Show every Neuron command (one line each) plus how to use Neuron well. Call once at the start if unsure; full playbook: call skill(name='playbook').",
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
@@ -812,8 +812,8 @@ async def list_tools() -> list[Tool]:
                     "name": {
                         "type": "string",
                         "enum": _SKILL_NAMES,
-                        "description": "Which skill: auto-context (PRE/POST workflow, recommended), curated (clean-graph patterns), base/full (references).",
-                        "default": "auto-context",
+                        "description": "Which skill: playbook (the full PRE/POST workflow) or curated (clean-graph patterns).",
+                        "default": "playbook",
                     },
                 },
             },
@@ -991,7 +991,7 @@ async def _tool_help(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 
 async def _tool_skill(arguments: dict, ctx: str, g) -> list[TextContent]:
-    which = arguments.get("name", "auto-context")
+    which = arguments.get("name", "playbook")
     meta = _SKILLS.get(f"neuron://skill/{which}")
     if meta is None:
         valid = ", ".join(k.rsplit("/", 1)[1] for k in _SKILLS)

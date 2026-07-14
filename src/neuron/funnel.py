@@ -33,36 +33,30 @@ SIGNPOST_BASE = (
     "is empty; step 1 always applies.\n"
     "Rules: 3-5 noun keywords (no verbs/paths); typed links, never self; "
     "silent pre_turn once per turn; dedup via find_candidates; never secrets.\n"
-    "Full playbook: call skill(name='auto-context')."
+    "Full playbook: call skill(name='playbook')."
 )
 
 # Skill files shipped inside the wheel (see pyproject package-data). Each is
 # exposed as an MCP resource; `parts` is the importlib.resources path under the
 # `neuron` package.
+# Two skills, distinct depths (consolidated from 4 — base/full were subsets of
+# the playbook and duplicated it):
+#   playbook — the full per-turn workflow (the on-demand detail behind the signpost)
+#   curated  — the graph-hygiene rules, kept separate so it can be fetched alone
 _SKILLS: dict[str, dict] = {
-    "neuron://skill/auto-context": {
-        "parts": ("skills", "auto-context.md"),
-        "name": "neuron-auto-context",
-        "description": "PRE/POST per-turn workflow for MCP clients — the recommended playbook.",
+    "neuron://skill/playbook": {
+        "parts": ("skills", "playbook.md"),
+        "name": "neuron-playbook",
+        "description": "The full per-turn workflow: PRE/POST loop, extraction, linking, tools, provider notes.",
     },
     "neuron://skill/curated": {
         "parts": ("skills", "neuron-curated-memory", "SKILL.md"),
         "name": "neuron-curated-memory",
         "description": "How to curate turns so the graph stays clean: concept nouns, typed links, no self-links.",
     },
-    "neuron://skill/base": {
-        "parts": ("skills", "SKILL_base.md"),
-        "name": "neuron-base",
-        "description": "Compact reference / fallback for clients without MCP tool access.",
-    },
-    "neuron://skill/full": {
-        "parts": ("skills", "SKILL_full.md"),
-        "name": "neuron-full",
-        "description": "Full reference with all modules and the JSON export format.",
-    },
 }
 
-# Short names (e.g. "auto-context") for the `skill` tool's enum — derived from
+# Short names (e.g. "playbook") for the `skill` tool's enum — derived from
 # _SKILLS so the tool's declared options can never drift from what it can serve.
 _SKILL_NAMES = [uri.rsplit("/", 1)[1] for uri in _SKILLS]
 

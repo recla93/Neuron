@@ -50,6 +50,18 @@ Release.
   `tests/_mockdeps.py` (`install_mock_deps()`). Files using real deps via
   `importorskip` are untouched.
 
+### Changed — leaner skill / handshake delivery (fewer per-session tokens)
+- **Handshake compressed ~48% and de-duplicated.** The SessionStart hooks
+  (Claude Code, cowork plugin, OpenCode) each carried a ~1,400-char copy of the
+  full loop + anti-misuse rules — and several fire per session. They're now a
+  compact ~730-char per-turn loop (ASCII-only, so no cp1252 breakage); the full
+  curation rules live on demand in the skills, not in every session's context.
+- **Skills consolidated 4 → 2.** `auto-context` → `playbook` (the full workflow);
+  `SKILL_base` and `SKILL_full` deleted (subsets that duplicated it); `curated`
+  kept separate. The signpost, `skill` tool default/enum, hooks and docs now all
+  point at `playbook`. (Both the packaged `src/neuron/skills/` and the editable
+  repo `skills/` copies stay byte-identical, enforced by the drift-guard test.)
+
 ### Changed — unified installer / single entry point
 - **Visual hub: `neuron gui`.** A small Tkinter launcher (stdlib, no new deps, no
   PyInstaller) is the centralized, clickable manager — quick read-only checks

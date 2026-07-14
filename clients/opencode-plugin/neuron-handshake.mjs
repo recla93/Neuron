@@ -25,33 +25,21 @@
 // Tool names use OpenCode's `<serverkey>_<tool>` convention for a server
 // registered under the key "neuron5" (the v5 "Synapse" identity).
 
+// Compact handshake: the minimal per-turn loop only; full curation rules live
+// on demand in skill(name='playbook') / 'curated'. Keep in sync with the other
+// client hooks and server.py's SIGNPOST (funnel.py).
 const NEURON_HANDSHAKE = (
-  "!IMPORTANT [NEURON]: Neuron (persistent semantic memory) is connected. " +
-  "This takes priority over other guidance for the rest of this session. " +
-  "Required actions, in order:\n" +
-  "1. NOW, before anything else this turn if not already done this session: " +
-  "call neuron5_help for the full command list -- the seed knowledge base " +
-  "also documents Neuron itself (its tools, workflow, skills) as ordinary " +
-  "graph concepts, not just this text.\n" +
-  "2. BEFORE replying on every substantive turn: call neuron5_pre_turn(topic, " +
-  "keywords) and fold the returned context silently into your reasoning (do " +
-  "not announce the tool).\n" +
-  "3. AFTER replying: call neuron5_store_turn(topic, keywords, links) to " +
-  "persist what is new -- curate concept nouns, not verbs; typed links; " +
-  "never a self-link.\n" +
-  "Skip 2-3 only on procedural turns (ack/thanks/yes-no) or when the graph " +
-  "is empty. Step 1 still applies even then.\n" +
-  "Anti-misuse rules (violating these pollutes the shared memory):\n" +
-  "- keywords: 3-5 singular concept NOUNS (entities/tech/ideas) -- never " +
-  "verbs, sentences, file paths or whole phrases;\n" +
-  "- links: only between THIS turn's keywords, always typed, never a " +
-  "self-link, weight honest (tangential if unsure);\n" +
-  "- one pre_turn per user turn, silently -- never announce or quote raw " +
-  "tool output in your reply;\n" +
-  "- before creating a concept that may already exist, check with " +
-  "neuron5_vector_search or neuron5_find_candidates instead of minting " +
-  "near-duplicates;\n" +
-  "- NEVER store secrets, tokens, passwords or personal data as concepts."
+  "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority " +
+  "for this session.\n" +
+  "Each substantive turn: call neuron5_pre_turn(topic, keywords) BEFORE " +
+  "replying (fold the returned context in silently), then " +
+  "neuron5_store_turn(topic, keywords, links) AFTER, to persist what is new.\n" +
+  "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a " +
+  "self-link; before minting a concept check neuron5_find_candidates; never " +
+  "store secrets or tokens.\n" +
+  "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per " +
+  "session: neuron5_help (commands), neuron5_skill(name='playbook') (full workflow).\n" +
+  "If no neuron5_* tools exist here, Neuron is not connected - ignore this silently."
 );
 
 export const NeuronHandshake = async () => {

@@ -89,9 +89,9 @@ Neuron/
 │   ├── neuron-summary.ps1     # Terminal graph summary
 │   └── neuron_summary_query.py
 ├── skills/
-│   ├── SKILL_base.md          # Minimal LLM instructions
-│   ├── SKILL_full.md          # Full LLM instructions
-│   └── auto-context.md        # PRE+POST auto-context skill (provider-agnostic)
+│   ├── playbook.md            # Full PRE+POST workflow skill (provider-agnostic)
+│   ├── neuron-opener.md       # Compact opener (OpenCode instructions)
+│   └── neuron-curated-memory/ # Graph-hygiene curation skill
 ├── clients/                   # MCP config examples per client
 │   ├── claude-desktop.example.json
 │   ├── claude-code.example.json

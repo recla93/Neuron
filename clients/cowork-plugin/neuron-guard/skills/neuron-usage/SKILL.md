@@ -67,6 +67,6 @@ the command list.
 
 ## Full documentation
 
-Call `mcp__neuron5__skill` with `name='auto-context'` for the complete
+Call `mcp__neuron5__skill` with `name='playbook'` for the complete
 playbook served by the server itself, or `mcp__neuron5__help` for the
 one-line command index.

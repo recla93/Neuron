@@ -28,7 +28,7 @@ is empty. Cheap fallback when you won't curate yourself:
 
 ## More on demand
 
-- Full playbook: call `skill(name="auto-context")` — returns the complete workflow.
+- Full playbook: call `skill(name="playbook")` — returns the complete workflow.
   Also `skill(name="curated")` (curation rules), `"base"`, `"full"`.
 - `help` — full command list, one line each.
 - `status` / `summary` — graph state; `switch_context("domain")` on a sharp topic shift.

@@ -4,7 +4,7 @@
     stay byte-identical to the editable source at repo-root skills/ (drift guard).
   * Fase 1 — the MCP `instructions` signpost exists, is compact, and is wired
     into InitializationOptions.
-  * Fase 2 — the four skills are exposed as MCP resources (neuron://skill/...),
+  * Fase 2 — the two skills are exposed as MCP resources (neuron://skill/...),
     readable on demand, with a clean error for unknown URIs.
 
 These mirror test_server.py's style: no mocking, `importorskip('mcp')` for the
@@ -32,9 +32,7 @@ def _root_skill_path(*parts):
 
 # Every skill file, as (path parts). The nested one is the curated-memory SKILL.
 SKILL_FILES = [
-    ("auto-context.md",),
-    ("SKILL_base.md",),
-    ("SKILL_full.md",),
+    ("playbook.md",),
     ("neuron-opener.md",),
     ("neuron-curated-memory", "SKILL.md"),
 ]
@@ -69,7 +67,7 @@ def test_signpost_present_and_compact():
     # It must state the loop and point at the door (the `skill` tool, which the
     # model can actually call — resources aren't reliably model-followable).
     assert "pre_turn" in SIGNPOST_BASE and "store_turn" in SIGNPOST_BASE
-    assert "skill(name='auto-context')" in SIGNPOST_BASE
+    assert "skill(name='playbook')" in SIGNPOST_BASE
 
 
 def test_signpost_wired_into_init_options():
@@ -103,7 +101,7 @@ def test_list_resources_exposes_all_skills():
     pytest.importorskip("mcp")
     from neuron.server import list_resources, _SKILLS
     resources = asyncio.run(list_resources())
-    assert len(resources) == len(_SKILLS) == 4
+    assert len(resources) == len(_SKILLS) == 2
     uris = {str(r.uri).rstrip("/") for r in resources}
     assert uris == set(_SKILLS.keys())
     for r in resources:
@@ -114,10 +112,10 @@ def test_list_resources_exposes_all_skills():
 def test_read_resource_returns_skill_text():
     pytest.importorskip("mcp")
     from neuron.server import read_resource
-    out = asyncio.run(read_resource("neuron://skill/auto-context"))
+    out = asyncio.run(read_resource("neuron://skill/playbook"))
     assert out and out[0].content
     assert out[0].mime_type == "text/markdown"
-    assert "Auto-Context" in out[0].content
+    assert "Playbook" in out[0].content
 
 
 def test_read_resource_matches_packaged_file():
@@ -161,8 +159,8 @@ def test_skill_tool_serves_every_declared_name():
 def test_skill_tool_returns_full_text():
     pytest.importorskip("mcp")
     from neuron.server import call_tool
-    out = asyncio.run(call_tool("skill", {"name": "auto-context"}))
-    assert out and "Auto-Context" in out[0].text
+    out = asyncio.run(call_tool("skill", {"name": "playbook"}))
+    assert out and "Playbook" in out[0].text
 
 
 def test_skill_tool_unknown_name_is_graceful():
