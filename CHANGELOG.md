@@ -17,6 +17,50 @@ Release.
 
 ## [Unreleased] — 5.4 line
 
+### Changed — code-quality pass (analysis 2026-07-14, all backward-compatible)
+- **Single source of truth for paths/tunables: `neuron/config.py` (P0 #3, P1 #9).**
+  `_default_graphs_dir()` / slug resolution were copy-pasted into `server.py`,
+  `manage.py` and `setup.py`; they now all delegate to `config.py`. Added
+  `env_int`/`env_float` helpers and made ~20 hardcoded tunables (Hebbian/drift
+  cooldowns, salience decay, sleep/stage seconds, episodes caps, `MAX_NODES`,
+  consolidate cadence, stimulus/topic thresholds, keyword/topic limits,
+  `MAX_AUTO_LINKS`) overridable via `NEURON_*` env vars with the old values as
+  defaults.
+- **Error visibility (P0 #2).** ~12 silent `except Exception: pass` blocks in
+  `server.py`/`registry.py`/`models.py`/`search.py`/`clients.py` now log at
+  debug/warning (stderr, never the stdio JSON-RPC stream); genuinely best-effort
+  paths (migrations, retries, process-kill) left as-is.
+- **Shared graph health metrics (P1 #8).** `models.compute_health()` is now the
+  one place strong/medium ratio, pruned ratio and nodes/turn are computed; the
+  `status` and `summary` tools read from it.
+- **Hot-path complexity (P1 #7).** `_score_tokens` bigram bonus is O(N) via a
+  precomputed participation map (was O(keywords x tokens)); `consolidate()`
+  early-terminates when <2 candidates or all nodes are protected; `engine._link`
+  uses an O(1) keyword→node map; the Python cosine ceiling is documented.
+- **API hygiene (P1 #15).** Added `__all__` to the public modules.
+- **Dependency bounds & cleanup (P2 #12/#13/#14).** Upper bounds on `mcp` (<2.0)
+  and `fastembed` (<1.0); dropped the unused `pytest-asyncio` dev dep; removed the
+  stale `_to_delete/` folder (27 lock/temp files).
+- **Dispatcher refactor (P0 #1).** The ~675-line `_call_tool_impl` if/elif chain in
+  `server.py` is now 22 module-level `_tool_<name>(arguments, ctx, g)` handlers plus a
+  `_HANDLERS` dict; the dispatcher is 7 lines. Behaviour unchanged; handlers are now
+  individually unit-testable.
+- **Test-mock de-duplication (P1 #5).** The ~50-line fastembed/mcp/turso mock header
+  duplicated by `test_core.py` and `test_fivefix.py` is extracted into
+  `tests/_mockdeps.py` (`install_mock_deps()`). Files using real deps via
+  `importorskip` are untouched.
+
+### Fixed
+- **`neuron setup --install --yes` hung on stdin.** The pre-warm prompt guard
+  (`setup.py`) always evaluated to the interactive branch, so a non-interactive
+  install blocked on `input()`. `--yes` now skips the prompt (and the 380MB
+  pre-download) entirely.
+
+### Added
+- **Test coverage for `neuron setup` and `neuron manage` (P1 #6).**
+  `tests/test_setup.py` and `tests/test_manage.py` (12 tests) cover the path
+  helper, status/repair/install exit codes and overview/export/context listing.
+
 ### Added
 - **Universal lifecycle CLI: `neuron setup` (ADR-007).** Cross-platform
   install/repair/status/uninstall for macOS, Linux and Windows:
@@ -27,6 +71,12 @@ Release.
   JSONC never rewritten, Codex TOML section removal). Client paths extended
   to macOS/Linux (Claude Desktop, VS Code). CI now smoke-tests
   `neuron setup --status` from the built wheel.
+- **Balanced stimulus engine (T66).** Stimuli now serve BOTH recall and
+  creative sparks: `stimulus_candidates` ranks by activation × novelty
+  bonuses (dormancy, domain shift, tangential path) with over-familiarity
+  damping (Hebbian count), tracks the best path, and the piggyback renders
+  it interpretably — `🧠 java ⇢ servlet ⇢ cors (dormant 15t, →frontend)` —
+  with an anti-echo cooldown that naturally rotates recall → spark.
 - **`neuron manage` (ADR-007 fase 2).** Cross-platform day-to-day management:
   contexts overview (local + cloud, with counts and top concept), JSON export,
   consolidate, graph visualizer launcher, doctor — interactive menu or flags.
@@ -34,6 +84,13 @@ Release.
 ## [5.3.1] — 2026-07-11
 
 ### Fixed
+- **Contexts never separated with the curated loop**: the domain-hysteresis
+  auto-switch only lived inside `auto`, so `store_turn` (the recommended
+  path) never fed the signal and everything accumulated in 'default' —
+  which also starved cross-domain sparks and drift links. The hysteresis is
+  now a shared helper wired into store_turn (explicit `context` still wins);
+  the response surfaces the switch (`⇄ context switched → 'X'`) or the
+  pending signal count.
 - `store_turn` crashed with "no such table: meta" on a pristine store:
   pyturso creates an empty 0-byte file on connect, so the schemaless file
   passed the exists-check and the unguarded meta read in `load_sqlite` blew

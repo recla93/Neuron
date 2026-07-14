@@ -1,6 +1,6 @@
 """Multi-context graph registry.
 
-Manages separate graphs per topic context (e.g. java/spring, python/django).
+Manages separate graph instances per topic context (e.g. java/spring, python/django).
 Contexts form a tree — child contexts inherit from parents.
 Cross-context links connect nodes across different graphs.
 """
@@ -8,12 +8,15 @@ Cross-context links connect nodes across different graphs.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
 
 from neuron import db as _db
 from neuron.models import Graph
+
+log = logging.getLogger("neuron.registry")
 
 
 @dataclass
@@ -127,8 +130,8 @@ class GraphRegistry:
                     else:
                         g.load_sqlite(self._seed_path, domain_filter=ctx, context=ctx, warm_start=True)
                         self._seed_loaded.add(ctx)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("seed load failed for context %r (degrading to empty): %s", ctx, e)
             # E3.3/E3.4: if this graph was idle long enough, run sleep-mode on load
             # (pre-stage the top stimulus; consolidate only when NS_CONSOLIDATE_AUTO
             # is on). Never let it break graph loading.
@@ -136,8 +139,8 @@ class GraphRegistry:
                 _sleep_consolidate = os.environ.get(
                     "NS_CONSOLIDATE_AUTO", "").strip().lower() in ("1", "true", "yes", "on")
                 g.sleep_maybe(do_consolidate=_sleep_consolidate)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("sleep_maybe on load failed for context %r: %s", ctx, e)
             self._graphs[ctx] = g
         return self._graphs[ctx]
 

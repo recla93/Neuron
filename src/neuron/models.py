@@ -6,6 +6,7 @@ Separated from server.py to break the circular import with registry.py.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import struct
@@ -14,6 +15,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from neuron import db as _db
+
+log = logging.getLogger("neuron.models")
+
+__all__ = [
+    "Node", "Link", "Graph", "compute_health",
+    "register_embed_fn", "pack_vector", "unpack_vector",
+    "WEIGHT_ORDER", "VECTOR_DIM", "MAX_NODES", "TANGENTIAL_EXPIRY_TURNS",
+]
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -28,35 +37,39 @@ Intent    = str
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+# Tunables read from the environment with the historical value as the default,
+# so operators can adjust memory dynamics per deployment without code changes
+# (P1 #9). Malformed values silently fall back to the default.
+from neuron.config import env_int as _env_int, env_float as _env_float
 
-TANGENTIAL_EXPIRY_TURNS  = 5
+TANGENTIAL_EXPIRY_TURNS  = _env_int("NEURON_TANGENTIAL_EXPIRY_TURNS", 5)
 WEIGHT_ORDER             = {"strong": 3, "medium": 2, "tangential": 1}
-SALIENCE_DECAY_THRESHOLD = 5
-SALIENCE_DECAY_AMOUNT    = 1
+SALIENCE_DECAY_THRESHOLD = _env_int("NEURON_SALIENCE_DECAY_THRESHOLD", 5)
+SALIENCE_DECAY_AMOUNT    = _env_int("NEURON_SALIENCE_DECAY_AMOUNT", 1)
 # Hebbian reinforcement (E2.1): links whose endpoints co-occur in a turn get their
 # co_activation_count bumped (at most once per HEBBIAN_COOLDOWN turns, so a single
 # chatty turn or rapid repeats can't inflate it), and the weight is promoted at the
 # thresholds below. Promotion is monotone (never a downgrade), reusing the atomic
 # weight CASE from T11.
-HEBBIAN_COOLDOWN         = 2   # min turns between two counts on the same link
-HEBBIAN_UPGRADE_MEDIUM   = 3   # co_activation_count promoting tangential -> medium
-HEBBIAN_UPGRADE_STRONG   = 8   # co_activation_count promoting medium    -> strong
+HEBBIAN_COOLDOWN         = _env_int("NEURON_HEBBIAN_COOLDOWN", 2)   # min turns between two counts on the same link
+HEBBIAN_UPGRADE_MEDIUM   = _env_int("NEURON_HEBBIAN_UPGRADE_MEDIUM", 3)   # co_activation_count promoting tangential -> medium
+HEBBIAN_UPGRADE_STRONG   = _env_int("NEURON_HEBBIAN_UPGRADE_STRONG", 8)   # co_activation_count promoting medium    -> strong
 # Drift links (E3.1): implicit cross-context associations formed without a rationale
 # when a node from another *visited* context surfaces alongside the current keywords.
 # Highest noise risk, so the rules are strict: born tangential, one per DRIFT_COOLDOWN
 # turns, and pruned faster than intra-context tangentials (DRIFT_EXPIRY_TURNS < 5).
-DRIFT_COOLDOWN           = 5   # min turns between forming/reinforcing the same drift
-DRIFT_EXPIRY_TURNS       = 3   # inactive turns before a drift link is pruned
+DRIFT_COOLDOWN           = _env_int("NEURON_DRIFT_COOLDOWN", 5)   # min turns between forming/reinforcing the same drift
+DRIFT_EXPIRY_TURNS       = _env_int("NEURON_DRIFT_EXPIRY_TURNS", 3)   # inactive turns before a drift link is pruned
 # Sleep-mode (E3.3/E3.4): when a graph is loaded after being idle longer than
 # SLEEP_IDLE_SECONDS, consolidate it and pre-stage the top stimulus so pre_turn
 # can serve it "warm". The staged stimulus is only served while fresher than
 # STAGE_FRESH_SECONDS (else it's dropped as stale).
-SLEEP_IDLE_SECONDS       = 1800     # 30 min idle → sleep-mode on next load
-STAGE_FRESH_SECONDS      = 6 * 3600 # staged stimulus valid for 6h
+SLEEP_IDLE_SECONDS       = _env_int("NEURON_SLEEP_IDLE_SECONDS", 1800)     # 30 min idle → sleep-mode on next load
+STAGE_FRESH_SECONDS      = _env_int("NEURON_STAGE_FRESH_SECONDS", 6 * 3600) # staged stimulus valid for 6h
 
 # Episodic payload (T56): nodes carry compact FACTS, not just themes.
-EPISODES_PER_NODE = 5     # cap per node; oldest dropped (consolidation-lite)
-EPISODE_MAX_CHARS = 200   # one compact sentence, ~40 tokens
+EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)     # cap per node; oldest dropped (consolidation-lite)
+EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 200)   # one compact sentence, ~40 tokens
 # Embedding dimension. Default 384 (fastembed all-MiniLM-L6-v2 and the common
 # 384-dim multilingual models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
@@ -64,7 +77,7 @@ VECTOR_DIM               = int(os.environ.get("NS_EMBED_DIM", "384"))
 # Nome del modello di embedding attivo (deve combaciare con i vettori nello
 # store: vettori di modelli diversi non sono confrontabili — vedi load_sqlite).
 EMBED_MODEL              = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
-MAX_NODES                = 500   # evict lowest-salience nodes beyond this cap
+MAX_NODES                = _env_int("NEURON_MAX_NODES", 500)   # evict lowest-salience nodes beyond this cap
 
 # ---------------------------------------------------------------------------
 # Embedding callback — registered by server.py at startup (lazy, avoids circ.)
@@ -83,6 +96,30 @@ def _get_vector(text: str) -> list[float]:
     if _embed_fn is not None:
         return _embed_fn(text)
     return [0.0] * VECTOR_DIM
+
+
+def compute_health(nodes, links, pruned_count: int, turn_count: int) -> dict:
+    """Single source of truth for graph health metrics (P1 #8).
+
+    The status/summary tools each recomputed strong/medium ratios, pruned ratio
+    and nodes-per-turn inline; they now all read the same numbers from here.
+    Works on any link objects exposing ``.weight`` / ``.link_type``.
+    """
+    total = len(links)
+    strong = sum(1 for lk in links if lk.weight == "strong")
+    medium = sum(1 for lk in links if lk.weight == "medium")
+    return {
+        "total":             total,
+        "strong":            strong,
+        "medium":            medium,
+        "tangential":        total - strong - medium,
+        "types":             len({lk.link_type for lk in links}),
+        "pruned":            pruned_count,
+        "strong_medium_pct": ((strong + medium) / total * 100) if total else 0.0,
+        "pruned_pct":        (pruned_count / (total + pruned_count) * 100)
+                             if (total + pruned_count) else 0.0,
+        "nodes_per_turn":    len(nodes) / max(turn_count, 1),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +709,94 @@ class Graph:
         out.sort(key=lambda x: -x[1])
         return out
 
+    def stimulus_candidates(self, seeds, k: int = 2, decay: float = 0.5,
+                            min_activation: float = 0.01) -> list[dict]:
+        """Balanced stimulus ranking (T66): activation × (1 + novelty bonuses).
+
+        Stimuli must serve BOTH recall (useful memory, strong relations) and
+        creative sparks (tangential/surprising connections) — so novelty is a
+        BONUS multiplier, never a gate: a high-activation known neighbour still
+        competes with a dormant cross-domain leap. Tracks the best path from a
+        seed for interpretability ("java ⇢ servlet ⇢ CORS" fires the impulse;
+        a bare keyword doesn't).
+
+        Bonuses: dormancy (up to +0.5, silent nodes resurface), domain shift
+        (+0.4 vs the seeds' majority domain), tangential edge in the path
+        (+0.3, the fragile unexpected connection). Familiarity damping: a first
+        edge heavily co-activated with the seeds (Hebbian count) is a synonym,
+        not a surprise → mild penalty. Returns dicts sorted by score:
+        {keyword, act, score, path, hops, reasons}."""
+        seed_set = {self._norm(s) for s in seeds}
+        seed_set = {s for s in seed_set if self.get_node(s) is not None}
+        if not seed_set:
+            return []
+        max_sal = max((nd.salience for nd in self.nodes), default=0) or 1
+        adj: dict[str, list] = {}
+        for lk in self.links:
+            if lk.link_type == "drift":
+                continue
+            adj.setdefault(lk.source, []).append((lk.target, lk))
+            adj.setdefault(lk.target, []).append((lk.source, lk))
+
+        seed_domains = [self.get_node(s).domain for s in seed_set]
+        majority_dom = max(set(seed_domains), key=seed_domains.count) if seed_domains else None
+
+        # Walk with best-path tracking: state per node = (act, path, tang, coact0)
+        best: dict[str, tuple] = {s: (1.0, [s], False, 0) for s in seed_set}
+        frontier = dict(best)
+        acc: dict[str, float] = {}
+        for _hop in range(k):
+            nxt: dict[str, tuple] = {}
+            for src, (act, path, tang, coact0) in frontier.items():
+                for other, lk in adj.get(src, ()):
+                    if other in path:
+                        continue
+                    strength = WEIGHT_ORDER.get(lk.weight, 0) / 3.0
+                    nd = self.get_node(other)
+                    if nd is None or strength == 0:
+                        continue
+                    contrib = act * strength * (1.0 + nd.salience / max_sal) * decay
+                    if contrib < min_activation:
+                        continue
+                    acc[other] = acc.get(other, 0.0) + contrib
+                    n_tang = tang or (lk.weight == "tangential")
+                    n_coact0 = coact0 if len(path) > 1 else getattr(lk, "co_activation_count", 0)
+                    prev = nxt.get(other)
+                    if prev is None or contrib > prev[0]:
+                        nxt[other] = (contrib, path + [other], n_tang, n_coact0)
+                    if other not in best or contrib > best[other][0]:
+                        best[other] = (contrib, path + [other], n_tang, n_coact0)
+            frontier = nxt
+            if not frontier:
+                break
+
+        out = []
+        for kw, act in acc.items():
+            if kw in seed_set:
+                continue
+            _, path, tang, coact0 = best[kw]
+            nd = self.get_node(kw)
+            dormancy = max(0, self.turn_count - nd.turn)
+            reasons: list[str] = []
+            bonus = 0.0
+            if dormancy >= 6:
+                bonus += 0.5 * min(dormancy / 12.0, 1.0)
+                reasons.append(f"dormant {dormancy}t")
+            if majority_dom and nd.domain != majority_dom and nd.domain != "general":
+                bonus += 0.4
+                reasons.append(f"→{nd.domain}")
+            if tang:
+                bonus += 0.3
+                reasons.append("tangential")
+            damping = 1.0 + 0.15 * min(coact0, 6)   # over-familiar first edge
+            score = act * (1.0 + bonus) / damping
+            if not reasons:
+                reasons.append("recall")
+            out.append({"keyword": kw, "act": round(act, 4), "score": round(score, 4),
+                        "path": path, "hops": len(path) - 1, "reasons": reasons})
+        out.sort(key=lambda c: -c["score"])
+        return out
+
     # ------------------------------------------------------------------
     # Decay / pruning
     # ------------------------------------------------------------------
@@ -842,6 +967,14 @@ class Graph:
             merged_any = False
             guard += 1
             nodes = [n for n in self.nodes if n.vector is not None]
+            # Early termination (P1 #7): with <2 candidates no pair can merge, and
+            # if every node is protected nothing is absorbable — skip the whole
+            # O(N^2) pair scan (common on the auto-consolidate / sleep path).
+            if len(nodes) < 2:
+                break
+            if protect_salience is not None and all(
+                    n.salience >= protect_salience for n in nodes):
+                break
             found = None
             for a, b in combinations(nodes, 2):
                 sim = _cos(a.vector, b.vector)
@@ -1299,7 +1432,8 @@ class Graph:
             # missing-file path above.
             try:
                 meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
-            except Exception:
+            except Exception as e:
+                log.debug("no meta table; treating store as empty: %s", e)
                 return
 
             def _as_float(v):
@@ -1387,8 +1521,8 @@ class Graph:
                     vrows = conn.execute("SELECT keyword, embedding FROM node_vectors")
                 for row in vrows:
                     vec_map[row[0]] = unpack_vector(row[1])
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("vector load failed (falling back to per-keyword embed): %s", e)
             for nd in self.nodes:
                 nd.vector = vec_map.get(nd.keyword) or _get_vector(nd.keyword)
             self._rebuild_node_map()
@@ -1443,8 +1577,8 @@ class Graph:
                         "SELECT keyword, turn, text FROM episodes ORDER BY keyword, turn")
                 for kw, t, tx in erows:
                     self.episodes.setdefault(kw, []).append({"turn": t, "text": tx})
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("episode load skipped (table may be absent): %s", e)
         finally:
             conn.close()
         self._rebuild_node_map()

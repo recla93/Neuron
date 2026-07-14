@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import glob as _glob
 import json
+import logging
 import os
 import re
 import shutil
@@ -35,6 +36,13 @@ import subprocess
 import sys
 import time
 from typing import Any, Callable
+
+log = logging.getLogger("neuron.clients")
+
+__all__ = [
+    "Result", "register", "register_all", "deregister", "deregister_all",
+    "doctor", "process_doctor", "default_server_python", "cli", "KNOWN_SLUGS",
+]
 
 # ---------------------------------------------------------------------------
 # Helpers: tolerant read, strict write
@@ -350,7 +358,8 @@ def register_claude_code_via_cli(slug: str, python_exe: str,
                  slug, python_exe, "--", "-m", "neuron"],
                 capture_output=True, text=True, timeout=60)
         return getattr(r, "returncode", 1) == 0
-    except Exception:
+    except Exception as e:
+        log.debug("`claude mcp add` failed: %s", e)
         return False
 
 
@@ -653,7 +662,8 @@ def _list_processes() -> list[dict]:
                 procs.append({"pid": int(parts[0]), "ppid": int(parts[1]),
                               "name": parts[2], "cmd": parts[3]})
         return procs
-    except Exception:
+    except Exception as e:
+        log.debug("process listing failed: %s", e)
         return []
 
 
@@ -747,6 +757,23 @@ def process_doctor(slug: str, python_exe: str, fix: bool = False,
 # ---------------------------------------------------------------------------
 
 
+def default_server_python(slug: "str | None" = None) -> str:
+    """The python that SHOULD run the server: the installed venv's, when it
+    exists — NOT sys.executable. `doctor` run from a system python was flagging
+    every correct registration as 'DIFFERENT install' (and --fix would have
+    repointed them to the system python, breaking everything). Falls back to
+    sys.executable only when no install venv is found (pipx/pip installs,
+    where the running interpreter IS the install)."""
+    slug = slug or os.environ.get("NEURON_SLUG", "neuron5")
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        cand = os.path.join(base, "Programs", slug, ".venv", "Scripts", "python.exe")
+    else:
+        cand = os.path.join(os.path.expanduser("~"), ".local", "share", slug,
+                            ".venv", "bin", "python")
+    return cand if os.path.exists(cand) else sys.executable
+
+
 def cli(argv: list[str]) -> int:
     # Self-safe UTF-8 guard (same pattern as the T17 scripts): doctor/register
     # output contains → and ⚠-style glyphs, and a default Windows console
@@ -763,11 +790,14 @@ def cli(argv: list[str]) -> int:
     ap.add_argument("--client", default="all",
                     help="one of: " + ", ".join(sorted(CLIENTS)) + ", or 'all'")
     ap.add_argument("--slug", default=os.environ.get("NEURON_SLUG", "neuron5"))
-    ap.add_argument("--python", dest="python_exe", default=sys.executable)
+    ap.add_argument("--python", dest="python_exe", default=None,
+                    help="server python (default: the installed venv's, NOT this one)")
     ap.add_argument("--install-dir", default=os.environ.get("NEURON_INSTALL_DIR", ""))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--fix", action="store_true", help="doctor: apply repairs")
     args = ap.parse_args(argv)
+    if not args.python_exe:
+        args.python_exe = default_server_python(args.slug)
 
     if args.cmd == "register":
         results = (register_all(args.slug, args.python_exe, args.install_dir, args.dry_run)

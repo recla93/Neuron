@@ -25,16 +25,13 @@ import sys
 
 from neuron import clients as C
 
+__all__ = ["do_install", "do_repair", "do_status", "do_uninstall", "main"]
+
 
 def _graphs_dir() -> str:
-    slug = os.environ.get("NEURON_SLUG", "neuron5")
-    if os.environ.get("NS_GRAPHS_DIR"):
-        return os.environ["NS_GRAPHS_DIR"]
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        return os.path.join(base, slug, "graphs")
-    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
-    return os.path.join(base, slug, "graphs")
+    # Delegates to neuron.config (single source of truth, P0 #3).
+    from neuron.config import graphs_dir
+    return graphs_dir()
 
 
 def _ask(prompt: str, yes: bool) -> bool:
@@ -55,8 +52,9 @@ def do_install(slug: str, python_exe: str, yes: bool) -> int:
     lines, problems = C.doctor(slug, python_exe)
     for ln in lines:
         print(ln)
-    # Optional model pre-warm (the embedding model downloads on first use anyway)
-    if _ask("\nPre-download the embedding model now (~380MB, one-time)?", yes=False if not yes else False):
+    # Optional model pre-warm (the embedding model downloads on first use anyway).
+    # Non-interactive installs (yes=True) skip it — no prompt, no surprise 380MB download.
+    if not yes and _ask("\nPre-download the embedding model now (~380MB, one-time)?", yes=False):
         try:
             from neuron.server import _get_embedder   # heavy import, on purpose here only
             _get_embedder()
@@ -139,8 +137,8 @@ def main(argv: list[str]) -> int:
             pass
     ap = argparse.ArgumentParser(prog="neuron setup")
     ap.add_argument("--slug", default=os.environ.get("NEURON_SLUG", "neuron5"))
-    ap.add_argument("--python", dest="python_exe", default=sys.executable,
-                    help="python that runs the server (default: this one)")
+    ap.add_argument("--python", dest="python_exe", default=None,
+                    help="python that runs the server (default: the installed venv's)")
     ap.add_argument("--register-all", action="store_true")
     ap.add_argument("--repair", action="store_true")
     ap.add_argument("--status", action="store_true")
@@ -148,6 +146,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--purge-data", action="store_true")
     ap.add_argument("--yes", action="store_true", help="non-interactive: assume yes")
     a = ap.parse_args(argv)
+    if not a.python_exe:
+        a.python_exe = C.default_server_python(a.slug)
 
     if a.register_all:
         return do_install(a.slug, a.python_exe, a.yes)

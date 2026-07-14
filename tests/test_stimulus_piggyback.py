@@ -24,7 +24,7 @@ def test_stimulus_emitted_above_threshold():
     pytest.importorskip("mcp"); pytest.importorskip("fastembed")
     import neuron.server as srv
     block = srv._stimulus_block(_linked_graph(), ["seed"])
-    assert "stimulus" in block and "x" in block
+    assert "🧠" in block and "x" in block
     assert len(block) <= srv.STIMULUS_MAX_CHARS
 
 

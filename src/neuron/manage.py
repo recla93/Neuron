@@ -22,16 +22,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+__all__ = ["do_overview", "do_export", "do_consolidate", "do_visualize", "main"]
+
 
 def _graphs_dir() -> str:
-    slug = os.environ.get("NEURON_SLUG", "neuron5")
-    if os.environ.get("NS_GRAPHS_DIR"):
-        return os.environ["NS_GRAPHS_DIR"]
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        return os.path.join(base, slug, "graphs")
-    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
-    return os.path.join(base, slug, "graphs")
+    # Delegates to neuron.config (single source of truth, P0 #3).
+    from neuron.config import graphs_dir
+    return graphs_dir()
 
 
 def _contexts() -> list[str]:

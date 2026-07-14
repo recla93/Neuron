@@ -7,59 +7,13 @@ Uses mocks for fastembed and mcp to avoid heavy dependencies.
 from __future__ import annotations
 
 import sys
-import types
+import contextlib
 import tempfile
 import os
 
-# ── Mock heavy deps before any neuron import ────────────────────────────────
-
-sys.modules["turso"] = None  # force sqlite3 fallback
-
-_fe = types.ModuleType("fastembed")
-class _FakeEmbed:
-    def __init__(self, *a, **kw): pass
-    def embed(self, texts):
-        texts = list(texts) if not isinstance(texts, list) else texts
-        for _ in texts:
-            yield [0.1] * 384
-_fe.TextEmbedding = _FakeEmbed
-sys.modules["fastembed"] = _fe
-
-def _make_mod(name):
-    m = types.ModuleType(name)
-    sys.modules[name] = m
-    return m
-
-mcp = _make_mod("mcp")
-srv = _make_mod("mcp.server")
-low = _make_mod("mcp.server.lowlevel")
-hlp = _make_mod("mcp.server.lowlevel.helper_types")
-mdl = _make_mod("mcp.server.models")
-std = _make_mod("mcp.server.stdio")
-typ = _make_mod("mcp.types")
-
-import contextlib
-
-class _FakeSrv:
-    def __init__(self, *a, **kw): pass
-    def list_tools(self): return lambda f: f
-    def call_tool(self):  return lambda f: f
-    def list_resources(self): return lambda f: f
-    def read_resource(self):  return lambda f: f
-
-@contextlib.asynccontextmanager
-async def _fake_stdio(*a, **kw): yield None, None
-
-srv.Server                    = _FakeSrv
-low.NotificationOptions       = type("NotificationOptions", (), {})
-mdl.InitializationOptions     = type("IO", (), {})
-std.stdio_server              = _fake_stdio
-typ.Tool                      = type("Tool", (), {"__init__": lambda s, **kw: None})
-typ.TextContent               = type("TC", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
-typ.ServerCapabilities        = type("SC", (), {})
-typ.ToolsCapability           = type("TsCap", (), {})
-typ.Resource                  = type("Resource", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
-hlp.ReadResourceContents      = type("ReadResourceContents", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
+# ── Mock heavy deps before any neuron import (shared with test_fivefix.py) ──
+from tests._mockdeps import install_mock_deps
+install_mock_deps()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 

@@ -9,8 +9,12 @@ mutable/patchable is resolved through the server namespace AT CALL TIME via
 
 from __future__ import annotations
 
+from neuron.config import env_int as _env_int
 from neuron.extraction import ExtractionResult
 from neuron.models import Link
+
+# Cap on auto-links created per turn (P1 #9, configurable).
+MAX_AUTO_LINKS = _env_int("NEURON_MAX_AUTO_LINKS", 8)
 
 
 def _S():
@@ -44,7 +48,6 @@ def _auto_link(new_kw: list[str], turn: int, graph=None) -> list[Link]:
         return []
     links: list[Link] = []
     added_pairs: set[tuple[str, str]] = set()
-    MAX_AUTO_LINKS = 8
 
     for kw in new_kw:
         candidates = s._search_embeddings([kw], top_n=10, graph=g)
@@ -210,19 +213,44 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
     return "\n".join(parts) if parts else ""
 
 
+# T66: anti-echo — a keyword that was just emitted as a stimulus shouldn't be
+# emitted again for a few turns (in-memory per process, like the Hebbian cooldown).
+_stim_recent: dict[str, int] = {}
+STIM_ECHO_COOLDOWN = 5
+
+
 def _stimulus_block(g, keywords) -> str:
     """Compact one-line associative stimulus for piggybacking on tool responses
-    that don't already carry the full flash block (E2.5). It is the top
-    spreading-activation node from this turn's keywords — continuous stimulation
-    without MCP push. Empty when nothing clears STIMULUS_MIN_ACTIVATION, so
-    responses aren't padded with noise; hard-capped to ~40 tokens."""
+    (E2.5, reshaped by T66). Candidates come from ``stimulus_candidates`` —
+    activation × novelty bonuses, so it serves BOTH recall (useful memory,
+    strong relations) and creative sparks (dormant / cross-domain / tangential).
+    The winning node is shown WITH its path and reasons ("java ⇢ servlet ⇢ CORS
+    (dormant 12t)") so the impulse is interpretable, and an anti-echo cooldown
+    keeps it from repeating itself. Empty below STIMULUS_MIN_ACTIVATION;
+    hard-capped to ~40 tokens."""
     s = _S()
     if not s.flash_enabled:
         return ""
-    ranked = g.spreading_activation(list(keywords), k=2)
-    if not ranked or ranked[0][1] < s.STIMULUS_MIN_ACTIVATION:
+    cands = g.stimulus_candidates(list(keywords), k=2)
+    turn = g.turn_count
+    pick = None
+    for c in cands:
+        # Floor on SCORE, not raw act (field test 2026-07-13): the list is
+        # score-sorted, so an act-floor here (a) broke iteration order semantics
+        # and (b) structurally silenced every 2-hop spark — decay puts their act
+        # (~0.12) under the 0.15 floor while their bonused score clears it.
+        # Score = "worth showing", which is exactly what the floor should mean.
+        if c["score"] < s.STIMULUS_MIN_ACTIVATION:
+            break   # score-sorted: everything after is lower — stop cleanly
+        if turn - _stim_recent.get(c["keyword"], -999) <= STIM_ECHO_COOLDOWN:
+            continue   # anti-echo: recently emitted, let something else surface
+        pick = c
+        break
+    if pick is None:
         return ""
-    kw, act = ranked[0]
-    nd = g.get_node(kw)
-    dom = f", {nd.domain}" if nd else ""
-    return f"\n🧠 stimulus: {kw} (act={act:.2f}{dom})"[:s.STIMULUS_MAX_CHARS]
+    _stim_recent[pick["keyword"]] = turn
+    # Always show the connection (field test: a bare keyword doesn't fire the
+    # impulse) — 1 hop included: "java ⇢ spring", 2 hops: "java ⇢ servlet ⇢ cors".
+    path = " ⇢ ".join(pick["path"]) if pick["hops"] >= 1 else pick["keyword"]
+    why = ", ".join(pick["reasons"][:2])
+    return f"\n🧠 {path} ({why})"[:s.STIMULUS_MAX_CHARS]

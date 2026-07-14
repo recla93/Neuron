@@ -13,55 +13,13 @@
 from __future__ import annotations
 
 import sys
-import types
 import os
 import json
 import tempfile
 
-# ── Mock heavy deps before importing neuron (mirrors tests/test_core.py) ──────
-sys.modules["turso"] = None  # force sqlite3 / Python-fallback tier
-
-_fe = types.ModuleType("fastembed")
-class _FakeEmbed:
-    def __init__(self, *a, **kw): pass
-    def embed(self, texts):
-        for _ in list(texts):
-            yield [0.1] * 384          # constant, NON-unit vector (norm ≈ 1.96)
-_fe.TextEmbedding = _FakeEmbed
-sys.modules["fastembed"] = _fe
-
-def _mod(name):
-    m = types.ModuleType(name); sys.modules[name] = m; return m
-
-import contextlib
-_mod("mcp")
-_srv_mod = _mod("mcp.server")
-_low = _mod("mcp.server.lowlevel")
-_hlp = _mod("mcp.server.lowlevel.helper_types")
-_mdl = _mod("mcp.server.models")
-_std = _mod("mcp.server.stdio")
-_typ = _mod("mcp.types")
-
-class _FakeSrv:
-    def __init__(self, *a, **kw): pass
-    def list_tools(self): return lambda f: f
-    def call_tool(self):  return lambda f: f
-    def list_resources(self): return lambda f: f
-    def read_resource(self):  return lambda f: f
-
-@contextlib.asynccontextmanager
-async def _fake_stdio(*a, **kw): yield None, None
-
-_srv_mod.Server               = _FakeSrv
-_low.NotificationOptions      = type("NotificationOptions", (), {})
-_mdl.InitializationOptions    = type("IO", (), {})
-_std.stdio_server             = _fake_stdio
-_typ.Tool                     = type("Tool", (), {"__init__": lambda s, **kw: None})
-_typ.TextContent              = type("TC", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
-_typ.ServerCapabilities       = type("SC", (), {})
-_typ.ToolsCapability          = type("TsCap", (), {})
-_typ.Resource                 = type("Resource", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
-_hlp.ReadResourceContents     = type("ReadResourceContents", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
+# ── Mock heavy deps before importing neuron (shared with test_core.py) ────────
+from tests._mockdeps import install_mock_deps
+install_mock_deps()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 

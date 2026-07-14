@@ -58,6 +58,34 @@ def cli() -> None:
         raise SystemExit(manage_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         raise SystemExit(_consolidate_cli(sys.argv[2:]))
+    # T68: client-agnostic isolation flags. Some MCP hosts (OpenCode) don't
+    # pass `env` to child processes at all, so a test/sandbox store couldn't be
+    # isolated via NS_GRAPHS_DIR. Flags travel in the command array — which
+    # EVERY client passes — and are applied BEFORE neuron.server is imported
+    # (server reads NS_GRAPHS_DIR at import; db reads TURSO_* at its import).
+    #   --graphs-dir PATH   store location (sets NS_GRAPHS_DIR)
+    #   --local             force the local tier: drops TURSO_* creds
+    #                       (wherever they came from, .env included)
+    #   --slug NAME         identity override (sets NEURON_SLUG)
+    import os
+    args = sys.argv[1:]
+    def _take(flag):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 < len(args):
+                v = args[i + 1]; del args[i:i + 2]; return v
+            del args[i]
+        return None
+    _gd, _slug = _take("--graphs-dir"), _take("--slug")
+    if "--local" in args:
+        args.remove("--local")
+        os.environ["NEURON_NO_DOTENV"] = "1"
+        os.environ.pop("TURSO_DATABASE_URL", None)
+        os.environ.pop("TURSO_AUTH_TOKEN", None)
+    if _gd:
+        os.environ["NS_GRAPHS_DIR"] = _gd
+    if _slug:
+        os.environ["NEURON_SLUG"] = _slug
     import asyncio
     from neuron.server import main
     asyncio.run(main())

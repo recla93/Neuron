@@ -14,8 +14,10 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-KEYWORD_MAX_LENGTH = 40
-TOPIC_MAX_LENGTH = 100
+from neuron.config import env_int as _env_int
+
+KEYWORD_MAX_LENGTH = _env_int("NEURON_KEYWORD_MAX_LENGTH", 40)
+TOPIC_MAX_LENGTH = _env_int("NEURON_TOPIC_MAX_LENGTH", 100)
 KEYWORD_PATTERN = re.compile(r"^[a-zA-Z0-9\s\-_.:+/]+$")
 
 
@@ -262,12 +264,21 @@ class SemanticExtractor:
             position_boost = 1.0 - (i / max(len(tokens), 1)) * 0.3
             score *= position_boost
             counts[low] = counts.get(low, 0) + score
+        # Bigram bonus: a token adjacent to another gets +0.15 per participating
+        # pair whose bigram isn't itself a counted key. Precompute each token's
+        # participating pairs ONCE (O(N)) instead of rescanning every adjacent
+        # pair for every counted keyword (was O(keywords x tokens), P1 #7).
+        token_pairs: dict[str, list[str]] = {}
+        for j in range(len(tokens) - 1):
+            lj, lj1 = tokens[j].lower(), tokens[j + 1].lower()
+            bigram = f"{lj} {lj1}"
+            token_pairs.setdefault(lj, []).append(bigram)
+            if lj1 != lj:                       # one entry per pair, matching the
+                token_pairs.setdefault(lj1, []).append(bigram)  # original per-j semantics
         for low in list(counts):
-            for j in range(len(tokens) - 1):
-                if tokens[j].lower() == low or tokens[j + 1].lower() == low:
-                    bigram = f"{tokens[j].lower()} {tokens[j + 1].lower()}"
-                    if bigram not in counts:
-                        counts[low] += 0.15
+            for bigram in token_pairs.get(low, ()):
+                if bigram not in counts:
+                    counts[low] += 0.15
         ranked = sorted(counts.items(), key=lambda x: -x[1])
         return ranked
 

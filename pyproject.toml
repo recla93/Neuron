@@ -20,20 +20,21 @@ authors = [
 keywords = ["mcp", "semantic-memory", "vector-embedding", "turso", "graph"]
 
 dependencies = [
-    "mcp>=1.28.0",
+    # Upper bounds guard against breaking major releases (mcp 2.x / fastembed 1.x)
+    # resolving silently into installs. Bump deliberately after testing.
+    "mcp>=1.28.0,<2.0",
     # Pinned exactly: there is no win_amd64 wheel for pyturso on PyPI, so on
     # Windows pip would compile it from Rust source. The release workflow
     # pre-builds a win_amd64 wheel and install.ps1 feeds it via --find-links;
     # a loose ">=" could resolve to a newer version with no vendored wheel and
     # silently fall back to compiling. Bump this together with release.yml.
     "pyturso==0.6.1",
-    "fastembed>=0.5.0",
+    "fastembed>=0.5.0,<1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
 ]
 cloud = [
     "libsql-client>=0.3.1",

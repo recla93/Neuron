@@ -31,6 +31,12 @@ from typing import Any, Sequence
 
 from neuron._env import sanitize_credential
 
+__all__ = [
+    "connect", "connect_local", "RemoteTursoConnection",
+    "REMOTE_TURSO", "ENGINE_NAME", "VECTOR_SQL_SUPPORTED",
+    "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN",
+]
+
 
 TURSO_DATABASE_URL = sanitize_credential(os.environ.get("TURSO_DATABASE_URL", ""))
 TURSO_AUTH_TOKEN = sanitize_credential(os.environ.get("TURSO_AUTH_TOKEN", ""))

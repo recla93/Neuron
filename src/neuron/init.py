@@ -29,6 +29,8 @@ import shutil
 import sys
 from pathlib import Path
 
+__all__ = ["init_opencode", "CLIENTS", "main"]
+
 # The opener lives inside the package (see pyproject package-data) and mirrors the
 # repo-root skills/ source.
 _OPENER_PARTS = ("skills", "neuron-opener.md")

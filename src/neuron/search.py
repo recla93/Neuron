@@ -16,10 +16,13 @@ commit. Until then this file only owns LOGIC, byte-equivalent to the original.
 
 from __future__ import annotations
 
+import logging
 import weakref
 from typing import Any
 
 from neuron.extraction import DOMAIN_ALIASES
+
+log = logging.getLogger("neuron.search")
 from neuron.models import pack_vector
 
 
@@ -175,11 +178,11 @@ def _search_embeddings(
                     v = round(sim, 4)
                     if kw not in merged or v > merged[kw]:
                         merged[kw] = v
-            except Exception:
+            except Exception as e:
                 if is_seed:
                     s._drop_seed_connection(db)
                 # Any DB/engine error must fall through to the Python path.
-                pass
+                log.debug("Turso vector search failed (using Python fallback): %s", e)
         if merged:
             result = sorted(merged.items(), key=lambda kv: -kv[1])[:top_n]
             s._turn_search_cache[_cache_key] = (weakref.ref(g), result)
@@ -187,6 +190,9 @@ def _search_embeddings(
 
     # --- Python fallback (non-Turso, or every Turso query failed) ---
     # TRUE cosine; a missing vector is embedded ONCE and cached on the node.
+    # Complexity ceiling (P1 #7): this is an O(N) linear scan over all nodes per
+    # query — fine up to ~1000 nodes (MAX_NODES caps the store at 500 by default).
+    # Beyond that, prefer the Turso vector_distance_cos path (native index).
     q_norm = (sum(x * x for x in query_vec) ** 0.5) or 1.0
     scores: list[tuple[str, float]] = []
     for nd in g.nodes:
@@ -243,7 +249,8 @@ def _refine_domain(keywords: list[str]) -> tuple["str | None", list[str]]:
                     WHERE n.domain != 'general'
                     ORDER BY sim DESC LIMIT 30
                 """, (query_blob,)).fetchall()
-            except Exception:
+            except Exception as e:
+                log.debug("seed vector search failed (using Python fallback): %s", e)
                 s._drop_seed_connection(seed_path)
 
     # Fallback: Python loop over loaded graphs — TRUE cosine, same scale as Turso.

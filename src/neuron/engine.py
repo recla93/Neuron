@@ -357,13 +357,22 @@ class AnthropicClient:
 
     def complete(self, system: str, user: str, fast: bool = False) -> str:
         """Send request to Anthropic."""
+        import os as _os
         chosen = self.fast_model if fast else self.model
+        if _os.environ.get("NEURON_DEBUG"):
+            print(f"\n{'='*60}\n[NEURON-DEBUG] model={chosen} fast={fast}")
+            print(f"--- SYSTEM ({len(system)} chars) ---\n{system[:500]}")
+            print(f"--- USER ({len(user)} chars) ---\n{user[:500]}")
         response = self._client.messages.create(
             model=chosen,
             max_tokens=2048,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        if _os.environ.get("NEURON_DEBUG"):
+            print(f"--- RESPONSE ({len(response.content[0].text)} chars) ---\n{response.content[0].text[:500]}")
+            print(f"tokens: in={response.usage.input_tokens} out={response.usage.output_tokens}")
+            print(f"{'='*60}\n")
         return response.content[0].text
 
 
@@ -801,6 +810,12 @@ class Neuron:
             if not isinstance(items, list):
                 return []
             links = []
+            # Build a keyword -> node map ONCE (first occurrence wins, matching the
+            # old `next(...)` scan) so the domain-boost lookup is O(1) per link
+            # instead of a full linear scan of every node, twice (P1 #7).
+            by_kw: dict[str, "Node"] = {}
+            for nd in self._net.nodes:
+                by_kw.setdefault(nd.keyword, nd)
             for item in items:
                 lk = Link(
                     source=item["source"],
@@ -813,8 +828,8 @@ class Neuron:
                 )
                 # M2: Domain Boost
                 if self._enable_domain_boost:
-                    src_node = next((nd for nd in self._net.nodes if nd.keyword == lk.source), None)
-                    tgt_node = next((nd for nd in self._net.nodes if nd.keyword == lk.target), None)
+                    src_node = by_kw.get(lk.source)
+                    tgt_node = by_kw.get(lk.target)
                     if (
                         src_node
                         and tgt_node
