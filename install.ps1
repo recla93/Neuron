@@ -159,54 +159,105 @@ Write-Host "1. Python 3.10 - 3.14..." -ForegroundColor Yellow
 #     message.
 #   - 'python' missing but the py launcher present: install failed although a
 #     perfectly good Python was on the machine.
-$basePy = $null
-$pyCmd = Get-Command python -ErrorAction SilentlyContinue
-if ($pyCmd) {
-    $exeOut = (& $pyCmd.Source -c "import sys; print(sys.executable)" 2>$null)
-    if ($LASTEXITCODE -eq 0 -and $exeOut) { $basePy = ([string]$exeOut).Trim() }
+# Resolution strategy (Store-Python aware + auto-install guard):
+#   1. Prefer a REAL (non-Store) interpreter on PATH or via the py launcher.
+#   2. If none — or only the Microsoft Store build — is found, offer to install a
+#      real Python via winget (silent). A real Python fixes BOTH "no Python" and
+#      "only Store Python" (the Store build runs under a virtualized filesystem
+#      that can silently redirect venv writes — "installs fine, then nothing finds
+#      its own folders"). Auto-install is the clean fix for both.
+#   3. If we can't install one, fall back to USING the Store Python (resolving its
+#      real versioned exe, not the alias stub) with a clear caveat — better than a
+#      hard failure for users whose only Python is the Store one.
+
+function Get-PyExe([string]$launcher, [string[]]$verArgs) {
+    # sys.executable for the given launcher (+optional version arg), or $null.
+    $out = (& $launcher @verArgs -c "import sys; print(sys.executable)" 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $out) { return ([string]$out).Trim() }
+    return $null
 }
-if (-not $basePy -or $basePy -like '*\WindowsApps\*') {
-    # Try the py launcher: it never resolves to the Store alias.
+
+function Resolve-BasePython {
+    # Return a real (non-Store) python.exe if possible; otherwise a Store one; else $null.
+    $store = $null
+    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pyCmd) {
+        $p = Get-PyExe $pyCmd.Source @()
+        if ($p) { if ($p -like '*\WindowsApps\*') { $store = $p } else { return $p } }
+    }
     $pyl = Get-Command py -ErrorAction SilentlyContinue
     if ($pyl) {
-        $exeOut = (& $pyl.Source -3 -c "import sys; print(sys.executable)" 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $exeOut -and (([string]$exeOut).Trim() -notlike '*\WindowsApps\*')) {
-            $basePy = ([string]$exeOut).Trim()
-            Write-Host "   'python' on PATH is unusable (missing or Store alias) - using the py launcher instead:" -ForegroundColor DarkYellow
-            Write-Host "   $basePy" -ForegroundColor DarkYellow
+        foreach ($v in '-3.12','-3.11','-3.13','-3.10','-3.14','-3') {
+            $p = Get-PyExe $pyl.Source @($v)
+            if ($p) {
+                if ($p -like '*\WindowsApps\*') { if (-not $store) { $store = $p } }
+                else { return $p }
+            }
+        }
+    }
+    return $store   # $null, or a Store interpreter as last resort
+}
+
+function Install-PythonViaWinget {
+    $wg = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $wg) { return $false }
+    Write-Host "   Installing Python 3.12 via winget (one-time)..." -ForegroundColor Yellow
+    & $wg.Source install --id Python.Python.3.12 -e --source winget `
+        --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+    $ok = ($LASTEXITCODE -eq 0)
+    # Make the freshly installed python/py visible in THIS process.
+    $machine = [System.Environment]::GetEnvironmentVariable('Path','Machine')
+    $user    = [System.Environment]::GetEnvironmentVariable('Path','User')
+    if ($machine -or $user) { $env:Path = (@($machine, $user) | Where-Object { $_ }) -join ';' }
+    return $ok
+}
+
+$basePy  = Resolve-BasePython
+$isStore = ($null -ne $basePy) -and ($basePy -like '*\WindowsApps\*')
+
+if (-not $basePy -or $isStore) {
+    if (-not $basePy) {
+        Write-Host "   No Python found on this machine." -ForegroundColor DarkYellow
+    } else {
+        Write-Host "   Only the Microsoft Store Python was found:" -ForegroundColor DarkYellow
+        Write-Host "   $basePy" -ForegroundColor DarkYellow
+        Write-Host "   (its venvs can be filesystem-redirected; a real Python is safer)." -ForegroundColor DarkYellow
+    }
+    $doInstall = [bool]$Yes
+    if (-not $doInstall) {
+        $ans = Read-Host "   Install a real Python 3.12 now via winget? [Y/n]"
+        $doInstall = ($ans -eq '' -or $ans -match '^(y|yes|s|si)$')
+    }
+    if ($doInstall) {
+        if (Install-PythonViaWinget) {
+            $resolved = Resolve-BasePython
+            if ($resolved) {
+                $basePy  = $resolved
+                $isStore = ($basePy -like '*\WindowsApps\*')
+                if (-not $isStore) { Write-Host "   Installed. Using: $basePy" -ForegroundColor Green }
+            }
+        } else {
+            Write-Host "   winget is unavailable or the install failed." -ForegroundColor DarkYellow
         }
     }
 }
-if (-not $basePy) { Write-Host "ERROR: no working Python found in PATH. Install Python 3.10-3.14 from python.org (check 'Add python.exe to PATH')." -ForegroundColor Red; exit 1 }
+
+if (-not $basePy) {
+    Write-Host "ERROR: no usable Python and none could be installed." -ForegroundColor Red
+    Write-Host "       Install Python 3.10-3.14 from https://python.org/downloads" -ForegroundColor Yellow
+    Write-Host "       (tick 'Add python.exe to PATH'), then re-run this installer." -ForegroundColor Yellow
+    exit 1
+}
+
 $verOut = (& $basePy -c "import sys; print(sys.version_info.major, sys.version_info.minor)" 2>$null)
 if (-not $verOut) { Write-Host "ERROR: '$basePy' did not report a version - the interpreter looks broken. Reinstall Python from python.org." -ForegroundColor Red; exit 1 }
 $parts  = ([string]$verOut).Trim().Split()
 $maj = [int]$parts[0]; $min = [int]$parts[1]
 Write-Host "   Detected Python $maj.$min : $basePy"
 
-# The Microsoft Store build of Python (the "python" alias Windows offers when no
-# real interpreter is on PATH) is not fit for this install: it runs under a
-# per-package virtualized filesystem, so writes that look like they land under
-# $DestDir/the venv from ITS point of view can be invisible or redirected when
-# any other process (this script's own later steps, the MCP client launching
-# venvPy, etc.) looks at the same path - "installs fine, then nothing can find
-# its own folders". There is no reliable way to "force a destination folder"
-# around that; the fix is to not build on it at all.
-if ($basePy -like '*\WindowsApps\*') {
-    Write-Host "ERROR: this is the Microsoft Store build of Python:" -ForegroundColor Red
-    Write-Host "       $basePy" -ForegroundColor Red
-    Write-Host "       It runs in a virtualized filesystem sandbox that silently breaks" -ForegroundColor Red
-    Write-Host "       venvs and installed packages (files written by it can be invisible" -ForegroundColor Red
-    Write-Host "       to every other program, including Neuron itself once launched)." -ForegroundColor Red
-    Write-Host "" -ForegroundColor Red
-    Write-Host "       Fix (pick one):" -ForegroundColor Yellow
-    Write-Host "       1) Install real Python 3.10-3.14 from https://python.org/downloads" -ForegroundColor Yellow
-    Write-Host "          (check 'Add python.exe to PATH' during setup), then re-run this" -ForegroundColor Yellow
-    Write-Host "          installer in a NEW terminal window." -ForegroundColor Yellow
-    Write-Host "       2) If you already have a real Python installed elsewhere, disable the" -ForegroundColor Yellow
-    Write-Host "          Store alias: Settings > Apps > Advanced app settings >" -ForegroundColor Yellow
-    Write-Host "          App execution aliases > turn OFF 'python.exe' and 'python3.exe'." -ForegroundColor Yellow
-    exit 1
+if ($isStore) {
+    Write-Host "   [!] Proceeding with Microsoft Store Python. If the install later misbehaves" -ForegroundColor DarkYellow
+    Write-Host "       (venv files appear to 'vanish'), install real Python from python.org and re-run." -ForegroundColor DarkYellow
 }
 if ($maj -lt 3 -or ($maj -eq 3 -and $min -lt 10)) {
     Write-Host "ERROR: Python $maj.$min is too old (need >= 3.10)." -ForegroundColor Red; exit 1

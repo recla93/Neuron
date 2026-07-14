@@ -50,6 +50,22 @@ Release.
   `tests/_mockdeps.py` (`install_mock_deps()`). Files using real deps via
   `importorskip` are untouched.
 
+### Changed — unified installer / single entry point
+- **`python -m neuron` is now the one entry for install + management + features.**
+  `bridge`, `connect` (Turso Cloud) and `console` (graph diagnostics) moved from
+  `scripts/` into the package and became `neuron bridge|connect|console`
+  subcommands (also surfaced in the `neuron manage` menu). `scripts/*.py` are thin
+  back-compat shims. `console` now resolves paths via `neuron.config` + the packaged
+  seed, so it works from a pipx install.
+- **Windows installer handles Microsoft Store Python and installs Python if absent.**
+  `install.ps1` previously *rejected* Store Python; it now prefers a real
+  interpreter, offers to install one via **winget** when none (or only the Store
+  build) is found, and otherwise falls back to using the Store Python (resolving its
+  real versioned exe) with a caveat instead of hard-failing.
+- **New `install.sh` for macOS/Linux** — finds or installs Python 3.10+
+  (brew/apt/dnf/pacman), installs Neuron via pipx or a venv, then runs
+  `neuron setup`.
+
 ### Fixed
 - **`neuron setup --install --yes` hung on stdin.** The pre-warm prompt guard
   (`setup.py`) always evaluated to the interactive branch, so a non-interactive
