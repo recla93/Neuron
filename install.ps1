@@ -758,14 +758,21 @@ if (Test-Path "$env:USERPROFILE\.claude.json") {
 # ===============================================================
 # 7. SHORTCUT
 # ===============================================================
-Write-Host "`n7. Start Menu shortcut..." -ForegroundColor Yellow
+Write-Host "`n7. Shortcuts (visual hub)..." -ForegroundColor Yellow
+# Point the shortcuts at the GUI via pythonw.exe (no console window) — clicking
+# them opens the visual hub, NOT the stdio server. Falls back to python.exe.
+$pyw = "$venv\Scripts\pythonw.exe"
+$shTarget = if (Test-Path $pyw) { $pyw } else { "$venv\Scripts\python.exe" }
+$w = New-Object -ComObject WScript.Shell
 $sd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$Slug"
 if ($NeuronDebug) { Write-Host "  [..] Creating: $sd" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $sd -Force | Out-Null
-$w = New-Object -ComObject WScript.Shell
-$s = $w.CreateShortcut("$sd\$Slug.lnk")
-$s.TargetPath = "$venv\Scripts\python.exe"
-$s.Arguments = "-m neuron"
-$s.WorkingDirectory = $DestDir; $s.Save()
+foreach ($lnk in @("$sd\$Slug.lnk", (Join-Path ([Environment]::GetFolderPath('Desktop')) "Neuron.lnk"))) {
+    $s = $w.CreateShortcut($lnk)
+    $s.TargetPath = $shTarget
+    $s.Arguments = "-m neuron gui"
+    $s.WorkingDirectory = $DestDir
+    $s.Save()
+}
 
 # ===============================================================
 # 8. FINAL VERIFICATION
@@ -779,7 +786,8 @@ $vpy = "$venv\Scripts\python.exe"
 
 Write-Host "`n=============================================================" -ForegroundColor Green
 Write-Host "  Neuron installed into $DestDir" -ForegroundColor Green
-Write-Host "  Run:  $venv\Scripts\python.exe -m neuron" -ForegroundColor Green
+Write-Host "  Open the visual hub:  the 'Neuron' shortcut (Desktop / Start Menu)" -ForegroundColor Green
+Write-Host "  or from a terminal:   $venv\Scripts\python.exe -m neuron gui" -ForegroundColor Green
 Write-Host "=============================================================" -ForegroundColor Green
 Write-Host "Restart your MCP client (Claude Desktop, Cursor, ...) to activate Neuron."
 Write-Host "Manual / emergency install + troubleshooting: INSTALL.md"

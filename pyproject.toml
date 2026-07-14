@@ -45,6 +45,11 @@ neuron-mcp = "neuron.server:cli"
 # `neuron` dispatches: no args -> MCP server; `neuron init` -> client wiring.
 neuron = "neuron.__main__:cli"
 
+# Windowed launcher: pip generates a real neuron-gui(.exe) with NO console window
+# (uses pythonw on Windows) — the double-clickable visual hub, no PyInstaller.
+[project.gui-scripts]
+neuron-gui = "neuron.gui:main"
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"

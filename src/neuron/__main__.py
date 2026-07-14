@@ -10,6 +10,8 @@ Default (no subcommand) runs the MCP stdio server, so existing launchers that ca
   ``neuron bridge ...``      — expose the stdio server over HTTP (remote connectors).
   ``neuron connect ...``     — connect & test a Turso Cloud DB, then save to .env.
   ``neuron console ...``     — read-only graph diagnostics (--watch to follow).
+  ``neuron tunnel ...``      — public HTTPS via cloudflared (pairs with bridge).
+  ``neuron gui``             — Tkinter visual hub (also the windowed neuron-gui exe).
 """
 
 import sys
@@ -74,6 +76,9 @@ def cli() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "tunnel":
         from neuron.tunnel import main as tunnel_main    # cloudflared public HTTPS tunnel
         raise SystemExit(tunnel_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "gui":
+        from neuron.gui import main as gui_main          # Tkinter visual hub
+        raise SystemExit(gui_main(sys.argv[2:]))
     # T68: client-agnostic isolation flags. Some MCP hosts (OpenCode) don't
     # pass `env` to child processes at all, so a test/sandbox store couldn't be
     # isolated via NS_GRAPHS_DIR. Flags travel in the command array — which

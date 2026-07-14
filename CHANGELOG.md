@@ -51,6 +51,13 @@ Release.
   `importorskip` are untouched.
 
 ### Changed — unified installer / single entry point
+- **Visual hub: `neuron gui`.** A small Tkinter launcher (stdlib, no new deps, no
+  PyInstaller) is the centralized, clickable manager — quick read-only checks
+  (status/overview/doctor) render inline; interactive tools (setup/manage/bridge/
+  tunnel/connect/console) open in a terminal. Exposed as a windowed `neuron-gui`
+  executable via `[project.gui-scripts]` (pip builds it with no console window);
+  `install.ps1` now drops **Desktop + Start-Menu shortcuts** pointing at it
+  (via `pythonw`), replacing the old shortcut that just launched the stdio server.
 - **`python -m neuron` is now the one entry for install + management + features.**
   `bridge`, `connect` (Turso Cloud) and `console` (graph diagnostics) moved from
   `scripts/` into the package and became `neuron bridge|connect|console`
