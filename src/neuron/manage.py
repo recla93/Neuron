@@ -120,7 +120,10 @@ def _menu() -> int:
               "  3) Consolidate (merge near-duplicates, drop orphans)\n"
               "  4) Graph visualizer (HTML)\n"
               "  5) Doctor (health check)\n"
-              "  6) Exit")
+              "  6) HTTP bridge (expose over HTTP for remote connectors)\n"
+              "  7) Live console (read-only graph diagnostics)\n"
+              "  8) Connect a Turso Cloud database\n"
+              "  9) Exit")
         try:
             ch = input("> ").strip()
         except EOFError:
@@ -141,6 +144,15 @@ def _menu() -> int:
             for ln in lines:
                 print(ln)
             print(f"{problems} problem(s)." if problems else "All good.")
+        elif ch == "6":
+            from neuron.bridge import main as bridge_main
+            bridge_main([])
+        elif ch == "7":
+            from neuron.console import main as console_main
+            console_main([])
+        elif ch == "8":
+            from neuron.connect import main as connect_main
+            connect_main([])
         else:
             return 0
 

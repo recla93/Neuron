@@ -22,10 +22,8 @@ if _src not in sys.path:
 
 
 def _load_connect_turso():
-    path = os.path.join(_project_root, "scripts", "connect_turso.py")
-    spec = importlib.util.spec_from_file_location("connect_turso", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # Moved into the package (scripts/connect_turso.py is now a thin shim).
+    import neuron.connect as mod
     return mod
 
 

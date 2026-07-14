@@ -6,6 +6,10 @@ Default (no subcommand) runs the MCP stdio server, so existing launchers that ca
   ``neuron register ...``    — register the MCP server in AI clients (Piano 05 B1).
   ``neuron doctor ...``      — diagnose/repair client registrations (Piano 05 B6).
   ``neuron consolidate ...`` — merge near-duplicates + archive orphans (E1.4).
+  ``neuron setup / manage``  — lifecycle + day-to-day management (ADR-007).
+  ``neuron bridge ...``      — expose the stdio server over HTTP (remote connectors).
+  ``neuron connect ...``     — connect & test a Turso Cloud DB, then save to .env.
+  ``neuron console ...``     — read-only graph diagnostics (--watch to follow).
 """
 
 import sys
@@ -58,6 +62,15 @@ def cli() -> None:
         raise SystemExit(manage_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         raise SystemExit(_consolidate_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "bridge":
+        from neuron.bridge import main as bridge_main   # stdio→HTTP bridge for remote connectors
+        raise SystemExit(bridge_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "connect":
+        from neuron.connect import main as connect_main  # Turso Cloud onboarding (test then save)
+        raise SystemExit(connect_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "console":
+        from neuron.console import main as console_main  # read-only graph diagnostics
+        raise SystemExit(console_main(sys.argv[2:]))
     # T68: client-agnostic isolation flags. Some MCP hosts (OpenCode) don't
     # pass `env` to child processes at all, so a test/sandbox store couldn't be
     # isolated via NS_GRAPHS_DIR. Flags travel in the command array — which
