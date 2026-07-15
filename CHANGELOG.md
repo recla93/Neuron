@@ -15,6 +15,13 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.4.1] — 2026-07-15
+
+### Added
+- **macOS/Linux launcher for the Control Center.** `install.sh` now creates
+  `~/.local/share/neuron/neuron-gui` (shell script) and, on Linux, a `.desktop`
+  file in the application menu — the equivalent of the Windows Desktop shortcut.
+
 ## [5.4.0] — 2026-07-15
 
 ### Changed — GUI identity and single front door

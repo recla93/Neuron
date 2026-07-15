@@ -92,3 +92,36 @@ echo "Registering Neuron in your AI clients..."
 # shellcheck disable=SC2086
 $NEURON setup --register-all --slug "$SLUG" $([ "$ASSUME_YES" = "1" ] && echo --yes)
 echo "Done. Restart your AI apps to load Neuron. Manage it any time with: neuron manage"
+
+# Create a launcher so the Control Center is always reachable without reinstalling.
+BIN_DIR="${NEURON_HOME:-$HOME/.local/share/neuron}"
+mkdir -p "$BIN_DIR"
+cat > "$BIN_DIR/neuron-gui" <<LAUNCHER
+#!/usr/bin/env sh
+exec $NEURON gui "\$@"
+LAUNCHER
+chmod +x "$BIN_DIR/neuron-gui"
+echo "Launcher created: $BIN_DIR/neuron-gui"
+
+# Linux .desktop file for the application menu.
+if [ "$(uname)" = "Linux" ] && command -v desktop-file-install >/dev/null 2>&1; then
+    DESK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    mkdir -p "$DESK_DIR"
+    cat > "$DESK_DIR/neuron-control-center.desktop" <<DESKTOP
+[Desktop Entry]
+Name=Neuron Control Center
+Comment=Neuron semantic memory — control center
+Exec=$BIN_DIR/neuron-gui
+Icon=neuron-logo
+Terminal=false
+Type=Application
+Categories=Utility;Development;
+DESKTOP
+    echo "Desktop entry: $DESK_DIR/neuron-control-center.desktop"
+fi
+
+if ask "Open the Control Center now?"; then
+    echo "Launching Control Center..."
+    $NEURON gui &>/dev/null &
+    disown
+fi
