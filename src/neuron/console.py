@@ -182,7 +182,7 @@ def _signature(dbs: list[dict]):
 
 def _quit_pressed() -> bool:
     """True if the user pressed q/Q/Esc. A graceful way to stop the live watch
-    WITHOUT Ctrl+C — Ctrl+C tended to tear down the whole Configuration.bat.
+    WITHOUT Ctrl+C — Ctrl+C can tear down the hosting GUI process.
     Windows-only (msvcrt); a no-op elsewhere (Ctrl+C still works there)."""
     try:
         import msvcrt

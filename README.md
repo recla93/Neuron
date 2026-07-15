@@ -4,6 +4,8 @@
 
 <div align="center">
 
+<img src="assets/neuron-logo.png" alt="Neuron logo" width="360">
+
 <h1>🧠 Neuron</h1>
 
 <h3>Persistent semantic memory for AI — an MCP server that lets any LLM <em>remember</em>.</h3>
@@ -17,7 +19,7 @@ you discussed yesterday, connects ideas across topics, and gets smarter the more
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-5.3.1_%22Synapse%22-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-5.4.0_%22Synapse%22-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -100,17 +102,17 @@ literally matches.
 
 ### 🪟 Windows — one click
 
-Double-click **`Neuron.bat`** and choose **Setup**. On a fresh machine it runs the
-installer (`install.ps1`) — prerequisites → PyTurso → Neuron + the embedding model,
-installing Python via winget if you don't have it — then wires Neuron into your AI apps.
-After that, `Neuron.bat` is also your hub for **Manage** (bridge, tunnel, cloud, console).
-No terminal, no compiler.
+Double-click **`NeuronInstaller.exe`** in the project folder. It installs Neuron and creates a
+**Neuron — Control Center** shortcut on the Desktop. From then on, double-click that
+shortcut: the GUI is the single front door for setup, registration, deploy/update, Turso,
+Bridge + Tunnel, graph maintenance, vault import and live logs. No terminal is needed for
+normal use.
 
 <details>
 <summary>…or from a terminal</summary>
 
 ```powershell
-.\install.ps1
+.\NeuronInstaller.exe
 ```
 
 Installs into a dedicated venv using a **pre-built `pyturso` wheel** from `.\vendor`

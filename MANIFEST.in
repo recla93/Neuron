@@ -3,6 +3,8 @@
 # includes it in the sdist (the wheel picks it up via package-data in
 # pyproject.toml). With no .db present it matches nothing — which is intended.
 recursive-include src/neuron/data *.db
+recursive-include src/neuron/data *.png
+include assets/neuron-logo.png
 
 # Useful top-level docs/config for the sdist.
 # NOT CLAUDE.md — that's internal project/AI instructions, not a shipped doc.

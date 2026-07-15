@@ -17,6 +17,31 @@ Release.
 
 ## [Unreleased] — 5.4 line
 
+### Changed — GUI identity and single front door
+- Added the Neuron logo to the Control Center and Setup Wizard, with a modern card header,
+  bundled application icon and a more spacious default window.
+- Added `NeuronInstaller.exe`, a 12.8 KB Windows bootstrapper that runs the first install
+  without Python, pip, Tkinter or a terminal window.
+- Added a GUI Turso connection form and made `install.ps1 -Yes` genuinely non-interactive;
+  the optional-provider step now defaults to skip instead of reading stdin.
+- Added [docs/CORE_AUDIT.md](docs/CORE_AUDIT.md): 235 tests pass, dependencies are healthy,
+  and the core persistence/search/extraction paths have been checked.
+- The Desktop shortcut is now named **Neuron — Control Center** and is the documented
+  entry point for setup, maintenance, Turso, Bridge/Tunnel, vault import and deploy/update.
+- Removed obsolete user-facing BAT launchers; retained only `scripts/run_mcp.bat` as a
+  compatibility launcher for legacy MCP client registrations.
+- Refreshed README and INSTALL instructions to match the GUI-first workflow.
+- The installer now detects an existing installation instead of presenting an empty
+  window, and exposes **Status**, **Repair**, and **Uninstall** recovery actions.
+  Uninstall keeps memory data by default; **Uninstall + memory** is an explicit purge.
+- The Control Center exposes the same recovery actions and falls back to
+  `neuron setup --uninstall` when the repository maintenance script is unavailable.
+- Fixed the bootstrapper idle/blank state when the Desktop Control Center shortcut is
+  missing or the source folder cannot be auto-detected: controls remain visible, the
+  source can be selected manually, and Repair can recreate the shortcut.
+- Added an explicit **Start process** button and an initial output message so the
+  bootstrapper never looks idle before the first action.
+
 ### Changed — code-quality pass (analysis 2026-07-14, all backward-compatible)
 - **Single source of truth for paths/tunables: `neuron/config.py` (P0 #3, P1 #9).**
   `_default_graphs_dir()` / slug resolution were copy-pasted into `server.py`,
@@ -62,7 +87,148 @@ Release.
   point at `playbook`. (Both the packaged `src/neuron/skills/` and the editable
   repo `skills/` copies stay byte-identical, enforced by the drift-guard test.)
 
+### Fixed — remote store resilience (T76)
+- **Turso Cloud writes stopped after an idle disconnect ("only the seed ever
+  arrives").** The retry wrapper re-used the *same dead client object* on every
+  attempt: once the Hrana WebSocket/HTTP session dropped, all 4 retries failed
+  identically and the turn was never persisted. `RemoteTursoConnection` now
+  **reconnects between retry attempts** (fresh client), and if a
+  `libsql://`/`wss://` endpoint refuses or drops the sync client it **falls back
+  to the stateless `https://` transport** and sticks with whichever works.
+  Added `ping()` (SELECT 1 + one reconnect) for health checks. A failed save
+  still leaves the graph dirty, so the next turn re-sends everything — now to a
+  *live* connection.
+
+### Added — model switch + test runner in the GUI (T82)
+- **Model section.** Two one-click embedding-model presets — Multilingual
+  EN+IT (~380 MB, `paraphrase-multilingual-MiniLM-L12-v2`, the default) and
+  English-only (~90 MB, `all-MiniLM-L6-v2`) — written as `NS_EMBED_MODEL`
+  into the same `.env` the server resolves (upsert, comments preserved; both
+  models are 384-dim so no schema change). After a switch the GUI offers to
+  **Re-embed Store** (also its own button): streams `scripts/reembed.py
+  --all` with the new model.
+- **Run Tests button.** Runs the pytest suite from the source/install root
+  inside the pane; on success a green "all tests passed", on failure the
+  full output stays and the GUI offers to launch **Repair** right away
+  (with a pointer to Deploy Update when it's the code that's stale).
+  Foreground commands now support a completion hook (`_fg_on_done`).
+
+### Changed — Network UX polish (T81)
+- **No more stray CMD windows.** The Bridge/Tunnel *grandchildren*
+  (`uvx mcp-proxy`, `cloudflared`) are now launched with `CREATE_NO_WINDOW`
+  too — they run as pure background processes. Stop Network (taskkill /T)
+  ends them, and **closing the GUI window now also terminates the stack**
+  (WM_DELETE_WINDOW handler; previously they lingered orphaned).
+- **Clean success summary.** While the network starts, the full trace
+  streams; the moment the tunnel URL arrives the pane is cleared and replaced
+  by a compact recap (server alive, Bridge endpoint + proxy runner, Tunnel
+  connector URL, copy hint). Routine INF chatter is suppressed from then on —
+  warnings/errors/watchdog events still surface, and any failure flips the
+  log back to full verbosity. The trace is never cleared when something
+  fails.
+- **Fixed mojibake (`â†’`, `âœ“`).** The GUI decoded child output with the
+  legacy locale codepage while children write UTF-8: every pipe now reads
+  `encoding="utf-8"` and Python children get `PYTHONUTF8=1`.
+- **Intentional stops no longer print a red "exited with code 1"** — Stop
+  marks the processes, which then report a plain "stopped".
+
+### Fixed — GUI output pipeline + installer fallbacks (T80)
+- **No Bridge/Tunnel output ever reached the GUI.** The queue-poll loop that
+  moves child-process lines into the output pane was only scheduled by
+  *foreground* commands — pressing Start Network on a fresh session started
+  the processes but nobody ever drained their queues. The loop now starts
+  once at boot (and the per-command schedules, each of which leaked a
+  duplicate self-perpetuating loop, are gone).
+- **A corrupt/odd logo PNG could kill GUI startup** — `_load_logo` caught only
+  `TclError`/`OSError`, but a bad image raised `TypeError`. The logo is
+  cosmetic: any failure now just skips it.
+- **Import Vault / Deploy / Uninstall runners** now use `CREATE_NO_WINDOW`
+  (no console flash) and `PYTHONUNBUFFERED=1` for Python children (live
+  streaming instead of buffered bursts).
+- **NeuronInstaller.exe: no fallback when `install.ps1` wasn't found.** The
+  label said "choose the project folder" but no chooser existed and the
+  Install button silently did nothing. Added a folder-picker fallback (on
+  startup failure and on Install click) that validates the chosen folder
+  contains `install.ps1`. Flags audit: `-Yes`/`-WithLlmProviders`
+  (install.ps1) and `-Yes`/`-Data` (uninstall.ps1) all exist; the built-in
+  `neuron setup --uninstall` fallback is correct. **Rebuild required:**
+  `installer/build-installer.ps1` (the shipped .exe predates this fix).
+
+### Fixed — GUI round 2 (field report, T79)
+- **`connect` from the GUI died with `EOFError`.** Typed in the command
+  console it ran with a piped stdin and crashed on the first `input()`. It now
+  routes to a real terminal (like the Connect button), and `neuron connect`
+  itself exits with a clear message instead of a traceback when stdin isn't
+  interactive.
+- **Console button "did nothing".** The new terminal ran `neuron console` and
+  closed on exit/error before anything was readable; Windows terminals now run
+  under `cmd /k` (window stays open).
+- **Network sequencing + preflight.** "Start Cloud/Stop Cloud" renamed
+  **Start/Stop Network** (Bridge+Tunnel are the HTTP connector stack, not
+  Turso). Start now (1) checks dependencies first — mcp-proxy runner
+  (uvx/uv/pipx) and cloudflared — printing exactly what's missing and the
+  winget/pip command to install it; (2) starts the Bridge; (3) opens the
+  Tunnel **only after** the Bridge really listens on its port (90s timeout,
+  clear error otherwise). Both run *inside* the GUI (no terminal windows to
+  keep open) and the log says so.
+- **Collapsed sidebar sections reopened in the wrong place** (buttons dumped
+  after the Stop button): re-pack now anchors to the section header.
+- **New "Deploy Update" button** (Setup): runs `scripts/deploy.ps1 -Yes` and
+  streams it — the GUI way to sync the repo into the active install.
+- **Removed 6 unreferenced launcher/helper `.bat`s** (`Neuron-Manage`,
+  `Neuron-Setup`, `scripts/check|deploy|neuron-summary|run-tests.bat`) — all
+  superseded by the GUI; kept `Neuron.bat`, `Configuration.bat`,
+  `Install-GUI.bat`, `run_mcp.bat`, `build-and-install.bat` (referenced by
+  docs/clients).
+
+### Changed — GUI control center (T74/T75)
+- **The GUI is now a persistent control center.** A command console at the
+  bottom of the output pane runs any `neuron` subcommand (manage, consolidate,
+  doctor, setup…) without a terminal — with history (Up/Down) and validation;
+  foreground commands no longer refuse to run while Bridge/Tunnel are up.
+  New **Import Vault** button (folder picker → streams `import_vault.py`) and
+  **Prune** shortcut.
+- **Watchdog for Bridge + Tunnel.** "Start Cloud" marks both processes
+  keep-alive: if one dies it restarts automatically with exponential backoff
+  (2s→60s); Stop/Stop Cloud disables resurrection. The tunnel's public
+  `*.trycloudflare.com` URL is parsed from the stream and pinned in the status
+  bar — click to copy the `/mcp` connector URL.
+- **`neuron tunnel` supervises cloudflared by default.** Cloudflare *quick*
+  tunnels have no uptime guarantee (idle drops, edge maintenance) — that's the
+  "tunnel randomly dies" report. The command now relaunches cloudflared with
+  backoff and prints the new URL each time (`--once` restores the old
+  single-run behaviour; quick-tunnel URLs change on every restart).
+
+### Fixed — core precision (T78)
+- **Sentiment "urgent" fired on substrings** — "down" inside *download*,
+  "help" inside *helpers*, "crash" inside *crashlytics* flagged innocent turns
+  as urgent. Single-word sentiment cues now match whole tokens only;
+  multi-word cues ("not working") keep the full-text check (and actually work
+  now — they could never match a single token before).
+- **Bigram promotion had an unvalidated first pass** that could inject
+  over-long or pattern-invalid compound keywords before the validated loop;
+  collapsed into one validated pass. Added `works/working/worked` to the
+  stoplist (verbs were becoming nodes).
+- **Vector-search tiers disagreed on the relevance floor.** The Python
+  fallback returned any `sim > 0` while the Turso SQL tier filters at 0.3, so
+  offline installs got noise the cloud tier would never show. Both tiers now
+  share the 0.3 threshold.
+
 ### Changed — unified installer / single entry point
+- **Graphical Setup Wizard (`neuron gui` → Install Wizard, or `neuron gui
+  --wizard`).** The installer is no longer a mechanical terminal flow: a guided
+  5-step wizard (Welcome → environment checks → client selection with
+  detected/not-found badges → install with progress bar + live log → summary)
+  drives the registration engine (`neuron.clients`) **in-process** — structured
+  results, no stdin prompts to hang on. Clients found on the machine are
+  pre-selected; the embedding-model pre-download (~380 MB) is an explicit
+  opt-in checkbox. Every config file is still backed up before being touched.
+- **GUI hub fixes.** Sidebar buttons pointed at flags that don't exist
+  (`setup --deploy`, `setup --test`, `manage --bench`) — replaced with real
+  subcommands; interactive tools (`console`, `connect`) now open in a real
+  terminal instead of hanging on a piped stdin; fixed the context label showing
+  `None` (`Thread.join()` used as a value) and the ttk theme never applying
+  (`tk.Ttk.Style` → `ttk.Style`).
 - **Visual hub: `neuron gui`.** A small Tkinter launcher (stdlib, no new deps, no
   PyInstaller) is the centralized, clickable manager — quick read-only checks
   (status/overview/doctor) render inline; interactive tools (setup/manage/bridge/
@@ -93,10 +259,28 @@ Release.
   the one clickable hub — its **Setup** runs `install.ps1` on a fresh machine.
 
 ### Fixed
+- **CI "skills packaged" check was hardcoded to the old skill count.** After
+  the 4→2 skill consolidation the wheel ships 3 `.md` files but `ci.yml`
+  asserted `>= 5`, turning every build red. The check now compares the wheel's
+  skill set against `src/neuron/skills/` on disk — exact match, count-proof.
+- **Skill docs drifted from the real tool surface.** `neuron-curated-memory`
+  showed `confirm(keyword=…)` (the parameter is `keywords`, a list) and an
+  example link with `link_type: "causal"` (invalid enum — `cause-effect`)
+  pointing at a keyword not in the stored set (the curation gate would refuse
+  it as dangling); `playbook.md`'s tool table was missing 6 tools
+  (`extract`, `consolidate`, `merge`, `dedup`, `help`, `skill`). All fixed in
+  both skill dirs (drift-guard kept green).
 - **`neuron setup --install --yes` hung on stdin.** The pre-warm prompt guard
   (`setup.py`) always evaluated to the interactive branch, so a non-interactive
   install blocked on `input()`. `--yes` now skips the prompt (and the 380MB
   pre-download) entirely.
+
+### Removed
+- **Repo hygiene.** Deleted the deprecated `scripts/seed_vault.py` stub
+  (superseded by `scripts/import_vault.py` since T10, self-referencing only)
+  and the local build debris (`build/`, `dist/` with stale 5.0.x wheels,
+  `UNKNOWN.egg-info/`, stray `.lock`, `__pycache__`); `.gitignore` now covers
+  `/.lock`.
 
 ### Added
 - **Test coverage for `neuron setup` and `neuron manage` (P1 #6).**
@@ -526,111 +710,4 @@ preserved on the `4.x` branch.
   yes/no prompts, with an explicit "left in place" summary. Registration and
   removal paths are resolved from `%USERPROFILE%`/`%LOCALAPPDATA%`, so both
   work identically on any Windows account.
-- **Embedding-model switcher** in the installer: pick the multilingual default
-  (~380MB) or a lightweight English-only fallback (~90MB) from a menu. Writes
-  `NS_EMBED_MODEL` directly into each already-registered client's MCP entry
-  (not just `.env`, which most clients never read), offers a pre-warm and an
-  optional `scripts/reembed.py --all` run so existing data stays searchable
-  after the switch.
-
-### Fixed
-- **Installer manual "Start" froze the config menu**: `Invoke-StartServer`
-  launched Neuron without redirecting its stdin, so the detached MCP process
-  (which blocks reading stdin waiting for a client) ended up sharing the
-  console's input with the interactive menu — every keystroke went to the
-  child instead of the menu's `ReadKey`. Fixed by redirecting the child's
-  stdin to the null device (`-RedirectStandardInput 'NUL'`), applied
-  defensively to the other two background-process launch sites too
-  (cloudflared tunnel, bridge).
-
-### Changed
-- **Default `NS_EMBED_MODEL` → `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`**
-  (384-dim, EN+IT). Bench on real hardware: IT recall 0.89→1.00, same dim (no schema change),
-  faster (ADR-001, E0.4). English-only workloads can pin `all-MiniLM-L6-v2` via env.
-  **Breaking:** stores embedded with the old model are re-embedded on load — run `scripts/reembed.py`.
-
-## [Unreleased]
-
-_Next up, after 4.0.0 ships:_
-- An optional local-LLM (Ollama) validator layer on top of the 0-token heuristic,
-  configurable from `Configuration.bat`.
-
-## [4.0.0] — unreleased (release target after a full fix + test pass)
-
-The first 4.x release: a stabilization and installer overhaul built on the 3.3.x
-codebase. MAJOR because default data locations and shipped behavior changed
-(see **Changed** / **Removed**). Everything below — installer, `help`, heuristic
-cleanup, bridge Plan-Bs, the crash fixes — is part of 4.0.0; there is no 4.0.x/4.1
-split until this ships.
-
-### Added
-- **`Configuration.bat`** — one interactive hub for everything: install/update,
-  "Add Neuron to your AI" (with a copy-paste tutorial per client — Claude
-  Desktop/Code, Cursor, VS Code, OpenCode, Zed, ChatGPT/bridge), Bridge & Cloud
-  Turso, tests, the live graph console, a clean uninstall, and a seed-DB guide.
-- **`help` tool** — lists every Neuron command with a one-line explanation, grouped
-  (per-turn loop / search / contexts / upkeep / data); `status` ends with a pointer
-  to it, so the human (not just the model) sees what each feature does.
-- **Curated-memory skill** (`skills/neuron-curated-memory/SKILL.md`) — teaches any
-  MCP client to use Neuron well: load context before answering, then save a *curated*
-  turn (3-5 concept keywords, never verbs/filler, typed links, no self-links).
-  Install as a Claude skill (copy the folder into `~/.claude/skills/`) or point a
-  client's instructions at the file.
-- **Complete prebuilt PyTurso wheel matrix (CPython 3.10–3.14)** in `vendor/` — every
-  supported Python installs fully offline, no Rust/MSVC compiler needed.
-- **Embedding-model pre-warm** at the end of install (skippable, offline-safe) so the
-  first real use is instant.
-- **Install logging** — every install run is captured to
-  `%LOCALAPPDATA%\Programs\neuron\logs\`, so errors that scroll off are recoverable.
-
-### Changed
-- **Graphs persist to a stable per-user location by default** —
-  `%LOCALAPPDATA%\neuron\graphs` on Windows, `$XDG_DATA_HOME/neuron/graphs`
-  elsewhere — surviving restarts **and** reinstalls. Override with `NS_GRAPHS_DIR`.
-  (The old default was package-relative and could resolve inside the venv.)
-- Install consolidated into a single menu: **FULL / Dependencies / PyTurso**; FULL
-  doubles as the update path (`pip --upgrade`, and an older bundled wheel never
-  shadows newer source).
-- The MCP server now reports `neuron.__version__` instead of a hardcoded string.
-
-### Fixed
-- **Vector tools crashed** (`vector_search` / `find_candidates` / `auto` / `pre_turn`)
-  with `I/O error: short read on page 1` when the shipped seed was a truncated stub.
-  The seed is now validated (real SQLite, ≥ 512 bytes) and any DB/engine error falls
-  back to the Python path instead of crashing.
-- **`_refine_domain` always raised `NameError`** (`_pack_vector` → `pack_vector`) —
-  domain refinement was silently dead.
-- **New contexts crashed on first save** with `open: NotFound` — `turso.connect()`
-  needs the parent directory to exist; it is now created for both engines.
-- **The MCP server no longer crashes when cloud creds are set but the `cloud` extra
-  isn't installed** — `db.py` warns and falls back to the local engine instead of a
-  `ModuleNotFoundError: libsql_client` at import (this killed the bridge preflight).
-- **Bridge Plan-B pre-flight** — it needs a runner for `mcp-proxy` (uv/uvx/pipx) and
-  offers to install `uv` if missing; if cloud creds are set but `libsql-client` isn't,
-  it offers to install it, otherwise serves the local engine — launching Neuron with
-  the cloud creds suppressed (`NEURON_NO_DOTENV`) so it starts even against an older
-  installed `db.py`. (libsql is only for the cloud tier; the bridge never needs it.)
-- **Heuristic extraction no longer promotes Italian action verbs / connectors to
-  graph nodes** (`usiamo`, `riduciamo`, `disegnare`, `adottiamo`, `passiamo`, `via`,
-  …) — the IT+EN stoplist was extended (esp. the "noi" `-iamo` form). 0-token,
-  deterministic: `Usiamo FastAPI con Redis, riduciamo la latenza` → `[fastapi, redis,
-  latenza, …]` instead of the verbs.
-- **Self-links can no longer be created** (`react --analogy--> react`, incl. case
-  variants like `React`/`react`) — a central guard in `Graph.add_link` rejects
-  `source == target` on every path (auto-link, store, semantic flash).
-- **Live Graph Console stops with `q`/`Esc`** instead of `Ctrl+C`, which used to tear
-  down the whole `Configuration.bat`.
-- **Add-to-AI leads with a clear "[DONE] added automatically" banner**; the by-hand
-  steps are marked reference-only.
-- **`check.ps1` crashed** when `rustup` wasn't installed, and wrongly flagged
-  Rust/MSVC as failures when PyTurso already worked from a wheel — the toolchain is
-  now reported as "not needed" and every external-tool call is guarded.
-- **`UnicodeEncodeError`** on default Windows consoles (cp1252) in several helper
-  scripts — output is UTF-8 both in the hub and at the source.
-- **Menu flicker** in `Configuration.bat` — the arrow menu redraws in place instead
-  of clearing the screen on every keypress.
-
-### Removed
-- The shipped 26-byte `base_knowledge.db` seed stub. Neuron now ships **without** a
-  seed (it works empty); build your own via the "Seed knowledge DB" guide or
-  `scripts/import_vault.py`.
+- **Embedding-model switcher** in

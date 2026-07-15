@@ -9,7 +9,7 @@ you running by hand.
 
 **TL;DR**
 
-- **Windows** → double-click `Neuron.bat` → *Setup* (runs `install.ps1` on a fresh machine).
+- **Windows** → double-click `NeuronInstaller.exe`, then use the **Neuron — Control Center** Desktop shortcut.
 - **macOS / Linux** → `python3 -m venv .venv && source .venv/bin/activate && pip install ".[dev]"` → `python -m neuron`.
 - **Register with a client** → `neuron register` (interactive, cross-platform) — or let the Windows installer do it.
 
@@ -36,20 +36,10 @@ the launch command with your MCP client.
 
 ## 1. Automated install (Windows)
 
-**One-click (no terminal):** double-click **`Neuron.bat`** in the project
-root and choose **Setup**. It opens an interactive menu (handles Windows' ExecutionPolicy for you)
-that walks you through everything in order — install prerequisites → PyTurso →
-full Neuron, add Neuron to your AI app, connect Turso Cloud / launch the bridge,
-run tests, the Live Log Console, and a clean uninstall. This is the recommended
-front door for most users.
-
-For maintainers / source checkouts there is also:
-
-- **`scripts\build-and-install.bat`** — the full local build chain: builds the
-  `vendor\` pyturso wheel, builds the Neuron wheel, then runs the installer. Use
-  this from a **source checkout** when nothing is built yet. (Builds pyturso for
-  *your* Python only — it's a dev convenience, not a release builder; the full
-  3.10–3.14 wheel set comes from `release.yml`.)
+**One-click (no terminal):** double-click **`NeuronInstaller.exe`** in the project folder.
+It creates the dedicated environment and a **Neuron — Control Center** Desktop
+shortcut. Open that GUI for all subsequent operations: setup, client registration,
+Turso, Bridge/Tunnel, graph maintenance, vault import, tests and deploy/update.
 
 Or run the underlying installer directly from a terminal:
 
@@ -84,7 +74,6 @@ Useful flags:
 
 If you just want the Tkinter visual hub — no chat, no CLI tools:
 
-- **Windows:** double-click `Install-GUI.bat`
 - **macOS / Linux:** `chmod +x install-gui.sh && ./install-gui.sh`
 
 Both scripts run `pip install -e .` (editable), which triggers the
@@ -92,7 +81,7 @@ Both scripts run `pip install -e .` (editable), which triggers the
 
 | Platform | Executable | Desktop shortcut |
 |---|---|---|
-| Windows | `neuron-gui.exe` in venv `Scripts/` | `Neuron GUI.lnk` on Desktop |
+| Windows | `neuron-gui.exe` in venv `Scripts/` | `Neuron — Control Center.lnk` on Desktop |
 | macOS / Linux | `neuron-gui` in venv `bin/` | `neuron-gui` symlink on Desktop |
 
 No Rust toolchain, no MSVC — Python + pip only.
@@ -216,7 +205,7 @@ neuron doctor              # check what's registered / spot problems
 neuron doctor --fix        # stop orphaned servers, clean duplicates
 ```
 
-On Windows, `install.ps1` (via `Neuron.bat` → Setup) already runs this for you for Claude
+On Windows, `install.ps1` (via the Neuron Control Center) already runs this for you for Claude
 Desktop and Cursor. For everything else, or on macOS/Linux, run `neuron register`.
 
 ### By hand

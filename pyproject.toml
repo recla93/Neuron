@@ -69,4 +69,4 @@ version = {attr = "neuron.__version__"}
 # `instructions` + resources, so they MUST travel in the package, not just at repo
 # root. `skills/*/*.md` covers the nested neuron-curated-memory/SKILL.md.
 [tool.setuptools.package-data]
-neuron = ["data/*.db", "skills/*.md", "skills/*/*.md"]
+neuron = ["data/*.db", "data/*.png", "skills/*.md", "skills/*/*.md"]

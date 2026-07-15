@@ -60,6 +60,7 @@ STOP_WORDS: set[str] = {
     "use", "using", "used", "add", "adding", "added", "create", "creating",
     "created", "make", "making", "made", "get", "getting", "set", "setting",
     "build", "building", "built", "run", "running", "reduce", "reducing",
+    "works", "working", "worked",
     # Italian prepositions/connectors that otherwise leak as pseudo-keywords
     "via", "verso", "tramite", "mediante", "presso", "oltre", "circa",
     "inoltre", "infatti", "invece", "eppure", "ovvero", "dunque", "quindi",
@@ -339,12 +340,21 @@ class SemanticExtractor:
 
     @staticmethod
     def _detect_sentiment(text: str, tokens: list[str]) -> str:
+        # Token-exact matching for single words (T78): the old substring scan
+        # fired "urgent" on innocent words — "down" inside "download", "help"
+        # inside "helpers", "crash" inside "crashlytics". Multi-word entries
+        # (e.g. "not working") still use a substring check on the full text,
+        # since they can never equal a single token.
         text_lower = text.lower()
-        if any(w in text_lower for w in SENTIMENT_URGENT):
+        tokens_lower = {t.lower() for t in tokens}
+
+        def _hit(w: str) -> bool:
+            return (w in text_lower) if " " in w else (w in tokens_lower)
+
+        if any(_hit(w) for w in SENTIMENT_URGENT):
             return "urgent"
-        tokens_lower = [t.lower() for t in tokens]
-        pos_score = sum(1 for t in tokens_lower if t in SENTIMENT_POSITIVE)
-        neg_score = sum(1 for t in tokens_lower if t in SENTIMENT_NEGATIVE)
+        pos_score = sum(1 for w in SENTIMENT_POSITIVE if _hit(w))
+        neg_score = sum(1 for w in SENTIMENT_NEGATIVE if _hit(w))
         if pos_score > neg_score:
             return "positive"
         if neg_score > pos_score:
@@ -367,15 +377,10 @@ class SemanticExtractor:
         if not keywords:
             keywords = [text[:KEYWORD_MAX_LENGTH].strip() or "conversazione"]
         entities = SemanticExtractor._extract_entities(tokens, scored)
-        # ponytail: fold compound entities (bigrams) into keywords so "Kotlin Flow" becomes a node
-        for ent in entities[:4]:
-            if " " in ent:
-                low = ent.lower()
-                if low not in keywords:
-                    keywords.append(low)
-                    if len(keywords) >= 8:
-                        break
-        # Promote entity bigrams to keywords (fix fragmentation: "Kotlin Flow" stays whole)
+        # Promote compound entities (bigrams+) to keywords so "Kotlin Flow"
+        # becomes one node instead of fragmenting. Single validated pass (T78):
+        # the old code had a FIRST unvalidated loop (entities[:4]) that could
+        # inject over-long or pattern-invalid keywords before the validated one.
         kw_set = set(keywords)
         for ent in entities:
             ent_low = ent.lower()

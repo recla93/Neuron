@@ -244,6 +244,12 @@ Cross-domain links are preserved automatically; the graph inherits from parent c
 | `neuron_prune` | Force pruning of expired tangential links |
 | `neuron_export` | Export full graph as JSON (analytics only) |
 | `neuron_reset` | Clear graph and restart |
+| `neuron_extract` | Heuristic concept extraction from raw text (no store) |
+| `neuron_consolidate` | Merge near-duplicate nodes, archive orphans |
+| `neuron_merge` | Merge two specific nodes into one |
+| `neuron_dedup` | Toggle automatic duplicate screening |
+| `neuron_help` | One-line reference for every command |
+| `neuron_skill` | Serve this playbook (or the curated skill) on demand |
 
 ---
 

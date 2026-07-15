@@ -11,9 +11,9 @@
         console / connect (Turso Cloud)          ->  neuron manage
 
     This launcher just resolves the right Python and opens `neuron manage`. For
-    first-time install use Neuron.bat (or run install.ps1 once).
+    first-time install run install.ps1 once, then use the Neuron Control Center.
 .NOTES
-    Kept so Configuration.bat and existing shortcuts keep working.
+    Kept as a compatibility wrapper for older installs; the GUI is the primary entry point.
 #>
 param([string]$Slug = 'neuron5')
 
@@ -30,7 +30,7 @@ if (Test-Path $venvPy) {
 } elseif (Get-Command py -ErrorAction SilentlyContinue) {
     $py = 'py'; $pyArgs = @('-3', '-m', 'neuron', 'manage')
 } else {
-    Write-Host "Neuron is not installed yet. Run Neuron.bat (or install.ps1) first." -ForegroundColor Yellow
+    Write-Host "Neuron is not installed yet. Run install.ps1 first." -ForegroundColor Yellow
     exit 1
 }
 

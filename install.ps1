@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Neuron v3.3 - Installer Windows (dependency-first, wheel-based)
 .DESCRIPTION
@@ -25,6 +25,7 @@
 
 param(
     [switch]$skipLlmProviders,
+    [switch]$WithLlmProviders,   # explicit opt-in for LLM providers (overrides -Yes for that step)
     [switch]$ForceCompile,      # skip the prebuilt-wheel path, go straight to compiling
     [string]$Slug = 'neuron5',  # install identity (v5 "Synapse"); use 'neuron' for the v4 line
     [switch]$Yes                # non-interactive: assume defaults, no prompts
@@ -161,13 +162,13 @@ Write-Host "1. Python 3.10 - 3.14..." -ForegroundColor Yellow
 #     perfectly good Python was on the machine.
 # Resolution strategy (Store-Python aware + auto-install guard):
 #   1. Prefer a REAL (non-Store) interpreter on PATH or via the py launcher.
-#   2. If none — or only the Microsoft Store build — is found, offer to install a
+#   2. If none - or only the Microsoft Store build - is found, offer to install a
 #      real Python via winget (silent). A real Python fixes BOTH "no Python" and
 #      "only Store Python" (the Store build runs under a virtualized filesystem
-#      that can silently redirect venv writes — "installs fine, then nothing finds
+#      that can silently redirect venv writes - "installs fine, then nothing finds
 #      its own folders"). Auto-install is the clean fix for both.
 #   3. If we can't install one, fall back to USING the Store Python (resolving its
-#      real versioned exe, not the alias stub) with a clear caveat — better than a
+#      real versioned exe, not the alias stub) with a clear caveat - better than a
 #      hard failure for users whose only Python is the Store one.
 
 function Get-PyExe([string]$launcher, [string[]]$verArgs) {
@@ -458,11 +459,21 @@ if (-not $installed) {
 # ===============================================================
 # 5. OPTIONAL LLM PROVIDERS (standalone chat only, not the MCP server)
 # ===============================================================
-if (-not $skipLlmProviders) {
+if ($skipLlmProviders) {
+    Write-Host "`n5. LLM providers skipped (-skipLlmProviders)" -ForegroundColor DarkYellow
+} elseif ($WithLlmProviders -or -not $Yes) {
     Write-Host "`n5. Optional LLM providers (standalone chat only)..." -ForegroundColor Yellow
     Write-Host "     [0] None (recommended for MCP-only use)"
     Write-Host "     [1] Ollama  [2] OpenAI  [3] Anthropic  [4] Gemini"
-    $c = Read-Host "   Choose (0 = default, comma for multiple)"
+    $c = if ($WithLlmProviders) {
+        Write-Host "   Installing LLM providers (from GUI checkbox)..." -ForegroundColor DarkYellow
+        # Default to Ollama (local, no API key needed) when triggered from GUI
+        if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { '1' } else { '0' }
+    } elseif ($Yes) {
+        Write-Host "   Non-interactive install: skipping optional providers." -ForegroundColor DarkYellow; '0'
+    } else {
+        Read-Host "   Choose (0 = default, comma for multiple)"
+    }
     if ($c -ne "" -and $c -ne "0") {
         $pkgs = @("ollama","openai","anthropic","google-generativeai")
         foreach ($idx in ($c -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })) {
@@ -472,7 +483,9 @@ if (-not $skipLlmProviders) {
             }
         }
     }
-} else { Write-Host "`n5. LLM providers skipped (-skipLlmProviders)" -ForegroundColor DarkYellow }
+} else {
+    Write-Host "`n5. LLM providers skipped (non-interactive)" -ForegroundColor DarkYellow
+}
 
 # ===============================================================
 # 6. MCP REGISTRATION
@@ -592,7 +605,7 @@ function Register-McpNested {
     try { $json = ($cfg | ConvertTo-Json -Depth 100); [System.IO.File]::WriteAllText($Path, $json, [System.Text.UTF8Encoding]::new($false)) }
     catch { Write-Host "   [X] $App - could not write $Path : $_" -ForegroundColor Red; return }
     # B5 (Piano 05): verify-after-write + rollback (same guarantee Register-Mcp
-    # already had — a JSON-roundtrip failure must never leave a broken config).
+    # already had - a JSON-roundtrip failure must never leave a broken config).
     $verifyOk = $true
     try {
         $reread = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
@@ -651,7 +664,7 @@ function Register-CodexMcp {
 
 # --- MCP registrations ---
 # B1 (Piano 05): the Python engine (`neuron register` in src/neuron/clients.py)
-# is the single source of truth — JSONC-safe (valid manual snippets), MSIX-aware
+# is the single source of truth - JSONC-safe (valid manual snippets), MSIX-aware
 # for Claude Desktop, `claude mcp add` for Claude Code (never edits the live
 # state file when the CLI is available), verify+rollback, install manifest.
 # The legacy PS functions below run only if the engine can't import.
@@ -684,7 +697,7 @@ if ($engineOk) {
     Register-McpNested -App "Zed"      -Path "$env:APPDATA\Zed\settings.json"                  -ParentKeys @('context_servers') -Entry @{ command=$runCmd; args=@('-m','neuron') } -Key $Slug
     Register-CodexMcp -Vpy $runCmd -Slug $Slug
 }
-# B6: converge-and-verify — the doctor scans every client config and flags
+# B6: converge-and-verify - the doctor scans every client config and flags
 # stale/duplicate/broken entries (e.g. a leftover key pointing at a dead venv).
 if ($engineOk) {
     & $runCmd -m neuron doctor --slug $Slug --python $runCmd --install-dir $DestDir
@@ -759,14 +772,14 @@ if (Test-Path "$env:USERPROFILE\.claude.json") {
 # 7. SHORTCUT
 # ===============================================================
 Write-Host "`n7. Shortcuts (visual hub)..." -ForegroundColor Yellow
-# Point the shortcuts at the GUI via pythonw.exe (no console window) — clicking
+# Point the shortcuts at the GUI via pythonw.exe (no console window) - clicking
 # them opens the visual hub, NOT the stdio server. Falls back to python.exe.
 $pyw = "$venv\Scripts\pythonw.exe"
 $shTarget = if (Test-Path $pyw) { $pyw } else { "$venv\Scripts\python.exe" }
 $w = New-Object -ComObject WScript.Shell
 $sd = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$Slug"
 if ($NeuronDebug) { Write-Host "  [..] Creating: $sd" -ForegroundColor DarkGray }; New-Item -ItemType Directory -Path $sd -Force | Out-Null
-foreach ($lnk in @("$sd\$Slug.lnk", (Join-Path ([Environment]::GetFolderPath('Desktop')) "Neuron.lnk"))) {
+foreach ($lnk in @("$sd\$Slug.lnk", (Join-Path ([Environment]::GetFolderPath('Desktop')) "Neuron - Control Center.lnk"))) {
     $s = $w.CreateShortcut($lnk)
     $s.TargetPath = $shTarget
     $s.Arguments = "-m neuron gui"
@@ -779,14 +792,14 @@ foreach ($lnk in @("$sd\$Slug.lnk", (Join-Path ([Environment]::GetFolderPath('De
 # ===============================================================
 Write-Host "`n8. Final verification..." -ForegroundColor Yellow
 $vpy = "$venv\Scripts\python.exe"
-& $vpy -c "import turso; print('   pyturso OK')";      if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: pyturso not importable" -ForegroundColor Red; exit 1 }
-& $vpy -c "from fastembed import TextEmbedding; print('   fastembed OK')"; if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: fastembed missing" -ForegroundColor Red; exit 1 }
-& $vpy -c "import mcp; print('   mcp OK')";            if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: mcp missing" -ForegroundColor Red; exit 1 }
-& $vpy -c "import neuron; print('   neuron', neuron.__version__)"; if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: neuron not importable" -ForegroundColor Red; exit 1 }
+& $vpy -c 'import turso' 2>$null; if ($LASTEXITCODE -eq 0) { Write-Host '   pyturso OK' } else { Write-Host 'ERROR: pyturso not importable' -ForegroundColor Red; exit 1 }
+& $vpy -c 'from fastembed import TextEmbedding' 2>$null; if ($LASTEXITCODE -eq 0) { Write-Host '   fastembed OK' } else { Write-Host 'ERROR: fastembed missing' -ForegroundColor Red; exit 1 }
+& $vpy -c 'import mcp' 2>$null; if ($LASTEXITCODE -eq 0) { Write-Host '   mcp OK' } else { Write-Host 'ERROR: mcp missing' -ForegroundColor Red; exit 1 }
+& $vpy -c 'import neuron' 2>$null; if ($LASTEXITCODE -eq 0) { Write-Host '   neuron OK' } else { Write-Host 'ERROR: neuron not importable' -ForegroundColor Red; exit 1 }
 
 Write-Host "`n=============================================================" -ForegroundColor Green
 Write-Host "  Neuron installed into $DestDir" -ForegroundColor Green
-Write-Host "  Open the visual hub:  the 'Neuron' shortcut (Desktop / Start Menu)" -ForegroundColor Green
+Write-Host "  Open the visual hub:  the 'Neuron - Control Center' shortcut (Desktop / Start Menu)" -ForegroundColor Green
 Write-Host "  or from a terminal:   $venv\Scripts\python.exe -m neuron gui" -ForegroundColor Green
 Write-Host "=============================================================" -ForegroundColor Green
 Write-Host "Restart your MCP client (Claude Desktop, Cursor, ...) to activate Neuron."

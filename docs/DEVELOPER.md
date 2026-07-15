@@ -101,7 +101,8 @@ Neuron/
 │   ├── cline-roocode.example.json
 │   ├── opencode.example.json
 │   └── generic-mcp.example.json
-├── install.ps1                # Windows installer (auto-registers OpenCode, Claude Desktop, Cursor)
+├── NeuronInstaller.exe        # Windows first-run bootstrapper (no Python/terminal needed)
+├── install.ps1                # installer engine (called by the bootstrapper)
 ├── pyproject.toml
 ├── README.md
 ├── DEVELOPER.md
@@ -629,6 +630,26 @@ python scripts/run_interactive.py     # Start interactive chat
 python scripts/run_interactive.py --provider ollama  # Chat with local LLM
 ```
 
+### Windows installer and GUI
+
+For a clean Windows machine, distribute `NeuronInstaller.exe` together with the
+repository files, especially `install.ps1` and `vendor/`. The small bootstrapper is
+compiled from `installer/NeuronInstaller.cs` with the .NET Framework compiler already
+present on Windows; it locates or asks for the source folder, runs `install.ps1 -Yes`,
+shows its output and opens the installed Control Center. It is intentionally a
+bootstrapper, not a self-contained offline bundle.
+
+After installation, the supported human entry point is **Neuron — Control Center**.
+The Tkinter GUI owns setup, registration, deploy/update, Turso, Bridge/Tunnel, graph
+maintenance and vault import. `scripts/run_mcp.bat` remains only as a compatibility
+launcher for legacy MCP registrations; it is not an interactive user entry point.
+
+Build the bootstrapper on Windows with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
+```
+
 ### Verify syntax
 
 ```bash
@@ -656,7 +677,7 @@ Two workflows:
 2. Move the `[Unreleased]` notes in `CHANGELOG.md` under a new
    `## [X.Y.Z] - <date>` heading and fill in Added/Changed/Fixed/Removed.
 3. Run the full test suite (`scripts/run_tests.ps1`) and do a clean-machine install
-   smoke test via `Neuron.bat` → Setup / Manage. If you build the
+   smoke test via the Neuron Control Center → Setup / Manage. If you build the
    wheel/sdist locally to test, delete `build/`, `dist/`, and `src/*.egg-info`
    first — a stale `build/` staging dir or a cached `egg-info/SOURCES.txt` can
    bundle old files (CI builds from a fresh checkout, so the tagged Release is

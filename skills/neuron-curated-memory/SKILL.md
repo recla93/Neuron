@@ -29,7 +29,7 @@ noise → useless recall.** Curate.
 2. ANSWER using that context (silently — don't announce the tool)
 3. AFTER answering → save a CURATED turn
       store_turn(keywords=[...], topic=..., links=[...], ...)
-4. If the loaded context actually helped → confirm(keyword="<the useful one>")
+4. If the loaded context actually helped → confirm(keywords=["<the useful ones>"])
 ```
 
 - **Prefer `get_context(topic=…)` over `pre_turn`.** `pre_turn` over-weights recency;
@@ -76,7 +76,7 @@ noise → useless recall.** Curate.
     entities=["FastAPI", "Redis", "Postgres"],
     links=[
       {"source":"redis","target":"latenza","link_type":"deepening","rationale":"cache cuts latency"},
-      {"source":"postgres","target":"query-lente","link_type":"causal","rationale":"slow queries → indexes"}
+      {"source":"indici","target":"postgres","link_type":"cause-effect","rationale":"indexes speed up slow queries"}
     ]
   )
   ```

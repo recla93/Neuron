@@ -199,7 +199,7 @@ def probe_connection(url: str, token: str) -> tuple[bool, str | None, str]:
 def _ensure_local_placeholders(env_path: str) -> None:
     """Add commented-out TURSO_LOCAL_* lines if they don't exist yet.
 
-    The Configuration.bat toggle (Switch to LOCAL / CLOUD) swaps active
+    The GUI's Turso toggle (Switch to LOCAL / CLOUD) swaps active
     comments between the cloud and local variable pairs, so both must
     be present in .env for the toggle to work without re-entry.
     """
@@ -266,15 +266,23 @@ def main(argv: list[str] | None = None) -> int:
                              "nascosto) così puoi verificarlo. Default: nascosto.")
     args = parser.parse_args(argv)
 
-    url = (args.url or "").strip() or input("Turso database URL (libsql://...): ").strip()
-    token = (args.token or "").strip()
-    if not token:
-        if args.show_token:
-            # Visible entry: the whole point is to SEE what got pasted, since a
-            # hidden prompt hides a mangled paste (wrapped/truncated token).
-            token = input("Turso auth token (visibile): ").strip()
-        else:
-            token = getpass.getpass("Turso auth token (nascosto, usa --show-token per vederlo): ").strip()
+    try:
+        url = (args.url or "").strip() or input("Turso database URL (libsql://...): ").strip()
+        token = (args.token or "").strip()
+        if not token:
+            if args.show_token:
+                # Visible entry: the whole point is to SEE what got pasted, since a
+                # hidden prompt hides a mangled paste (wrapped/truncated token).
+                token = input("Turso auth token (visibile): ").strip()
+            else:
+                token = getpass.getpass("Turso auth token (nascosto, usa --show-token per vederlo): ").strip()
+    except EOFError:
+        # No interactive stdin (piped run, e.g. from a GUI): fail with guidance
+        # instead of a traceback.
+        print("\nSessione non interattiva: passa --url e --token, oppure apri "
+              "'neuron connect' in un terminale (dalla GUI: Turso → Connect).",
+              file=sys.stderr)
+        return 2
 
     # Strip stray whitespace/control chars ANYWHERE (not just the ends): a hidden
     # newline in the token is what makes every scheme fail with a header-injection
@@ -334,15 +342,5 @@ def main(argv: list[str] | None = None) -> int:
         "TURSO_AUTH_TOKEN": token,
     })
 
-    # Ensure commented local-mode placeholders exist so the Configuration.bat
-    # toggle (Switch to LOCAL / CLOUD) can swap between them without re-entry.
-    _ensure_local_placeholders(args.env_file)
-
-    print(f"\nSaved to {args.env_file}. The token is stored there — keep the file "
-          "private (it is gitignored).")
-    print("Neuron will use the shared cloud DB the next time it starts with this env.")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    # Ensure commented local-mode placeholders exist so the GUI
+    # toggle (Switch t

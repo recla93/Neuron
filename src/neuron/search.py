@@ -206,7 +206,11 @@ def _search_embeddings(
         dot = sum(qi * vi for qi, vi in zip(query_vec, v))
         denom = q_norm * ((sum(x * x for x in v) ** 0.5) or 1.0)
         sim = dot / denom
-        if sim > 0:
+        # Same floor as the Turso tier (T78): the fallback used `sim > 0`, so
+        # it returned weak matches the SQL tier would filter out — the two
+        # tiers disagreed on what "related" means and could fill top_n with
+        # noise. One threshold, both tiers.
+        if sim > SIM_THRESHOLD:
             scores.append((nd.keyword, round(sim, 4)))
     scores.sort(key=lambda x: -x[1])
     result = scores[:top_n]

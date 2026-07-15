@@ -52,15 +52,14 @@ def do_install(slug: str, python_exe: str, yes: bool) -> int:
     lines, problems = C.doctor(slug, python_exe)
     for ln in lines:
         print(ln)
-    # Optional model pre-warm (the embedding model downloads on first use anyway).
-    # Non-interactive installs (yes=True) skip it — no prompt, no surprise 380MB download.
-    if not yes and _ask("\nPre-download the embedding model now (~380MB, one-time)?", yes=False):
-        try:
-            from neuron.server import _get_embedder   # heavy import, on purpose here only
-            _get_embedder()
-            print("  [OK] model cached.")
-        except Exception as e:
-            print(f"  [!] pre-warm skipped ({e}) — it will download on first use.")
+    # Embedding model pre-warm (mandatory, ~380MB one-time download)
+    print("\nPre-downloading the embedding model (~380MB, one-time)...")
+    try:
+        from neuron.server import _get_embedder   # heavy import, on purpose here only
+        _get_embedder()
+        print("  [OK] model cached.")
+    except Exception as e:
+        print(f"  [!] pre-warm failed ({e}) — it will retry on first use.")
     print("\nDone. Restart your AI apps to load Neuron.")
     return 0 if problems == 0 else 1
 

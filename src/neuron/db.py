@@ -63,7 +63,7 @@ if REMOTE_TURSO:
             "not installed, so the cloud tier is unavailable. Falling back to the "
             "local engine. To enable cloud, install libsql-client:\n"
             "        pip install \"neuron[cloud]\"\n"
-            "  (or use Configuration.bat -> Bridge & Cloud Turso -> Connect).",
+            "  (or use the Neuron Control Center -> Turso -> Connect).",
             file=_sys.stderr,
         )
         libsql_client = None  # type: ignore[assignment]
@@ -95,12 +95,18 @@ def _is_write_sql(sql: str) -> bool:
     return head.split(None, 1)[0].lower() in _WRITE_PREFIXES
 
 
-def _with_retry(fn, *, attempts: int = 4, base_delay: float = 0.4):
+def _with_retry(fn, *, attempts: int = 4, base_delay: float = 0.4,
+                on_retry=None):
     """Run ``fn`` with exponential backoff on transient remote failures (P5).
 
     Only ever wraps atomic units — client creation and a single ``batch()`` (which
     is all-or-nothing) — so a retry can never double-apply a partially-written
     save. Re-raises the last error if every attempt fails.
+
+    ``on_retry`` (T76): called between attempts — used to RECREATE a dead client
+    before retrying. Without it, a dropped WebSocket/HTTP session made every
+    retry fail on the same corpse: the connection object never healed, so after
+    an idle disconnect nothing was ever written again.
     """
     last: Exception | None = None
     for i in range(attempts):
@@ -111,7 +117,28 @@ def _with_retry(fn, *, attempts: int = 4, base_delay: float = 0.4):
             if i == attempts - 1:
                 raise
             _time.sleep(base_delay * (2 ** i))
+            if on_retry is not None:
+                try:
+                    on_retry()
+                except Exception:
+                    pass  # reconnect itself failing → next attempt raises anyway
     raise last  # pragma: no cover (loop always returns or raises above)
+
+
+def _url_candidates(url: str) -> list[str]:
+    """Connection URLs to try, in order (T76).
+
+    WebSocket schemes (``libsql://``/``wss://``/``ws://``) keep a long-lived
+    socket that some endpoints/proxies silently drop after idle; the
+    ``https://`` (Hrana-over-HTTP) form is stateless per request. Try the
+    user's URL first, then fall back to its HTTP twin.
+    """
+    out = [url]
+    for prefix in ("libsql://", "wss://", "ws://"):
+        if url.startswith(prefix):
+            out.append("https://" + url[len(prefix):])
+            break
+    return out
 
 
 class _RemoteCursor:
@@ -164,9 +191,58 @@ class RemoteTursoConnection:
     """
 
     def __init__(self, url: str, auth_token: str) -> None:
-        self._client = _with_retry(
-            lambda: libsql_client.create_client_sync(url=url, auth_token=auth_token))
+        self._auth_token = auth_token
+        self._urls = _url_candidates(url)
+        self._url_idx = 0
+        self._client = self._create_client()
         self._tx: "list | None" = None   # buffered Statements while a tx is open
+
+    # -- connection lifecycle (T76) ------------------------------------------
+    def _create_client(self):
+        """Create the libsql client, falling back across URL transports.
+
+        A ``libsql://`` (WebSocket) endpoint that rejects/drops the sync client
+        is retried on its ``https://`` twin; whichever works becomes the
+        preferred transport for the rest of this connection's life.
+        """
+        last: Exception | None = None
+        for i in range(self._url_idx, len(self._urls)):
+            try:
+                client = _with_retry(
+                    lambda u=self._urls[i]: libsql_client.create_client_sync(
+                        url=u, auth_token=self._auth_token),
+                    attempts=2)
+                self._url_idx = i
+                return client
+            except Exception as e:
+                last = e
+        raise last  # every transport failed
+
+    def _reconnect(self) -> None:
+        """Drop the (presumed dead) client and build a fresh one.
+
+        Called between retry attempts: after an idle disconnect the old client
+        object never recovers, so retrying on it is pointless — this is what
+        used to make the store silently stop persisting turns.
+        """
+        try:
+            self._client.close()
+        except Exception:
+            pass
+        self._client = self._create_client()
+
+    def ping(self) -> bool:
+        """Cheap health check (``SELECT 1``) with one reconnect attempt."""
+        for _ in range(2):
+            try:
+                self._client.execute("SELECT 1")
+                return True
+            except Exception:
+                try:
+                    self._reconnect()
+                except Exception:
+                    return False
+        return False
 
     # -- transaction control ------------------------------------------------
     def begin(self) -> None:
@@ -180,14 +256,16 @@ class RemoteTursoConnection:
             return        # no open tx (autocommit path) — nothing to flush
         stmts, self._tx = self._tx, None
         if stmts:
-            _with_retry(lambda: self._client.batch(stmts))
+            _with_retry(lambda: self._client.batch(stmts),
+                        on_retry=self._reconnect)
 
     # -- statement execution ------------------------------------------------
     def execute(self, sql: str, params: Sequence[Any] = ()) -> _RemoteCursor:
         if self._tx is not None and _is_write_sql(sql):
             self._tx.append(libsql_client.Statement(sql, list(params) if params else None))
             return _RemoteCursor(self, buffered=True)
-        return _RemoteCursor(self).execute(sql, params)
+        return _with_retry(lambda: _RemoteCursor(self).execute(sql, params),
+                           on_retry=self._reconnect)
 
     def executemany(self, sql: str, seq_of_params: Sequence[Sequence[Any]]) -> _RemoteCursor:
         stmts = [libsql_client.Statement(sql, list(p)) for p in seq_of_params]
@@ -195,7 +273,8 @@ class RemoteTursoConnection:
             self._tx.extend(stmts)          # join the open transaction
             return _RemoteCursor(self, buffered=True)
         if stmts:
-            _with_retry(lambda: self._client.batch(stmts))   # own atomic batch
+            _with_retry(lambda: self._client.batch(stmts),   # own atomic batch
+                        on_retry=self._reconnect)
         return _RemoteCursor(self)
 
     def executescript(self, script: str) -> None:

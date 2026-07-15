@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 dist/
+!NeuronInstaller.exe
 build/
 .eggs/
 .venv/
@@ -49,8 +50,9 @@ htmlcov/
 config.json
 ~/.neuron/
 
-# Claude
+# Claude / Codex
 .claude/
+.codex/
 /CLAUDE.md
 /TASKLIST.md
 /HANDOFF*.md
@@ -76,3 +78,6 @@ graphify-out/
 # Accidentally-committed extracted sdist (e.g. neuron-3.3.0/, a full duplicate
 # source tree unpacked at repo root during a local `python -m build` check).
 /neuron-[0-9]*.[0-9]*.[0-9]*/
+
+# Stray lock files (graphify/editors)
+/.lock

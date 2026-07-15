@@ -165,8 +165,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"                   cloudflared tunnel --url http://{args.host}:{args.port}")
     print(f"  then add the https://…/mcp URL as an MCP connector (Perplexity, ChatGPT Dev Mode).")
     print(f"  Use /mcp (Streamable HTTP), not /sse — Cloudflare buffers the SSE handshake.\n")
+    sys.stdout.flush()
     try:
-        return subprocess.call(full)
+        # CREATE_NO_WINDOW (T81): under the windowless GUI, a console child
+        # (uvx/mcp-proxy) would otherwise open its own CMD window. Stdio
+        # handles are inherited regardless, so output still flows when run
+        # from a real terminal.
+        flags = 0x08000000 if os.name == "nt" else 0
+        return subprocess.call(full, creationflags=flags)
     except KeyboardInterrupt:
         return 0
     except FileNotFoundError as exc:
