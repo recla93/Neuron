@@ -91,34 +91,52 @@ fi
 echo "Registering Neuron in your AI clients..."
 # shellcheck disable=SC2086
 $NEURON setup --register-all --slug "$SLUG" $([ "$ASSUME_YES" = "1" ] && echo --yes)
+# Re-install the package to ensure the neuron-gui entry point is present
+# (project.scripts creates a shell script in the venv's bin/ on macOS/Linux).
+echo "Installing neuron-gui entry point..."
+if command -v pipx >/dev/null 2>&1; then
+    pipx run --spec "$HERE" neuron-gui --help >/dev/null 2>&1 || true
+else
+    "$VENV/bin/python" -m pip install -e "$HERE" $FINDLINKS >/dev/null 2>&1 || true
+fi
+
 echo "Done. Restart your AI apps to load Neuron. Manage it any time with: neuron manage"
 echo "To uninstall later: sh $(dirname "$0")/uninstall.sh"
 
-# Create a launcher so the Control Center is always reachable without reinstalling.
-BIN_DIR="${NEURON_HOME:-$HOME/.local/share/neuron}"
-mkdir -p "$BIN_DIR"
-cat > "$BIN_DIR/neuron-gui" <<LAUNCHER
-#!/usr/bin/env sh
-exec $NEURON gui "\$@"
-LAUNCHER
-chmod +x "$BIN_DIR/neuron-gui"
-echo "Launcher created: $BIN_DIR/neuron-gui"
-
 # Linux .desktop file for the application menu.
-if [ "$(uname)" = "Linux" ] && command -v desktop-file-install >/dev/null 2>&1; then
-    DESK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-    mkdir -p "$DESK_DIR"
-    cat > "$DESK_DIR/neuron-control-center.desktop" <<DESKTOP
+if [ "$(uname)" = "Linux" ]; then
+    # Find the neuron-gui binary in the venv
+    VENV_BIN="${NEURON_HOME:-$HOME/.local/share/neuron}/.venv/bin"
+    GUI_BIN=""
+    if [ -x "$VENV_BIN/neuron-gui" ]; then
+        GUI_BIN="$VENV_BIN/neuron-gui"
+    elif command -v neuron-gui >/dev/null 2>&1; then
+        GUI_BIN=$(command -v neuron-gui)
+    fi
+    if [ -n "$GUI_BIN" ] && command -v desktop-file-install >/dev/null 2>&1; then
+        DESK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+        mkdir -p "$DESK_DIR"
+        cat > "$DESK_DIR/neuron-control-center.desktop" <<DESKTOP
 [Desktop Entry]
 Name=Neuron Control Center
 Comment=Neuron semantic memory — control center
-Exec=$BIN_DIR/neuron-gui
+Exec=$GUI_BIN
 Icon=neuron-logo
 Terminal=false
 Type=Application
 Categories=Utility;Development;
 DESKTOP
-    echo "Desktop entry: $DESK_DIR/neuron-control-center.desktop"
+        echo "Desktop entry: $DESK_DIR/neuron-control-center.desktop"
+    fi
+fi
+
+# macOS: create a symlink on Desktop for easy access
+if [ "$(uname)" = "Darwin" ]; then
+    VENV_BIN="${NEURON_HOME:-$HOME/.local/share/neuron}/.venv/bin"
+    if [ -x "$VENV_BIN/neuron-gui" ]; then
+        ln -sf "$VENV_BIN/neuron-gui" "$HOME/Desktop/neuron-gui" 2>/dev/null || true
+        echo "Desktop shortcut: $HOME/Desktop/neuron-gui"
+    fi
 fi
 
 if ask "Open the Control Center now?"; then

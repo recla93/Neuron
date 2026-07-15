@@ -44,6 +44,9 @@ cloud = [
 neuron-mcp = "neuron.server:cli"
 # `neuron` dispatches: no args -> MCP server; `neuron init` -> client wiring.
 neuron = "neuron.__main__:cli"
+# Cross-platform GUI launcher: pip creates a shell script on macOS/Linux
+# (bin/neuron-gui in the venv) and neuron-gui.exe on Windows (from gui-scripts).
+neuron-gui = "neuron.gui:main"
 
 # Windowed launcher: pip generates a real neuron-gui(.exe) with NO console window
 # (uses pythonw on Windows) — the double-clickable visual hub, no PyInstaller.
