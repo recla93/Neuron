@@ -188,6 +188,12 @@ _COMMANDS: dict[str, list[tuple[str, list[str] | None, str]]] = {
          "Check Turso Cloud DB connection readiness"),
         ("Connect", None,
          "Configure Turso Cloud credentials (opens in a terminal)"),
+        ("Switch to Local", ["connect", "--use-local"],
+         "Use the local DB — comments out the Turso creds in .env. "
+         "Restart the server to apply."),
+        ("Switch to Cloud", ["connect", "--use-cloud"],
+         "Use Turso Cloud — re-enables the saved credentials. "
+         "Restart the server to apply."),
     ],
     "Network": [
         ("Start Network", None,
@@ -275,6 +281,7 @@ class _App:
         # T82 — optional callback invoked with the exit code when the current
         # foreground command finishes (used by Run Tests → offer Repair).
         self._fg_on_done = None
+        self._cloud_btn: tk.Button | None = None
 
         root.title("Neuron · Control Center")
         root.minsize(900, 600)
@@ -423,22 +430,36 @@ class _App:
 
         for section, items in _COMMANDS.items():
             sec = _Section(inner, section)
+            turso_ok = self._turso_configured()
             for label, args, desc in items:
                 if args is None:
                     handler = special.get(label, self._cloud_stop)
                 else:
                     handler = lambda a=args, l=label: self._run(a, display=l)
+                # 'Switch to Cloud' is only usable once credentials are saved;
+                # disable it (with an explanatory hover) until then.
+                tip = desc
+                disabled = False
+                if label == "Switch to Cloud" and not turso_ok:
+                    disabled = True
+                    tip = ("Disabilitato: credenziali Turso non configurate — "
+                           "usa prima 'Connect' per salvarle.")
                 btn = _make(sec.child, tk.Button, bg=_HOVER, fg=_FG,
                             text=label, font=("Segoe UI", 9),
                             activebackground=_ACCENT, activeforeground=_BG,
                             relief="flat", anchor="w", padx=10, pady=2,
-                            command=handler)
+                            command=handler,
+                            state=("disabled" if disabled else "normal"),
+                            disabledforeground=_DIM)
                 btn.pack(fill="x", padx=4, pady=1)
-                btn.bind("<Enter>",
-                         lambda _e, b=btn: b.configure(bg=_ACCENT))
-                btn.bind("<Leave>",
-                         lambda _e, b=btn: b.configure(bg=_HOVER))
-                _Tooltip(btn, desc)
+                if label == "Switch to Cloud":
+                    self._cloud_btn = btn
+                if not disabled:
+                    btn.bind("<Enter>",
+                             lambda _e, b=btn: b.configure(bg=_ACCENT))
+                    btn.bind("<Leave>",
+                             lambda _e, b=btn: b.configure(bg=_HOVER))
+                _Tooltip(btn, tip)
 
         sep = _make(inner, tk.Frame, bg=_SEP, height=1)
         sep.pack(fill="x", padx=6, pady=8)
@@ -1046,8 +1067,12 @@ class _App:
             return
         script = self._find_script("deploy.ps1")
         if not script:
-            self._write("\n[!] scripts/deploy.ps1 not found — run Deploy from "
-                        "the source checkout.\n", tag="err")
+            self._write("\n[!] scripts/deploy.ps1 not found. It ships only in the "
+                        "source repo (not the installed wheel). Set NEURON_REPO to "
+                        "your checkout, e.g.\n"
+                        "      setx NEURON_REPO \"C:\\path\\to\\neuron-project\"\n"
+                        "    then reopen the GUI — or run deploy.ps1 from the repo "
+                        "directly.\n", tag="err")
             return
         fg = self._procs.get("__fg__")
         if fg is not None and fg.poll() is None:
@@ -1252,10 +1277,18 @@ class _App:
 
     @staticmethod
     def _find_script(name: str) -> str | None:
-        """Locate a repo/install script: <repo>/scripts/ or the install dir."""
+        """Locate a repo/install script.
+
+        Search order: ``NEURON_REPO`` (explicit source checkout, same override
+        used by ``manage.do_visualize`` and ``generate_graph_html``), then the
+        repo layout relative to the package, then the install dir. Maintainer-only
+        scripts like ``deploy.ps1`` ship in the repo, not the wheel, so an
+        *installed* GUI needs ``NEURON_REPO`` set to reach them."""
         import neuron
         pkg = os.path.dirname(os.path.abspath(neuron.__file__))
+        repo = os.environ.get("NEURON_REPO", "")
         candidates = [
+            os.path.join(repo, "scripts", name) if repo else "",
             os.path.join(os.path.dirname(os.path.dirname(pkg)), "scripts", name),
             os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs",
                          os.environ.get("NEURON_SLUG", "neuron5"),
@@ -1265,6 +1298,18 @@ class _App:
             if c and os.path.isfile(c):
                 return c
         return None
+
+    @staticmethod
+    def _turso_configured() -> bool:
+        """True if Turso cloud credentials are saved (active OR commented in
+        .env, or live in the environment) — i.e. 'Switch to Cloud' is usable.
+        Evaluated when the sidebar is built."""
+        try:
+            from neuron.connect import cloud_creds_present
+            from neuron._env import _find_env_file
+            return cloud_creds_present(_find_env_file() or ".env")
+        except Exception:
+            return False
 
     # -- interactive commands (need a real terminal) ---------------------------
 
@@ -1304,7 +1349,16 @@ class _App:
         _Wizard(self._root, on_log=self._write)
 
     def _open_turso_dialog(self) -> None:
-        _TursoDialog(self._root, on_log=self._write)
+        _TursoDialog(self._root, on_log=self._write, on_saved=self._refresh_cloud_btn)
+
+    def _refresh_cloud_btn(self) -> None:
+        """Re-enable the 'Switch to Cloud' button after credentials are saved."""
+        if self._cloud_btn is None:
+            return
+        if self._turso_configured():
+            self._cloud_btn.configure(state="normal")
+            self._cloud_btn.bind("<Enter>", lambda _e, b=self._cloud_btn: b.configure(bg=_ACCENT))
+            self._cloud_btn.bind("<Leave>", lambda _e, b=self._cloud_btn: b.configure(bg=_HOVER))
 
 
 # ---------------------------------------------------------------------------
@@ -1314,13 +1368,14 @@ class _App:
 class _TursoDialog(tk.Toplevel):
     """Small guided Turso form: validate, probe, then save credentials."""
 
-    def __init__(self, parent: tk.Misc, *, on_log=None) -> None:
+    def __init__(self, parent: tk.Misc, *, on_log=None, on_saved=None) -> None:
         super().__init__(parent, bg=_BG)
         self.title("Neuron · Turso Cloud")
         self.geometry("590x390")
         self.minsize(520, 350)
         self.transient(parent)
         self._on_log = on_log
+        self._on_saved = on_saved
         self._queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._busy = False
         self._verified = False
@@ -1432,6 +1487,8 @@ class _TursoDialog(tk.Toplevel):
             if self._on_log:
                 self._on_log("\n[turso] connection verified and credentials saved.\n", tag="ok")
             self._save.configure(state="disabled", text="Saved")
+            if self._on_saved:
+                self._on_saved()
         except Exception as exc:
             self._set_status("Could not save credentials: " + str(exc), _RED)
 

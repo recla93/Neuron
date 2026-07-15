@@ -15,7 +15,7 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
-## [Unreleased] — 5.4 line
+## [5.4.0] — 2026-07-15
 
 ### Changed — GUI identity and single front door
 - Added the Neuron logo to the Control Center and Setup Wizard, with a modern card header,
@@ -286,6 +286,28 @@ Release.
 - **Test coverage for `neuron setup` and `neuron manage` (P1 #6).**
   `tests/test_setup.py` and `tests/test_manage.py` (12 tests) cover the path
   helper, status/repair/install exit codes and overview/export/context listing.
+- **GUI: one-click Local/Cloud database switch.** New Turso sidebar buttons
+  *Switch to Local* / *Switch to Cloud* (backed by `neuron connect --use-local`
+  / `--use-cloud`, which comment/uncomment the Turso creds in `.env`). *Switch to
+  Cloud* is disabled with an explanatory hover until credentials are saved.
+
+### Fixed
+- **`neuron connect --check-only` hung / exited 2 from the GUI.** It now reads the
+  already-saved credentials from `.env` (or the environment) and probes them
+  read-only, never prompting; with no saved creds in a non-interactive run it
+  prints a clear "not configured" message and returns 1 instead of raising
+  EOFError. New helpers `read_saved_creds` / `cloud_creds_present` /
+  `set_cloud_active` (unit-tested in `tests/test_connect_toggle.py`).
+- **`connect.py` `main()` was truncated in the repo** — the save path ended
+  mid-comment, so it never created the local-mode `.env` placeholders or printed a
+  confirmation. Completed it (`_ensure_local_placeholders` + confirmation +
+  `return 0` + `__main__` guard).
+- **GUI "Deploy Update" couldn't find `deploy.ps1` when run from an install.**
+  `gui._find_script` now honours `NEURON_REPO` (same override used by
+  `manage.do_visualize` / `generate_graph_html`), since maintainer scripts like
+  `deploy.ps1` ship only in the repo, not the wheel. The error message now tells
+  the user to set `NEURON_REPO` instead of the dead-end "run from the source
+  checkout".
 
 ### Added
 - **Universal lifecycle CLI: `neuron setup` (ADR-007).** Cross-platform

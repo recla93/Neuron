@@ -250,6 +250,90 @@ def update_env_file(path: str, values: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Saved-credential access + local/cloud toggle (used by --check-only, the
+# --use-local/--use-cloud switches and the GUI Turso buttons).
+# ---------------------------------------------------------------------------
+
+_CLOUD_KEYS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
+
+
+def read_saved_creds(env_file: str) -> dict[str, str]:
+    """Return the ACTIVE (uncommented) Turso creds from `.env` plus the real
+    environment (real env wins), sanitised. Empty strings when not configured.
+    Read-only — never prompts, never writes."""
+    vals: dict[str, str] = {}
+    try:
+        with open(env_file, encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, _, v = s.partition("=")
+                if k.strip() in _CLOUD_KEYS:
+                    vals[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    url = os.environ.get("TURSO_DATABASE_URL") or vals.get("TURSO_DATABASE_URL", "")
+    token = os.environ.get("TURSO_AUTH_TOKEN") or vals.get("TURSO_AUTH_TOKEN", "")
+    return {"url": sanitize_credential(url), "token": sanitize_credential(token)}
+
+
+def cloud_creds_present(env_file: str) -> bool:
+    """True if Turso cloud credentials exist in ANY form — active in the real
+    environment, or present in `.env` even if commented out. That means they
+    were saved once and the user can switch to cloud. The GUI uses this to
+    enable/disable its 'Switch to Cloud' button."""
+    if os.environ.get("TURSO_DATABASE_URL") and os.environ.get("TURSO_AUTH_TOKEN"):
+        return True
+    found = {k: False for k in _CLOUD_KEYS}
+    try:
+        with open(env_file, encoding="utf-8") as f:
+            for line in f:
+                body = line.strip().lstrip("#").strip()   # tolerate a leading '#'
+                if "=" not in body:
+                    continue
+                k, _, v = body.partition("=")
+                if k.strip() in found and v.strip().strip('"').strip("'"):
+                    found[k.strip()] = True
+    except OSError:
+        return False
+    return all(found.values())
+
+
+def set_cloud_active(env_file: str, active: bool) -> bool:
+    """Toggle the store between cloud and local by (un)commenting the two Turso
+    cloud keys in `.env`. ``active=True`` uncomments them (use cloud);
+    ``active=False`` comments them out (fall back to the local engine). Only
+    those two keys are touched; every other line is preserved. Returns True if
+    the file actually changed. The switch takes effect on the next server start
+    (db.py reads TURSO_* at import)."""
+    try:
+        with open(env_file, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return False
+    changed = False
+    out: list[str] = []
+    for line in lines:
+        bare = line.lstrip()
+        is_comment = bare.startswith("#")
+        body = bare.lstrip("#").strip() if is_comment else bare
+        key = body.split("=", 1)[0].strip() if "=" in body else ""
+        if key in _CLOUD_KEYS:
+            if active and is_comment:
+                out.append(body); changed = True; continue
+            if not active and not is_comment:
+                out.append(f"# {body}"); changed = True; continue
+        out.append(line)
+    if changed:
+        tmp = env_file + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, env_file)
+    return changed
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -264,25 +348,71 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--show-token", action="store_true",
                         help="Mostra il token mentre lo incolli (input visibile, non "
                              "nascosto) così puoi verificarlo. Default: nascosto.")
+    parser.add_argument("--use-local", action="store_true",
+                        help="Switch the store to the LOCAL engine (comment out the "
+                             "Turso creds in .env). No network, no prompt.")
+    parser.add_argument("--use-cloud", action="store_true",
+                        help="Switch the store to Turso CLOUD (re-enable saved creds). "
+                             "Fails if no credentials were ever saved.")
     args = parser.parse_args(argv)
 
-    try:
-        url = (args.url or "").strip() or input("Turso database URL (libsql://...): ").strip()
-        token = (args.token or "").strip()
-        if not token:
-            if args.show_token:
-                # Visible entry: the whole point is to SEE what got pasted, since a
-                # hidden prompt hides a mangled paste (wrapped/truncated token).
-                token = input("Turso auth token (visibile): ").strip()
-            else:
-                token = getpass.getpass("Turso auth token (nascosto, usa --show-token per vederlo): ").strip()
-    except EOFError:
-        # No interactive stdin (piped run, e.g. from a GUI): fail with guidance
-        # instead of a traceback.
-        print("\nSessione non interattiva: passa --url e --token, oppure apri "
-              "'neuron connect' in un terminale (dalla GUI: Turso → Connect).",
-              file=sys.stderr)
-        return 2
+    # Local/cloud toggle — pure .env edits, no network, no prompt. Effective on
+    # the next server start (db.py reads TURSO_* at import).
+    if args.use_local:
+        changed = set_cloud_active(args.env_file, active=False)
+        print("Store set to LOCAL"
+              + (" — Turso credentials commented out." if changed else " (already local).")
+              + "\nRestart the Neuron server / AI clients to apply.")
+        return 0
+    if args.use_cloud:
+        if not cloud_creds_present(args.env_file):
+            print("No saved Turso credentials to switch to. Run 'neuron connect' "
+                  "first to add them.", file=sys.stderr)
+            return 1
+        changed = set_cloud_active(args.env_file, active=True)
+        print("Store set to Turso CLOUD"
+              + (" — credentials re-enabled." if changed else " (already cloud).")
+              + "\nRestart the Neuron server / AI clients to apply.")
+        return 0
+
+    url = (args.url or "").strip()
+    token = (args.token or "").strip()
+
+    # --check-only with no explicit creds probes the ALREADY-SAVED ones
+    # (read-only, no prompt). This is what the GUI 'Check Cloud' button uses.
+    if args.check_only and not (url and token):
+        saved = read_saved_creds(args.env_file)
+        url = url or saved["url"]
+        token = token or saved["token"]
+
+    if not url or not token:
+        # Prompt only with a real interactive terminal; otherwise give guidance
+        # instead of hanging on input() / dumping an EOFError traceback.
+        if not sys.stdin.isatty():
+            if args.check_only:
+                print("Turso Cloud non configurato: nessuna credenziale salvata in "
+                      ".env. Usa 'Connect' (Turso → Connect) per aggiungerle.",
+                      file=sys.stderr)
+                return 1
+            print("\nSessione non interattiva: passa --url e --token, oppure apri "
+                  "'neuron connect' in un terminale (dalla GUI: Turso → Connect).",
+                  file=sys.stderr)
+            return 2
+        try:
+            if not url:
+                url = input("Turso database URL (libsql://...): ").strip()
+            if not token:
+                if args.show_token:
+                    # Visible entry: the whole point is to SEE what got pasted, since
+                    # a hidden prompt hides a mangled paste (wrapped/truncated token).
+                    token = input("Turso auth token (visibile): ").strip()
+                else:
+                    token = getpass.getpass("Turso auth token (nascosto, usa --show-token per vederlo): ").strip()
+        except EOFError:
+            print("\nSessione non interattiva: passa --url e --token, oppure apri "
+                  "'neuron connect' in un terminale (dalla GUI: Turso → Connect).",
+                  file=sys.stderr)
+            return 2
 
     # Strip stray whitespace/control chars ANYWHERE (not just the ends): a hidden
     # newline in the token is what makes every scheme fail with a header-injection
@@ -342,5 +472,14 @@ def main(argv: list[str] | None = None) -> int:
         "TURSO_AUTH_TOKEN": token,
     })
 
-    # Ensure commented local-mode placeholders exist so the GUI
-    # toggle (Switch t
+    # Ensure commented local-mode placeholders exist so the GUI toggle
+    # (Switch to LOCAL / CLOUD) has both variable pairs to swap.
+    _ensure_local_placeholders(args.env_file)
+
+    print(f"\n[OK] Saved to {args.env_file}. Restart your AI client(s) so the "
+          "server picks up the Turso cloud database.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
