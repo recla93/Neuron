@@ -92,6 +92,7 @@ echo "Registering Neuron in your AI clients..."
 # shellcheck disable=SC2086
 $NEURON setup --register-all --slug "$SLUG" $([ "$ASSUME_YES" = "1" ] && echo --yes)
 echo "Done. Restart your AI apps to load Neuron. Manage it any time with: neuron manage"
+echo "To uninstall later: sh $(dirname "$0")/uninstall.sh"
 
 # Create a launcher so the Control Center is always reachable without reinstalling.
 BIN_DIR="${NEURON_HOME:-$HOME/.local/share/neuron}"
