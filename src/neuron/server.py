@@ -1723,8 +1723,41 @@ async def _call_tool_impl(name: str, arguments: dict) -> list[TextContent]:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _maybe_register_gray_matter() -> None:
+    """Optional, best-effort: register with Gray-Matter so it can orchestrate
+    Neuron alongside NeuRAG (the `gray_matter_pulse` combined context). GM is
+    bundled with Neuron by default; opt out with NEURON_NO_GM=1. Fully
+    non-blocking and standalone-safe: registration + heartbeat run in a daemon
+    thread, and if Gray-Matter is absent or unreachable Neuron just runs alone.
+    """
+    if os.environ.get("NEURON_NO_GM"):
+        return
+
+    def _run() -> None:
+        try:
+            from gray_matter.server import autoregister, _send_heartbeat
+        except Exception:
+            return  # Gray-Matter not installed → standalone
+        try:
+            if not autoregister("neuron", list(_HANDLERS.keys())):
+                return
+        except Exception:
+            return
+        import time
+        while True:
+            time.sleep(5)
+            try:
+                _send_heartbeat("neuron")
+            except Exception:
+                pass
+
+    import threading
+    threading.Thread(target=_run, daemon=True).start()
+
+
 async def main() -> None:
     from neuron import __version__
+    _maybe_register_gray_matter()   # optional GM orchestration (opt-out: NEURON_NO_GM=1)
     # A3 (Piano 05): pre-warm the embedding model in a worker thread so the
     # FIRST pre_turn of the session doesn't pay the ~3s model load. Best-effort:
     # any failure is swallowed (the lazy path in _get_embedder still applies).

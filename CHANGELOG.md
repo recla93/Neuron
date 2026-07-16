@@ -15,6 +15,15 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.5.0] — 2026-07-16
+
+### Added
+- **Optional Gray-Matter autoregister.** On startup Neuron registers with a local
+  Gray-Matter orchestrator (spawning it if absent) so it can be combined with
+  NeuRAG via `gray_matter_pulse`. Non-blocking (daemon thread) and standalone-safe
+  — if Gray-Matter isn't installed or reachable, Neuron runs alone. Opt out with
+  `NEURON_NO_GM=1`.
+
 ## [5.4.2] — 2026-07-16
 
 ### Changed — Glama audit safety fixes
