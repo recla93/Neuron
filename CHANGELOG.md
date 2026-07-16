@@ -15,6 +15,14 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.6.0] — 2026-07-16
+
+### Added
+- **`forgotten(near=topic)`.** Ranks dormant concepts by *mid-band* similarity
+  (0.30–0.75) to a topic — relevant but non-obvious — instead of plain recency.
+  This is the serendipity selector Gray-Matter's flash v2 uses to surface a
+  dormant concept worth recalling. Omitting `near` keeps the old recency order.
+
 ## [5.5.0] — 2026-07-16
 
 ### Added

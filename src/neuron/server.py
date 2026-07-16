@@ -619,7 +619,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="forgotten",
-            description="Find keywords not touched in N turns (decaying salience). Useful for rediscovering lost concepts.",
+            description="Find keywords not touched in N turns (decaying salience). Useful for rediscovering lost concepts. With `near`, ranks dormant concepts by mid-band similarity to a topic — relevant but non-obvious (serendipity).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -628,6 +628,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "top_n": {
                         "type": "integer", "description": "How many to show (default 10)", "default": 10,
+                    },
+                    "near": {
+                        "type": "string", "description": "Topic to rank dormant concepts against (mid-band 0.30-0.75: relevant but not obvious). Omit for plain recency order.",
                     },
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                 },
@@ -1298,19 +1301,45 @@ async def _tool_summary(arguments: dict, ctx: str, g) -> list[TextContent]:
 async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
     threshold = max(arguments.get("threshold", 5), 1)
     top_n = min(arguments.get("top_n", 10), 30)
+    near = (arguments.get("near") or "").strip()
     now = g.turn_count
     forgotten = [
         nd for nd in g.nodes
         if now - nd.turn >= threshold and nd.salience > 0
     ]
-    forgotten.sort(key=lambda nd: nd.turn)
     if not forgotten:
         return [TextContent(type="text", text=f"No forgotten concepts in {threshold} turns.")]
-    lines = [f"Concepts not touched >= {threshold} turns (now={now}):"]
+
+    # `near`: rank dormant concepts by mid-band similarity to a topic — relevant
+    # but NOT obvious (>0.75 is already in context, <0.30 is noise). The
+    # serendipity selector for flash v2. Falls back to recency if no vectors match.
+    ranked_by_near = False
+    if near:
+        from neuron.search import _get_embedding
+        from neuron.models import _cos
+        qv = _get_embedding(near)
+        band = []
+        for nd in forgotten:
+            v = getattr(nd, "vector", None)
+            if not v:
+                continue
+            sim = _cos(qv, v)
+            if 0.30 <= sim <= 0.75:
+                band.append((sim, nd))
+        if band:
+            band.sort(key=lambda x: x[0], reverse=True)
+            forgotten = [nd for _, nd in band]
+            ranked_by_near = True
+    if not ranked_by_near:
+        forgotten.sort(key=lambda nd: nd.turn)
+
+    head = (f"Dormant & mid-band related to '{near}'" if ranked_by_near
+            else f"Concepts not touched >= {threshold} turns (now={now})")
+    lines = [head + ":"]
     for nd in forgotten[:top_n]:
         stale = now - nd.turn
         lines.append(f"  {nd.keyword:20s} last_turn={nd.turn}  ({stale} turns ago)  salience={nd.salience}")
-    lines.append(f"Total: {len(forgotten)} forgotten concepts")
+    lines.append(f"Total: {len(forgotten)} concepts")
     return [TextContent(type="text", text="\n".join(lines))]
 
 
