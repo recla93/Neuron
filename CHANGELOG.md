@@ -15,6 +15,23 @@ it. Bump it in the same change that introduces the work. Tagging `vX.Y.Z` trigge
 `release.yml`, which builds the prebuilt PyTurso wheels and publishes a GitHub
 Release.
 
+## [5.4.2] — 2026-07-16
+
+### Changed — Glama audit safety fixes
+- **`reset` now requires `confirm=true`.** Without it the tool refuses instead of
+  wiping the graph, closing the accidental-wipe risk flagged in the Glama audit.
+  `confirm` is a required boolean in the input schema.
+- **`dedup` accepts an optional `enable` boolean.** Set it explicitly (idempotent)
+  instead of blind-toggling; omit it to keep the toggle behavior. Output still
+  reports the resulting ON/OFF state.
+
+### Fixed — macOS/Linux installer
+- **`install.sh` no longer uses bashisms in a POSIX `sh` script.** The final
+  "open Control Center" step used `&>` and `disown`, which make `dash` misredirect
+  stderr and exit non-zero; replaced with `nohup … >/dev/null 2>&1 &`.
+- **macOS Desktop shortcut now covers the pipx install path** too, matching the
+  Linux `.desktop` fallback (`command -v neuron-gui`).
+
 ## [5.4.1] — 2026-07-15
 
 ### Added

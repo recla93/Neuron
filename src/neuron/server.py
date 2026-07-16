@@ -658,8 +658,8 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="dedup",
-            description="Toggle keyword deduplication",
-            inputSchema={"type": "object", "properties": {}},
+            description="Toggle keyword deduplication, or set it explicitly with enable=true/false. Output reports the resulting ON/OFF state.",
+            inputSchema={"type": "object", "properties": {"enable": {"type": "boolean", "description": "Set explicitly. Omit to toggle."}}},
         ),
         Tool(
             name="flash",
@@ -668,12 +668,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="reset",
-            description="Reset the graph and start over",
+            description="Reset the graph and start over. DESTRUCTIVE & irreversible: requires confirm=true.",
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "confirm": {"type": "boolean", "description": "Must be true to actually wipe the graph. Without it, reset refuses."},
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                 },
+                "required": ["confirm"],
             },
         ),
         Tool(
@@ -1335,7 +1337,8 @@ async def _tool_consolidate(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 async def _tool_dedup(arguments: dict, ctx: str, g) -> list[TextContent]:
     global dedup_enabled
-    dedup_enabled = not dedup_enabled
+    want = arguments.get("enable")
+    dedup_enabled = (not dedup_enabled) if want is None else bool(want)
     state = "ON" if dedup_enabled else "OFF"
     return [TextContent(type="text", text=f"Keyword deduplication: {state}")]
 
@@ -1348,6 +1351,8 @@ async def _tool_flash(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 
 async def _tool_reset(arguments: dict, ctx: str, g) -> list[TextContent]:
+    if arguments.get("confirm") is not True:
+        return [TextContent(type="text", text="Refused: reset wipes the whole graph and is irreversible. Pass confirm=true to proceed.")]
     _g.reset(ctx or None)
     return [TextContent(type="text", text="Graph reset.")]
 

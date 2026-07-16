@@ -133,14 +133,20 @@ fi
 # macOS: create a symlink on Desktop for easy access
 if [ "$(uname)" = "Darwin" ]; then
     VENV_BIN="${NEURON_HOME:-$HOME/.local/share/neuron}/.venv/bin"
+    GUI_BIN=""
     if [ -x "$VENV_BIN/neuron-gui" ]; then
-        ln -sf "$VENV_BIN/neuron-gui" "$HOME/Desktop/neuron-gui" 2>/dev/null || true
+        GUI_BIN="$VENV_BIN/neuron-gui"
+    elif command -v neuron-gui >/dev/null 2>&1; then   # pipx install path
+        GUI_BIN=$(command -v neuron-gui)
+    fi
+    if [ -n "$GUI_BIN" ]; then
+        ln -sf "$GUI_BIN" "$HOME/Desktop/neuron-gui" 2>/dev/null || true
         echo "Desktop shortcut: $HOME/Desktop/neuron-gui"
     fi
 fi
 
 if ask "Open the Control Center now?"; then
     echo "Launching Control Center..."
-    $NEURON gui &>/dev/null &
-    disown
+    # ponytail: POSIX sh — &> and `disown` are bashisms (dash exits non-zero); nohup+2>&1 is portable
+    nohup $NEURON gui >/dev/null 2>&1 &
 fi
