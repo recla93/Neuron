@@ -88,6 +88,19 @@ else
     NEURON="$VENV/bin/python -m neuron"
 fi
 
+# Bundle Gray-Matter (orchestrator) by default so Neuron can be combined with
+# NeuRAG via gray_matter_pulse. Installs it when its source sits next to Neuron
+# (workspace layout) or GRAY_MATTER_SRC points at it. Opt out: NEURON_NO_GM=1.
+GM_SRC="${GRAY_MATTER_SRC:-$HERE/../gray_matter}"
+if [ -z "${NEURON_NO_GM:-}" ] && [ -d "$GM_SRC" ]; then
+    echo "Bundling Gray-Matter orchestrator..."
+    if command -v pipx >/dev/null 2>&1; then
+        pipx install --force "$GM_SRC" || true
+    else
+        "$VENV/bin/python" -m pip install "$GM_SRC" || true
+    fi
+fi
+
 echo "Registering Neuron in your AI clients..."
 # shellcheck disable=SC2086
 $NEURON setup --register-all --slug "$SLUG" $([ "$ASSUME_YES" = "1" ] && echo --yes)
