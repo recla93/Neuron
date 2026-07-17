@@ -32,6 +32,7 @@ from fastembed import TextEmbedding
 
 from neuron import __version__, db as _db
 from neuron import curation as _cur   # T54 gate (stdlib-only module)
+from neuron import project as _project   # G1/G4: project_id + path canonicalization (stdlib-only)
 # T57: extraction moved verbatim to its own module; every public name is
 # re-imported here so existing imports/tests via neuron.server keep working.
 from neuron.extraction import (
@@ -485,11 +486,13 @@ async def list_tools() -> list[Tool]:
                             "type": "object",
                             "properties": {
                                 "type": {"type": "string", "enum": ["file", "url", "commit"]},
-                                "path": {"type": "string"},
+                                "path": {"type": "string", "description": "For files: project-relative POSIX path if known; an absolute path is auto-canonicalized server-side."},
                                 "description": {"type": "string"},
+                                "project_id": {"type": "string", "description": "Optional: UUID from .neuron/project.json — disambiguates the same relative path across projects in a shared DB."},
+                                "by": {"type": "string", "description": "Optional: who added this ref (provenance, not access control)."},
                             },
                         },
-                        "description": "References to files, URLs or commits",
+                        "description": "References to files (project-relative), URLs or commits",
                     },
                     "links": {
                         "type": "array",
@@ -1033,6 +1036,12 @@ async def _tool_status(arguments: dict, ctx: str, g) -> list[TextContent]:
     ))]
 
 
+def _current_user() -> str:
+    """Provenance tag for refs (the `by` field). Optional: set NEURON_USER to
+    attribute file refs to a person in a shared DB; empty means unattributed."""
+    return os.environ.get("NEURON_USER", "").strip()
+
+
 async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     topic = arguments["topic"]
     keywords = arguments["keywords"]
@@ -1086,6 +1095,11 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if err:
         return [TextContent(type="text", text=f"Validation error: {err}")]
 
+    # G1/G4: canonicalize file refs → project-relative path + project_id + `by`
+    # provenance (idempotent; already-canonical refs from the client pass through).
+    # Portable across machines and distinct-yet-mergeable in a shared DB.
+    references = _project.canonicalize_references(references, by=_current_user())
+
     for kw in keywords:
         existing = g.get_node(kw)
         if dedup_enabled and existing:
@@ -1094,6 +1108,8 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             existing.topic = topic
             existing.domain = domain
             existing.sentiment = sentiment
+            if references:   # revisiting a concept accumulates its files (dedup by path)
+                existing.references = _project.merge_refs(existing.references, references)
             g.mark_node_dirty(existing.keyword)   # in-place change: track it
         else:
             g.add_node(Node(keyword=kw, turn=turn, topic=topic,
@@ -1609,6 +1625,12 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         _facts = g_pt.recent_episodes(nodes_pt[0][0], 2)
         if _facts:
             parts_pt.append("facts: " + " | ".join(_facts))
+        # G1: surface the top node's file refs (project-relative paths) so a
+        # returning session recalls WHERE it worked without re-searching files.
+        _top_node = g_pt.get_node(nodes_pt[0][0])
+        _files = _project.render_file_refs(_top_node.references if _top_node else None)
+        if _files:
+            parts_pt.append("files: " + " | ".join(_files))
     if fallback_pt:
         parts_pt.append("(vector fallback)")
     if inh_pt:
