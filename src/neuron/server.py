@@ -329,7 +329,7 @@ CONSOLIDATE_EVERY = _config.env_int("NEURON_CONSOLIDATE_EVERY", 20)
 # Composite retrieval ranking (ADR-003 #3, E2.2): a node's rank blends semantic
 # similarity to the query, its salience (what matters), and recency — "retrieve
 # what matters, not only what matches". Weights are tunable and sum to 1.0.
-RANK_WEIGHTS = {"sim": 0.5, "salience": 0.3, "recency": 0.2}
+RANK_WEIGHTS = {"sim": 0.5, "salience": 0.3, "recency": 0.2, "trust": 0.1}
 # Now that salience means "what matters" (E2.2), auto-consolidation protects the
 # most-salient nodes from being merged away. Threshold mirrors the Hebbian "strong"
 # bar: a node this reinforced is worth keeping intact. Tunable on real data (ADR-003).
@@ -573,6 +573,11 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Salience boost amount (default 2, max 5)",
                         "default": 2,
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "description": "How certain the context was useful, 0-1 (default 1.0). Adds to the node's trust, which feeds the retrieval ranking.",
+                        "default": 1.0,
                     },
                     "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
                 },
@@ -938,6 +943,8 @@ def _resolve_context(
     )
     max_sal = max((g.get_node(k).salience for k in related_nodes if g.get_node(k)),
                   default=0) or 1
+    max_trust = max((g.get_node(k).trust for k in related_nodes if g.get_node(k)),
+                    default=0.0) or 1.0
     node_scores: dict[str, float] = {}
     for nd_kw in related_nodes:
         nd = g.get_node(nd_kw)
@@ -948,7 +955,8 @@ def _resolve_context(
         recency  = 1.0 / (max(0, g.turn_count - nd.turn) + 1)
         node_scores[nd_kw] = (RANK_WEIGHTS["sim"] * sim
                               + RANK_WEIGHTS["salience"] * salience
-                              + RANK_WEIGHTS["recency"] * recency)
+                              + RANK_WEIGHTS["recency"] * recency
+                              + RANK_WEIGHTS["trust"] * (nd.trust / max_trust))
     top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
 
     return related_links_sorted, top_nodes, used_fallback, inherited_ctx, g
@@ -979,7 +987,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     global _loop_hint_sent
     _turn_search_cache.clear()   # A2: the memo lives for ONE tool call
     _loop_stats[name if name in ("pre_turn", "store_turn") else "other"] += 1  # T55
-    result = await _call_tool_impl(name, arguments)
+    try:
+        result = await _call_tool_impl(name, arguments)
+    except Exception as e:  # noqa: BLE001 — L2: la lib MCP ridurrebbe tutto a str(e)
+        # (es. "open: NotFound", senza riga né file). Qui è l'ultimo punto in cui
+        # il traceback esiste ancora: riportarlo nel testo è l'unica telemetria
+        # che attraversa worker → GM → client.
+        import traceback
+        return [TextContent(type="text",
+                            text=f"[{name}] error: {e}\n{traceback.format_exc()}")]
     if (
         not _loop_hint_sent
         and name not in ("pre_turn", "store_turn", "skill", "help")
@@ -1659,12 +1675,17 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
 async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     keywords = [str(k) for k in arguments.get("keywords", [])]
     boost    = min(int(arguments.get("boost", 2)), 5)
+    try:      # B1 — graded feedback: clamp to [0, 1]
+        confidence = min(1.0, max(0.0, float(arguments.get("confidence", 1.0))))
+    except (TypeError, ValueError):
+        confidence = 1.0
     confirmed: list[str] = []
     skipped:   list[str] = []
     for kw in keywords:
         nd = g.get_node(kw)
         if nd:
             nd.salience += boost
+            nd.trust += confidence
             g.mark_node_dirty(nd.keyword)
             confirmed.append(kw)
         else:
@@ -1674,6 +1695,7 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps({
         "confirmed": confirmed,
         "boost": boost,
+        "confidence": confidence,
         "skipped": skipped,
     }, ensure_ascii=False))]
 
@@ -1694,8 +1716,9 @@ async def _tool_merge(arguments: dict, ctx: str, g) -> list[TextContent]:
         if not alias_nd:
             missing.append(alias)
             continue
-        # Transfer salience
+        # Transfer salience (+ trust, B2)
         canon_nd.salience += alias_nd.salience
+        canon_nd.trust = max(canon_nd.trust, alias_nd.trust)
         # Rewire all links that reference this alias
         for lk in g.links:
             if lk.source == alias:

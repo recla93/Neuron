@@ -154,11 +154,12 @@ def unpack_vector(data: bytes) -> list[float]:
 # is still a separate file, so the context column is redundant-but-harmless there.
 _NODE_UPSERT = (
     "INSERT INTO nodes (context, keyword, turn, topic, domain, sentiment, salience, "
-    "entities, tags, refs) VALUES (?,?,?,?,?,?,?,?,?,?) "
+    "entities, tags, refs, trust) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, keyword) DO UPDATE SET "
     "turn=excluded.turn, topic=excluded.topic, domain=excluded.domain, "
     "sentiment=excluded.sentiment, salience=excluded.salience, "
-    "entities=excluded.entities, tags=excluded.tags, refs=excluded.refs"
+    "entities=excluded.entities, tags=excluded.tags, refs=excluded.refs, "
+    "trust=excluded.trust"
 )
 
 _LINK_UPSERT = (
@@ -184,11 +185,16 @@ _VEC_UPSERT = ("INSERT OR REPLACE INTO node_vectors (context, keyword, embedding
 # per-node delta since this graph's last save.
 _NODE_UPSERT_ATOMIC = (
     "INSERT INTO nodes (context, keyword, turn, topic, domain, sentiment, salience, "
-    "entities, tags, refs) VALUES (?,?,?,?,?,?,?,?,?,?) "
+    "entities, tags, refs, trust) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, keyword) DO UPDATE SET "
     "turn=excluded.turn, topic=excluded.topic, domain=excluded.domain, "
     "sentiment=excluded.sentiment, salience=MAX(0, salience + ?), "
-    "entities=excluded.entities, tags=excluded.tags, refs=excluded.refs"
+    # G2: refs NON viene toccato sul path concorrente — il blob JSON è legacy
+    # (read-only), i ref nuovi vivono nella tabella `refs` (append-only).
+    "entities=excluded.entities, tags=excluded.tags, "
+    # B2/L1: trust segue lo stesso schema delta-relativo della salience —
+    # due writer concorrenti sommano entrambi, nessun update perso.
+    "trust=MAX(0, trust + ?)"
 )
 
 # Weight is promoted monotonically: a concurrent writer can only ever RAISE a
@@ -222,6 +228,7 @@ class Node:
     domain:     Domain
     sentiment:  Sentiment
     salience:   int            = 0
+    trust:      float          = 0.0   # B2 — feedback confermato (confirm/confidence)
     entities:   list[str] | None   = None
     tags:       list[str] | None   = None
     references: list[dict] | None  = None
@@ -299,6 +306,7 @@ class Graph:
     # persists ``salience - baseline`` as an atomic relative delta (T11 Fase 2b)
     # so concurrent writers on the same node don't lose each other's increments.
     _salience_baseline: dict = field(default_factory=dict)
+    _trust_baseline:    dict = field(default_factory=dict)   # B2, stesso pattern
     # Hebbian cooldown: link key -> turn of its last co-activation count. In-memory
     # only (not persisted): losing it on restart merely allows one extra count after
     # a reload, which is harmless anti-noise state, not worth a schema column. (E2.1)
@@ -402,9 +410,10 @@ class Graph:
         self._removed_episodes.clear()
 
     def _snapshot_salience(self) -> None:
-        """Record current salience per node as the baseline for the next
-        incremental save's relative delta (T11 Fase 2b)."""
+        """Record current salience/trust per node as the baseline for the next
+        incremental save's relative delta (T11 Fase 2b, B2)."""
         self._salience_baseline = {nd.keyword: nd.salience for nd in self.nodes}
+        self._trust_baseline = {nd.keyword: nd.trust for nd in self.nodes}
 
     # ------------------------------------------------------------------
     # Episodes (T56) — compact facts attached to a node
@@ -454,6 +463,7 @@ class Graph:
         existing = self._node_map.get(node.keyword)
         if existing:
             existing.salience = max(existing.salience, node.salience)
+            existing.trust = max(existing.trust, node.trust)
             self._dirty = True
             self._dirty_nodes.add(node.keyword)   # salience may have changed
             return
@@ -864,12 +874,25 @@ class Graph:
     def _node_row(self, nd: Node, context: str) -> tuple:
         return (context, nd.keyword, nd.turn, nd.topic, nd.domain, nd.sentiment, nd.salience,
                 json.dumps(nd.entities or []), json.dumps(nd.tags or []),
-                json.dumps(nd.references or []))
+                json.dumps(nd.references or []), nd.trust)
 
     def _link_row(self, lk: Link, context: str) -> tuple:
         return (context, lk.source, lk.target, lk.link_type, lk.weight, lk.rationale,
                 lk.created_turn, lk.last_active_turn, lk.inactive_turns,
                 lk.co_activation_count, lk.target_context)
+
+    def _write_refs(self, conn, node_set, context: str) -> None:
+        """G2 — refs come righe proprie: INSERT OR IGNORE su chiave naturale
+        (context, keyword, path, project_id, by). Append di due writer = righe
+        diverse, nessun clobber. Il blob JSON nodes.refs resta come legacy."""
+        rows = [(context, nd.keyword, r.get("path", ""), r.get("project_id", ""),
+                 r.get("by", ""))
+                for nd in node_set for r in (nd.references or [])
+                if isinstance(r, dict) and r.get("path")]
+        if rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO refs (context, keyword, path, project_id, by) "
+                "VALUES (?,?,?,?,?)", rows)
 
     def _vec_row(self, nd: Node, context: str) -> tuple:
         vec = nd.vector if nd.vector is not None else _get_vector(nd.keyword)
@@ -1001,6 +1024,7 @@ class Graph:
     def _merge_into(self, survivor: Node, absorbed: Node, sim: float,
                     turn: int, report: list[dict]) -> None:
         survivor.salience += absorbed.salience
+        survivor.trust = max(survivor.trust, absorbed.trust)
         a, s = absorbed.keyword, survivor.keyword
         for lk in self.links:
             if lk.source == a:
@@ -1108,7 +1132,8 @@ class Graph:
                 domain  TEXT, sentiment TEXT, salience INTEGER,
                 entities TEXT DEFAULT '[]',
                 tags     TEXT DEFAULT '[]',
-                refs     TEXT DEFAULT '[]');
+                refs     TEXT DEFAULT '[]',
+                trust    REAL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS node_vectors (
                 context   TEXT NOT NULL DEFAULT 'default',
                 keyword   TEXT NOT NULL,
@@ -1126,6 +1151,13 @@ class Graph:
             CREATE TABLE IF NOT EXISTS _graveyard (
                 context TEXT, keyword TEXT, salience INTEGER, domain TEXT,
                 reason TEXT, turn INTEGER);
+            CREATE TABLE IF NOT EXISTS refs (
+                context    TEXT NOT NULL DEFAULT 'default',
+                keyword    TEXT NOT NULL,
+                path       TEXT NOT NULL,
+                project_id TEXT NOT NULL DEFAULT '',
+                by         TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (context, keyword, path, project_id, by));
             CREATE TABLE IF NOT EXISTS episodes (
                 context TEXT NOT NULL DEFAULT 'default',
                 keyword TEXT NOT NULL,
@@ -1142,6 +1174,10 @@ class Graph:
                 conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} TEXT DEFAULT '[]'")
             except Exception:
                 pass
+        try:   # B2 migration
+            conn.execute("ALTER TABLE nodes ADD COLUMN trust REAL DEFAULT 0")
+        except Exception:
+            pass
         # Migration: context column + composite unique indexes + node_vectors PK
         self._ensure_schema(conn, context)
 
@@ -1326,6 +1362,8 @@ class Graph:
                              [(context, k) for k in self._removed_nodes])
             conn.executemany("DELETE FROM episodes WHERE context=? AND keyword=?",
                              [(context, k) for k in self._removed_nodes])
+            conn.executemany("DELETE FROM refs WHERE context=? AND keyword=?",
+                             [(context, k) for k in self._removed_nodes])
         if self._removed_links:
             conn.executemany(
                 "DELETE FROM links WHERE context=? AND source=? AND target=? AND link_type=?",
@@ -1337,8 +1375,10 @@ class Graph:
             rows = []
             for nd in node_set:
                 delta = nd.salience - self._salience_baseline.get(nd.keyword, 0)
-                rows.append(self._node_row(nd, context) + (delta,))
+                t_delta = nd.trust - self._trust_baseline.get(nd.keyword, 0.0)
+                rows.append(self._node_row(nd, context) + (delta, t_delta))
             conn.executemany(_NODE_UPSERT_ATOMIC, rows)
+            self._write_refs(conn, node_set, context)
 
         vec_set = self.nodes if all_rows else [nd for nd in self.nodes
                                                if nd.keyword in self._dirty_vectors]
@@ -1379,6 +1419,7 @@ class Graph:
         upserts when the store's embedding model differs from the active one (P5)."""
         if self.nodes:
             conn.executemany(_NODE_UPSERT, [self._node_row(nd, context) for nd in self.nodes])
+            self._write_refs(conn, self.nodes, context)
             if write_vectors:
                 conn.executemany(_VEC_UPSERT, [self._vec_row(nd, context) for nd in self.nodes])
         if self.links:
@@ -1488,8 +1529,10 @@ class Graph:
             # Scope by context only when the store has the column — the seed DB
             # and legacy pre-context files don't, and must load unfiltered.
             has_context = "context" in cols
+            has_trust   = "trust" in cols
             base_sql  = ("SELECT keyword, turn, topic, domain, sentiment, salience, "
-                         "entities, tags, refs FROM nodes")
+                         "entities, tags, refs" + (", trust" if has_trust else "")
+                         + " FROM nodes")
             conds: list[str] = []
             params: list = []
             if has_context:
@@ -1507,7 +1550,33 @@ class Graph:
                     nd.entities   = json.loads(row[6]) if isinstance(row[6], str) else row[6]
                     nd.tags       = json.loads(row[7]) if isinstance(row[7], str) else row[7]
                     nd.references = json.loads(row[8]) if isinstance(row[8], str) else row[8]
+                if has_trust:
+                    nd.trust = float(row[9] or 0.0)
                 self.nodes.append(nd)
+
+            # G2 — union del blob legacy con la tabella refs (dedup su chiave
+            # naturale, cap 20 come merge_refs). Tabella assente = store legacy.
+            try:
+                rq = "SELECT keyword, path, project_id, by FROM refs"
+                rrows = (conn.execute(rq + " WHERE context=?", (context,))
+                         if has_context else conn.execute(rq)).fetchall()
+            except Exception:
+                rrows = []
+            if rrows:
+                by_kw: dict = {}
+                for kw, rpath, pid, by in rrows:
+                    by_kw.setdefault(kw, []).append(
+                        {"path": rpath, "project_id": pid, "by": by})
+                for nd in self.nodes:
+                    extra = by_kw.get(nd.keyword)
+                    if not extra:
+                        continue
+                    seen = {(r.get("path"), r.get("project_id"), r.get("by"))
+                            for r in (nd.references or [])}
+                    merged = list(nd.references or [])
+                    merged += [r for r in extra
+                               if (r["path"], r["project_id"], r["by"]) not in seen]
+                    nd.references = merged[:20]
 
             # Load vectors (scoped by context when available)
             vec_map: dict[str, list[float]] = {}
