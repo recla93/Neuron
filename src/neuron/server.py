@@ -576,7 +576,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "confidence": {
                         "type": "number",
-                        "description": "How certain the context was useful, 0-1 (default 1.0). Adds to the node's trust, which feeds the retrieval ranking.",
+                        "description": "How certain the context was useful, -1 to 1 (default 1.0). Adds to the node's trust (floor 0), which feeds the retrieval ranking. NEGATIVE = refute: the context was misleading/wrong — lowers trust and skips the salience boost.",
                         "default": 1.0,
                     },
                     "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
@@ -624,6 +624,13 @@ async def list_tools() -> list[Tool]:
             name="summary",
             description="Textual graph summary: top keywords, recent links, health, forgotten concepts",
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="introspect",
+            description="Neuron self-model (C3): what the memory knows about itself — strongest/most-trusted concepts, recent growth, weakest domain, loop compliance. JSON.",
+            inputSchema={"type": "object", "properties": {
+                "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
+            }},
         ),
         Tool(
             name="forgotten",
@@ -1300,6 +1307,30 @@ async def _tool_vector_search(arguments: dict, ctx: str, g) -> list[TextContent]
     return [TextContent(type="text", text="\n".join(lines))]
 
 
+async def _tool_introspect(arguments: dict, ctx: str, g) -> list[TextContent]:
+    """C3 — auto-comprensione: aggrega stats che il grafo già traccia (~30 righe)."""
+    def _top(key, n=3):
+        return [{"keyword": nd.keyword, "salience": nd.salience,
+                 "trust": round(nd.trust, 2)}
+                for nd in sorted(g.nodes, key=key, reverse=True)[:n] if key(nd) > 0]
+    recent_cut = max(0, g.turn_count - 10)
+    by_domain: dict[str, list[int]] = {}
+    for nd in g.nodes:
+        by_domain.setdefault(nd.domain or "general", []).append(nd.salience)
+    weakest = min(by_domain.items(), key=lambda kv: sum(kv[1]) / len(kv[1]),
+                  default=(None, []))[0] if by_domain else None
+    out = {
+        "context": g and (ctx or _g.active),
+        "nodes": len(g.nodes), "links": len(g.links), "turns": g.turn_count,
+        "strongest_memory": _top(lambda nd: nd.salience),
+        "most_trusted": _top(lambda nd: nd.trust),
+        "recent_growth": len([nd for nd in g.nodes if nd.turn >= recent_cut]),
+        "weakest_area": weakest,
+        "loop_stats": dict(_loop_stats),
+    }
+    return [TextContent(type="text", text=json.dumps(out, ensure_ascii=False))]
+
+
 async def _tool_summary(arguments: dict, ctx: str, g) -> list[TextContent]:
     ctx_info = f"Context: {_g.active}"
     h = compute_health(g.nodes, g.links, g.pruned_count, g.turn_count)
@@ -1675,8 +1706,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
 async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     keywords = [str(k) for k in arguments.get("keywords", [])]
     boost    = min(int(arguments.get("boost", 2)), 5)
-    try:      # B1 — graded feedback: clamp to [0, 1]
-        confidence = min(1.0, max(0.0, float(arguments.get("confidence", 1.0))))
+    try:      # B1/C1 — graded feedback: [-1, 1]; negativa = refute (abbassa trust)
+        confidence = min(1.0, max(-1.0, float(arguments.get("confidence", 1.0))))
     except (TypeError, ValueError):
         confidence = 1.0
     confirmed: list[str] = []
@@ -1684,8 +1715,9 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     for kw in keywords:
         nd = g.get_node(kw)
         if nd:
-            nd.salience += boost
-            nd.trust += confidence
+            if confidence >= 0:      # un refute non deve anche premiare la salience
+                nd.salience += boost
+            nd.trust = max(0.0, nd.trust + confidence)
             g.mark_node_dirty(nd.keyword)
             confirmed.append(kw)
         else:
@@ -1767,6 +1799,7 @@ _HANDLERS = {
     "find_candidates": _tool_find_candidates,
     "vector_search": _tool_vector_search,
     "summary": _tool_summary,
+    "introspect": _tool_introspect,
     "forgotten": _tool_forgotten,
     "prune": _tool_prune,
     "consolidate": _tool_consolidate,

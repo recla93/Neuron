@@ -995,8 +995,10 @@ class Graph:
             # O(N^2) pair scan (common on the auto-consolidate / sleep path).
             if len(nodes) < 2:
                 break
+            # C2 — trust-aware: un nodo confermato vale salience + trust, quindi
+            # un nodo poco saliente ma fidato non viene assorbito/droppato.
             if protect_salience is not None and all(
-                    n.salience >= protect_salience for n in nodes):
+                    n.salience + n.trust >= protect_salience for n in nodes):
                 break
             found = None
             for a, b in combinations(nodes, 2):
@@ -1007,7 +1009,8 @@ class Graph:
                     survivor, absorbed = a, b
                 else:
                     survivor, absorbed = b, a
-                if protect_salience is not None and absorbed.salience >= protect_salience:
+                if protect_salience is not None and (
+                        absorbed.salience + absorbed.trust >= protect_salience):
                     continue
                 found = (survivor, absorbed, sim)
                 break
@@ -1063,7 +1066,7 @@ class Graph:
             incident.setdefault(lk.target, []).append(lk.inactive_turns)
         drop: set[str] = set()
         for nd in self.nodes:
-            if nd.salience >= orphan_salience:
+            if nd.salience + nd.trust >= orphan_salience:   # C2: trust protegge
                 continue
             inc = incident.get(nd.keyword)
             if not inc or min(inc) >= inactive_turns:

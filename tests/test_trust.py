@@ -108,6 +108,27 @@ def test_confirm_confidence_raises_trust():
     assert g.get_node("kafka").trust == pytest.approx(1.4)
 
 
+def test_refute_negative_confidence_lowers_trust():
+    """C1 — confidence negativa: trust scende (floor 0), salience NON boostata."""
+    pytest.importorskip("mcp")
+    import asyncio
+    import neuron.server as srv
+    from neuron.models import Graph
+    g = Graph(); g.turn_count = 1
+    g.add_node(_node("kafka", sal=5, trust=0.8))
+    class _NoSave:
+        def save(self, *a, **k): pass
+    old = srv._g; srv._g = _NoSave()
+    try:
+        asyncio.run(srv._tool_confirm({"keywords": ["kafka"], "confidence": -0.5}, "", g))
+        assert g.get_node("kafka").trust == pytest.approx(0.3)
+        assert g.get_node("kafka").salience == 5           # nessun premio sul refute
+        asyncio.run(srv._tool_confirm({"keywords": ["kafka"], "confidence": -9}, "", g))
+        assert g.get_node("kafka").trust == 0.0            # clamp a -1, floor 0
+    finally:
+        srv._g = old
+
+
 def test_trust_in_ranking(monkeypatch):
     pytest.importorskip("mcp"); pytest.importorskip("fastembed")
     import neuron.server as srv
