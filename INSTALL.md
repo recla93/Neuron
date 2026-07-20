@@ -9,7 +9,7 @@ you running by hand.
 
 **TL;DR**
 
-- **Windows** → double-click `NeuronInstaller.exe`, then use the **Neuron — Control Center** Desktop shortcut.
+- **Windows** → run `install.ps1`, then use the **Gray Matter GUI** Desktop shortcut (the unified control center).
 - **macOS / Linux** → `python3 -m venv .venv && source .venv/bin/activate && pip install ".[dev]"` → `python -m neuron`.
 - **Register with a client** → `neuron register` (interactive, cross-platform) — or let the Windows installer do it.
 
@@ -34,35 +34,36 @@ the launch command with your MCP client.
 
 ---
 
-## 1. Automated install (Windows)
+## 1. Automated install (unified — all platforms)
 
-**One-click (no terminal):** double-click **`NeuronInstaller.exe`** in the project folder.
-It creates the dedicated environment and a **Neuron — Control Center** Desktop
-shortcut. Open that GUI for all subsequent operations: setup, client registration,
-Turso, Bridge/Tunnel, graph maintenance, vault import, tests and deploy/update.
-
-Or run the underlying installer directly from a terminal:
+Two files, same behavior everywhere. Both are **thin launchers for the unified
+Gray Matter installer** (`gray_matter/install.*`), because Gray Matter is the
+brain that manages every tool:
 
 ```powershell
-.\install.ps1
+.\install.ps1          # Windows
 ```
 
-What it does, in order:
+```bash
+sh install.sh          # macOS / Linux
+```
 
-1. Verifies Python is 3.10–3.14.
-2. Creates a venv at `%LOCALAPPDATA%\Programs\neuron5\.venv`.
-3. `pip install`s the Neuron wheel, pointing pip at the **pre-built `pyturso`
-   wheel** in `.\vendor` via `--find-links` — so **no C/Rust compiler is needed**.
-4. **Only if that fails** (e.g. an unsupported Python version), it installs the
-   *minimal* MSVC C++ build tools + Rust and compiles `pyturso` from source.
-5. Registers the server with Claude Desktop and Cursor, and adds a Start Menu
-   shortcut.
+What the unified installer does, in order:
 
-Useful flags:
+1. Verifies Python 3.10–3.14 (prefers the `py` launcher on Windows).
+2. Creates ONE shared venv (`%LOCALAPPDATA%\gray-matter\.venv` /
+   `~/.local/share/gray-matter/.venv`).
+3. Installs Gray Matter + every tool found next to it (this repo via
+   `GM_PEER_DIR`; Neuron/NeuRAG siblings in a full-suite checkout). `pyturso`
+   comes from the **pre-built wheels** in `vendor/` via `--find-links` — no
+   C/Rust compiler needed.
+4. Runs `gray-matter install`: registers ONLY the gateway in your MCP clients
+   (`.bak` backup next to each config), deploys session hooks/plugins, writes
+   the install manifest.
+5. Creates the **Gray Matter GUI** desktop shortcut and opens the control
+   center, where you manage tools, registration, tests and maintenance.
 
-- `-skipLlmProviders` — don't prompt for the optional standalone-chat LLM packages.
-- `-ForceCompile` — skip the prebuilt wheel and compile `pyturso` from source
-  (needs the toolchain; mainly for debugging the fallback path).
+Opt-outs: `GM_NO_NEURON=1` / `GM_NO_NEURAG=1` (env vars) skip a peer.
 
 > **Why a vendored pyturso wheel?** PyPI ships `pyturso` wheels for macOS and
 > Linux but **not** for Windows (`win_amd64`). Without the vendored wheel, a
@@ -70,21 +71,17 @@ Useful flags:
 > needs Rust + MSVC + the Windows SDK. The release workflow builds that wheel
 > once on CI so you don't have to.
 
-### GUI only (no Rust, no MSVC)
+### Control center (GUI)
 
-If you just want the Tkinter visual hub — no chat, no CLI tools:
+The control center is now the **Gray Matter GUI** — one hub for Neuron, NeuRAG
+and the gateway. The unified installer (`install.sh` / `install.ps1`, thin
+launchers for `gray_matter/install.*`) creates a desktop shortcut
+(**Gray Matter GUI**) and opens it at the end of the install. Any time after:
+`gray-matter gui`.
 
-- **macOS / Linux:** `chmod +x install-gui.sh && ./install-gui.sh`
-
-Both scripts run `pip install -e .` (editable), which triggers the
-`[project.gui-scripts]` entry in `pyproject.toml` and creates:
-
-| Platform | Executable | Desktop shortcut |
-|---|---|---|
-| Windows | `neuron-gui.exe` in venv `Scripts/` | `Neuron — Control Center.lnk` on Desktop |
-| macOS / Linux | `neuron-gui` in venv `bin/` | `neuron-gui` symlink on Desktop |
-
-No Rust toolchain, no MSVC — Python + pip only.
+The legacy Tkinter hub is still available for standalone debugging via the
+`neuron-gui` entry point (`[project.gui-scripts]` in `pyproject.toml`), but it
+is no longer installed as a shortcut.
 
 ### Building the `vendor\` wheels (maintainers)
 
@@ -205,8 +202,10 @@ neuron doctor              # check what's registered / spot problems
 neuron doctor --fix        # stop orphaned servers, clean duplicates
 ```
 
-On Windows, `install.ps1` (via the Neuron Control Center) already runs this for you for Claude
-Desktop and Cursor. For everything else, or on macOS/Linux, run `neuron register`.
+The unified installer already registers the **gateway** for you in every
+detected client (`gray-matter install`). Use `neuron register` only for a
+STANDALONE Neuron (no Gray Matter) — the two models are alternatives, not
+additive: the gateway evicts standalone `neuron5`/`neurag` entries by design.
 
 ### By hand
 
@@ -305,8 +304,16 @@ See the README "Storage" section.
 
 ## Uninstall
 
-**Recommended — the tiered uninstaller** (you choose how much to remove; nothing
-destructive by default, and it can preview first):
+**Recommended — the unified path** (interactive on the memory, preview first):
+
+```bash
+gray-matter uninstall --dry-run   # preview: reap → deregister → hooks → code → data prompts
+gray-matter uninstall             # asks BEFORE touching graphs/knowledge/bridges
+sh uninstall.sh                   # same thing (thin launcher, macOS/Linux)
+```
+
+**Legacy/deep cleanup — the tiered Windows uninstaller** (for old `neuron`-slug
+installs and leftovers the manifest doesn't track):
 
 ```powershell
 # app only: install dir + venv/deps, Start-Menu, MCP de-registration from all 6 clients

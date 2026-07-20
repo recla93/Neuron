@@ -160,6 +160,8 @@ _COMMANDS: dict[str, list[tuple[str, list[str] | None, str]]] = {
          "Export graph to JSON file"),
         ("Consolidate", ["manage", "--consolidate"],
          "Merge duplicate nodes, archive low-salience orphans"),
+        ("Repair Links", ["manage", "--repair-links"],
+         "Remove dangling links (source/target not in nodes table)"),
         ("Visualize", ["manage", "--visualize"],
          "Generate interactive HTML graph visualizer"),
     ],
@@ -186,8 +188,12 @@ _COMMANDS: dict[str, list[tuple[str, list[str] | None, str]]] = {
     "Turso": [
         ("Check Cloud", ["connect", "--check-only"],
          "Check Turso Cloud DB connection readiness"),
+        ("Check Config", None,
+         "Offline check: Turso env vars, schema, .env file"),
         ("Connect", None,
          "Configure Turso Cloud credentials (opens in a terminal)"),
+        ("Init Cloud", None,
+         "Initialize Turso Cloud schema (one-shot, for shared DB)"),
         ("Switch to Local", ["connect", "--use-local"],
          "Use the local DB — comments out the Turso creds in .env. "
          "Restart the server to apply."),
@@ -416,6 +422,8 @@ class _App:
             "Start Network": self._cloud_start,
             "Stop Network": self._cloud_stop,
             "Connect": self._open_turso_dialog,
+            "Check Config": self._check_cloud_config,
+            "Init Cloud": self._init_cloud,
             "Run Tests": self._run_tests,
             "Multilingual": lambda: self._set_embed_model(
                 "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
@@ -1359,6 +1367,28 @@ class _App:
             self._cloud_btn.configure(state="normal")
             self._cloud_btn.bind("<Enter>", lambda _e, b=self._cloud_btn: b.configure(bg=_ACCENT))
             self._cloud_btn.bind("<Leave>", lambda _e, b=self._cloud_btn: b.configure(bg=_HOVER))
+
+    def _check_cloud_config(self) -> None:
+        """Run scripts/check_cloud_config.py — offline Turso readiness check."""
+        script = self._find_script("check_cloud_config.py")
+        if script is None:
+            self._write("\n[!] check_cloud_config.py not found (expected in "
+                        "scripts/). Set NEURON_REPO if running from an install.\n",
+                        tag="err")
+            return
+        self._write("$ check_cloud_config.py\n\n", tag="cmd")
+        self._run([sys.executable, script], display="Check Config")
+
+    def _init_cloud(self) -> None:
+        """Run scripts/init_cloud.py — one-shot Turso Cloud schema init."""
+        script = self._find_script("init_cloud.py")
+        if script is None:
+            self._write("\n[!] init_cloud.py not found (expected in "
+                        "scripts/). Set NEURON_REPO if running from an install.\n",
+                        tag="err")
+            return
+        self._write("$ init_cloud.py\n\n", tag="cmd")
+        self._run([sys.executable, script], display="Init Cloud")
 
 
 # ---------------------------------------------------------------------------

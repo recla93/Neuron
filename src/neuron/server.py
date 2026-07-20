@@ -658,6 +658,7 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
+                    "dry_run": {"type": "boolean", "description": "Preview: list what would be pruned without deleting", "default": False},
                 },
             },
         ),
@@ -1407,6 +1408,13 @@ async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 
 async def _tool_prune(arguments: dict, ctx: str, g) -> list[TextContent]:
+    if arguments.get("dry_run"):     # F4 — anteprima senza mutazione né save
+        would = g.expired_tangential()
+        listing = [f"{lk.source} -> {lk.target} ({lk.link_type}, idle {lk.inactive_turns})"
+                   for lk in would[:20]]
+        return [TextContent(type="text", text=json.dumps(
+            {"dry_run": True, "would_prune": len(would), "links": listing},
+            ensure_ascii=False))]
     removed = g.prune_tangential()
     _g.save(ctx or None)
     return [TextContent(type="text", text=f"Pruned {removed} tangential links.")]

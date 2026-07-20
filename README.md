@@ -100,34 +100,27 @@ literally matches.
 
 ## ⚡ Quickstart
 
-### 🪟 Windows — one click
-
-Double-click **`NeuronInstaller.exe`** in the project folder. It installs Neuron and creates a
-**Neuron — Control Center** shortcut on the Desktop. From then on, double-click that
-shortcut: the GUI is the single front door for setup, registration, deploy/update, Turso,
-Bridge + Tunnel, graph maintenance, vault import and live logs. No terminal is needed for
-normal use.
-
-<details>
-<summary>…or from a terminal</summary>
+### 🪟 Windows
 
 ```powershell
-.\NeuronInstaller.exe
+.\install.ps1
 ```
 
-Installs into a dedicated venv using a **pre-built `pyturso` wheel** from `.\vendor`
-(Python 3.10–3.14), so no C/Rust compiler is needed.
-</details>
+A thin launcher for the **unified Gray Matter installer**: installs GM + Neuron
+into one venv (pre-built `pyturso` wheel from `vendor/`, no C/Rust compiler),
+registers the gateway in your MCP clients, deploys session hooks and creates the
+**Gray Matter GUI** shortcut on the Desktop — the single front door for setup,
+registration, maintenance and logs. No terminal needed for normal use.
 
 ### 🍎 macOS / 🐧 Linux
 
-`pyturso` ships prebuilt wheels on PyPI for macOS/Linux, so a plain install just works:
-
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install neuron-<version>-py3-none-any.whl     # from the GitHub Release
-python -m neuron                                   # starts the MCP server on stdio
+sh install.sh
 ```
+
+Same unified installer as Windows (thin launcher → `gray_matter/install.sh`):
+one venv, gateway registered, hooks deployed, **Gray Matter GUI** shortcut on
+the Desktop. `pyturso` ships prebuilt wheels on PyPI for macOS/Linux.
 
 From a source checkout: `pip install ".[dev]"`.
 
@@ -136,6 +129,14 @@ From a source checkout: `pip install ".[dev]"`.
 ---
 
 ## 🔌 Mounting in an MCP client
+
+> **🧠 Recommended: the Gray Matter gateway.** Neuron ships alongside
+> [Gray Matter](../gray_matter/), an orchestrator that registers **one** server
+> in your clients and runs Neuron (and NeuRAG) as warm managed workers — plus a
+> combined `gray_matter_pulse`, context cache and cross-store bridges.
+> One command does everything (register, hooks, plugins, manifest):
+> `gray-matter install`. AI agents: follow [`INSTALL-AI.md`](INSTALL-AI.md).
+> The table below is the **standalone** path.
 
 Neuron is a **local stdio MCP server** — your client launches it as a subprocess. "Mounting"
 just means registering that launch command; on Windows the installer can do it for you.
@@ -244,6 +245,7 @@ Architecture, the DB layer, per-client config and cloud/bridge internals are doc
 | Doc | What's in it |
 |---|---|
 | **[INSTALL.md](INSTALL.md)** | Every install path (Windows one-click → manual → source) + troubleshooting |
+| **[INSTALL-AI.md](INSTALL-AI.md)** | Automated install+register instructions for AI agents (EN · [IT](INSTALL-AI.it.md)) |
 | **[docs/DEVELOPER.md](docs/DEVELOPER.md)** | Architecture, memory dynamics, DB layer, per-client config |
 | **[docs/TEAM.md](docs/TEAM.md)** | Running a shared team brain on Turso Cloud |
 | **[docs/BRIDGE.md](docs/BRIDGE.md)** | Exposing Neuron over HTTP for ChatGPT / remote connectors |

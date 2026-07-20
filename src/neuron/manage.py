@@ -6,6 +6,7 @@ The lifecycle lives in `neuron setup`; this is everything else, portable:
     neuron manage --overview      # contexts with node/link/turn counts
     neuron manage --export out.json [--context X]
     neuron manage --consolidate [--context X]
+    neuron manage --repair-links  # remove dangling links
     neuron manage --visualize     # graph HTML (repo script if reachable)
 
 Windows keeps the richer Configuration Center (bridge/tunnel/console live);
@@ -22,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-__all__ = ["do_overview", "do_export", "do_consolidate", "do_visualize", "main"]
+__all__ = ["do_overview", "do_export", "do_consolidate", "do_repair_links", "do_visualize", "main"]
 
 
 def _graphs_dir() -> str:
@@ -94,6 +95,45 @@ def do_consolidate(context: "str | None") -> int:
         path = os.path.join(_graphs_dir(), f"graph_{c.replace('/', '__')}.db")
         g.save_sqlite(path, context=c)
         print(f"[OK] {c}: {before[0]}->{len(g.nodes)} nodes, {before[1]}->{len(g.links)} links")
+    return 0
+
+
+def do_repair_links() -> int:
+    """Remove dangling links (source/target not in nodes table)."""
+    from neuron import db as _db
+    contexts = _contexts()
+    total_deleted = 0
+    for c in contexts:
+        path = os.path.join(_graphs_dir(), f"graph_{c.replace('/', '__')}.db")
+        if not _db.REMOTE_TURSO and not os.path.exists(path):
+            continue
+        conn = _db.connect(path)
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
+            valid = conn.execute("""
+                SELECT COUNT(*) FROM links l
+                WHERE l.source IN (SELECT keyword FROM nodes)
+                AND l.target IN (SELECT keyword FROM nodes)
+            """).fetchone()[0]
+            dangling = total - valid
+            if dangling == 0:
+                print(f"{c}: all {total} links valid")
+                continue
+            print(f"{c}: {total} total, {valid} valid, {dangling} dangling ({dangling/total*100:.0f}%)")
+            conn.execute("""
+                DELETE FROM links WHERE source NOT IN (SELECT keyword FROM nodes)
+                OR target NOT IN (SELECT keyword FROM nodes)
+            """)
+            conn.commit()
+            after = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
+            print(f"  Deleted {dangling} dangling links. Remaining: {after}")
+            total_deleted += dangling
+        finally:
+            conn.close()
+    if total_deleted == 0:
+        print("All links valid across all contexts. Nothing to repair.")
+    else:
+        print(f"\nTotal deleted: {total_deleted} dangling links")
     return 0
 
 
@@ -171,6 +211,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--overview", action="store_true")
     ap.add_argument("--export", metavar="OUT")
     ap.add_argument("--consolidate", action="store_true")
+    ap.add_argument("--repair-links", action="store_true")
     ap.add_argument("--visualize", action="store_true")
     ap.add_argument("--context", default=None)
     a = ap.parse_args(argv)
@@ -180,6 +221,8 @@ def main(argv: list[str]) -> int:
         return do_export(a.export, a.context or "default")
     if a.consolidate:
         return do_consolidate(a.context)
+    if a.repair_links:
+        return do_repair_links()
     if a.visualize:
         return do_visualize()
     return _menu()

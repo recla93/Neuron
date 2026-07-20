@@ -811,16 +811,20 @@ class Graph:
     # Decay / pruning
     # ------------------------------------------------------------------
 
-    def prune_tangential(self) -> int:
-        kept, removed_links = [], []
+    def expired_tangential(self) -> list:
+        """Links che prune_tangential rimuoverebbe ORA (read-only — F4 dry_run)."""
+        out = []
         for lk in self.links:
             # Drift links are the noisiest, so they expire faster (E3.1).
             expiry = DRIFT_EXPIRY_TURNS if lk.link_type == "drift" else TANGENTIAL_EXPIRY_TURNS
             if lk.weight == "tangential" and lk.inactive_turns > expiry:
-                removed_links.append(lk)
-            else:
-                kept.append(lk)
-        self.links = kept
+                out.append(lk)
+        return out
+
+    def prune_tangential(self) -> int:
+        removed_links = self.expired_tangential()
+        doomed = {id(lk) for lk in removed_links}
+        self.links = [lk for lk in self.links if id(lk) not in doomed]
         removed = len(removed_links)
         if removed:
             for lk in removed_links:
