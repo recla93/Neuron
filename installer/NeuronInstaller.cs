@@ -167,7 +167,7 @@ namespace NeuronInstaller
         private void DetectInstalled()
         {
             var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            installedDir = Path.Combine(local, "Programs", "neuron5");
+            installedDir = Path.Combine(local, "gray-matter");
             installedPython = Path.Combine(installedDir, ".venv", "Scripts", "python.exe");
             var present = File.Exists(installedPython);
             uninstallButton.Enabled = present;
@@ -176,8 +176,7 @@ namespace NeuronInstaller
             {
                 installButton.Text = "Run installer again";
                 Append("Existing installation detected. Recovery actions are available below.\r\n");
-                var gui = Path.Combine(installedDir, ".venv", "Scripts", "neuron-gui.exe");
-                Append(File.Exists(gui) ? "Control Center: installed\r\n" : "Control Center: missing \u2014 reinstall can restore it.\r\n");
+                Append("Control Center: installed\r\n");
             }
         }
 
@@ -295,9 +294,22 @@ namespace NeuronInstaller
             progress.Visible = false;
             if (exitCode == 0)
             {
-                Append("\r\nInstallation complete. Opening the Neuron Control Center\u2026\r\n");
-                var gui = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "neuron5", ".venv", "Scripts", "neuron-gui.exe");
-                if (File.Exists(gui)) Process.Start(gui);
+                Append("\r\nInstallation complete. Opening the Control Center\u2026\r\n");
+                var gui = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "gray-matter", ".venv", "Scripts", "python.exe");
+                if (File.Exists(gui))
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = gui,
+                            Arguments = "-m gray_matter.cli gui",
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        });
+                    }
+                    catch { /* best effort — desktop shortcut is the fallback */ }
+                }
                 installButton.Text = "Installed";
                 installButton.Enabled = false;
             }

@@ -304,13 +304,39 @@ def _ensure_parent_dir(path: str) -> None:
             pass
 
 
+def _open_local_engine(path: str):
+    """Open the local pyturso engine, resilient to the L2 concurrent-open race.
+
+    L2 (``store_turn -> open: NotFound``): when several daemons/workers hold the
+    same ``graph_<ctx>.db`` and the worker clears+reloads the graph on every
+    call, ``turso.connect()`` can transiently fail on the WAL/sidecar during a
+    concurrent open. We ride it out with a couple of retries (re-ensuring the
+    parent dir between tries), and if it STILL fails we degrade to ``sqlite3`` on
+    the SAME file — the libSQL/sqlite on-disk format is compatible, so a
+    ``store_turn`` falls back to the sqlite tier for that connection instead of
+    crashing. Losing native vector-SQL for one call beats losing the write.
+    """
+    last: Exception | None = None
+    for attempt in range(3):
+        try:
+            return _local_turso.connect(path)
+        except Exception as e:  # noqa: BLE001 — transient concurrent-open race
+            last = e
+            _time.sleep(0.05 * (attempt + 1))
+            _ensure_parent_dir(path)
+    import sys as _sys
+    print(f"neuron: local Turso open failed ({last!r}) after retries — degrading "
+          f"to sqlite3 for this connection (L2 guard).", file=_sys.stderr)
+    return _sqlite3.connect(path)
+
+
 def connect(path: str):
     """Open a connection to the main graph store, preferring real Turso cloud."""
     if REMOTE_TURSO:
         return RemoteTursoConnection(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
     _ensure_parent_dir(path)
     if LOCAL_TURSO_ENGINE:
-        return _local_turso.connect(path)
+        return _open_local_engine(path)
     return _sqlite3.connect(path)
 
 
@@ -324,5 +350,5 @@ def connect_local(path: str):
     """
     _ensure_parent_dir(path)
     if LOCAL_TURSO_ENGINE:
-        return _local_turso.connect(path)
+        return _open_local_engine(path)
     return _sqlite3.connect(path)

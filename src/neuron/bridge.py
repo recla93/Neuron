@@ -58,7 +58,7 @@ def resolve_neuron_cmd(override: list[str] | None) -> list[str]:
     if override:
         return override
     if WIN:
-        slug = os.environ.get("NEURON_SLUG", "neuron5")
+        slug = os.environ.get("NEURON_SLUG", "neuron")
         local = os.environ.get("LOCALAPPDATA", "")
         venv_py = os.path.join(local, "Programs", slug, ".venv", "Scripts", "python.exe")
         if os.path.isfile(venv_py):
@@ -140,7 +140,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Quick smoke test: can the proxy runner actually launch mcp-proxy?
     try:
-        r = subprocess.run(proxy + ["--version"], capture_output=True, timeout=15)
+        r = subprocess.run(proxy + ["--version"], capture_output=True, timeout=15,
+                           creationflags=(subprocess.CREATE_NO_WINDOW
+                                          if os.name == "nt" else 0))
         if r.returncode != 0:
             print(f"  [!] '{' '.join(proxy)}' did not return a valid mcp-proxy.",
                   file=sys.stderr)

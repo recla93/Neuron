@@ -70,8 +70,8 @@ STAGE_FRESH_SECONDS      = _env_int("NEURON_STAGE_FRESH_SECONDS", 6 * 3600) # st
 # Episodic payload (T56): nodes carry compact FACTS, not just themes.
 EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)     # cap per node; oldest dropped (consolidation-lite)
 EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 200)   # one compact sentence, ~40 tokens
-# Embedding dimension. Default 384 (fastembed all-MiniLM-L6-v2 and the common
-# 384-dim multilingual models). Overridable via NS_EMBED_DIM for a model with a
+# Embedding dimension. Default 384 (the multilingual MiniLM-L12-v2 default below,
+# and the common 384-dim models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
 VECTOR_DIM               = int(os.environ.get("NS_EMBED_DIM", "384"))
 # Nome del modello di embedding attivo (deve combaciare con i vettori nello

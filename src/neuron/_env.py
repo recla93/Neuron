@@ -83,7 +83,10 @@ def load_dotenv_once(path: str | None = None) -> bool:
     if not path or not os.path.isfile(path):
         return False
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig: PowerShell 5.1 `Set-Content -Encoding utf8` writes a BOM
+        # that would corrupt the first key (audit 2026-07-21, keep-in-sync with
+        # gray_matter/_env.py).
+        with open(path, encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:

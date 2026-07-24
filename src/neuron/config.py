@@ -32,8 +32,8 @@ def env_float(name: str, default: float) -> float:
 
 
 def resolve_slug() -> str:
-    """The install slug (default ``neuron5``); lets v5 run beside older majors."""
-    return os.environ.get("NEURON_SLUG", "neuron5")
+    """The install slug (default ``neuron``); lets v5 run beside older majors."""
+    return os.environ.get("NEURON_SLUG", "neuron")
 
 
 def default_graphs_dir() -> str:
@@ -44,7 +44,7 @@ def default_graphs_dir() -> str:
     throwaway — so memory didn't reliably persist across restarts. Use a real
     user-data dir instead.
 
-    Uses NEURON_SLUG (default ``neuron5``) so it can run side by side with v4
+    Uses NEURON_SLUG (default ``neuron``) so it can run side by side with v4
     without sharing a graph store — their DB schema and default embedding model
     differ, so a shared store would corrupt each other's vectors.
     """

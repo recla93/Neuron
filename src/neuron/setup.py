@@ -135,7 +135,7 @@ def main(argv: list[str]) -> int:
         except Exception:
             pass
     ap = argparse.ArgumentParser(prog="neuron setup")
-    ap.add_argument("--slug", default=os.environ.get("NEURON_SLUG", "neuron5"))
+    ap.add_argument("--slug", default=os.environ.get("NEURON_SLUG", "neuron"))
     ap.add_argument("--python", dest="python_exe", default=None,
                     help="python that runs the server (default: the installed venv's)")
     ap.add_argument("--register-all", action="store_true")

@@ -1,6 +1,6 @@
 [project]
 name = "neuron"
-dynamic = ["version"]
+version = "6.1.2"
 description = "Neuron - persistent semantic memory for AI (semantic graph + vector search with Turso)"
 requires-python = ">=3.10"
 license = { text = "PolyForm Noncommercial License 1.0.0" }
@@ -39,19 +39,20 @@ dev = [
 cloud = [
     "libsql-client>=0.3.1",
 ]
+# GUI opzionale: il control center è UNO (gray_matter.webgui). Neuron gira
+# standalone senza questo extra; `neuron gui` lo bootstrappa se manca. Il runtime
+# MCP NON dipende da gray-matter (import guardato) — questo è solo per la GUI.
+gui = [
+    "gray-matter>=1.0",
+]
 
 [project.scripts]
 neuron-mcp = "neuron.server:cli"
-# `neuron` dispatches: no args -> MCP server; `neuron init` -> client wiring.
+# `neuron` dispatches: no args -> MCP server; `neuron init` -> client wiring;
+# `neuron gui` -> il control center web condiviso (gray_matter.webgui), che si
+# bootstrappa da solo se Gray Matter non è installato. Niente più `neuron-gui`
+# (la vecchia GUI Tkinter è ritirata).
 neuron = "neuron.__main__:cli"
-# Cross-platform GUI launcher: pip creates a shell script on macOS/Linux
-# (bin/neuron-gui in the venv) and neuron-gui.exe on Windows (from gui-scripts).
-neuron-gui = "neuron.gui:main"
-
-# Windowed launcher: pip generates a real neuron-gui(.exe) with NO console window
-# (uses pythonw on Windows) — the double-clickable visual hub, no PyInstaller.
-[project.gui-scripts]
-neuron-gui = "neuron.gui:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -64,12 +65,24 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.dynamic]
-version = {attr = "neuron.__version__"}
-
 # Ship the seed knowledge DB AND the skill files inside the wheel (both loaded
 # via importlib.resources). The skills are the source the MCP server serves as
 # `instructions` + resources, so they MUST travel in the package, not just at repo
 # root. `skills/*/*.md` covers the nested neuron-curated-memory/SKILL.md.
+# `clients/**/*` ships the per-client handshake assets (SessionStart hooks +
+# cowork/opencode plugins) so GM's unified installer can deploy them after a
+# plain `pip install` — SSOT lives here, inside the package, not at repo root.
 [tool.setuptools.package-data]
-neuron = ["data/*.db", "data/*.png", "skills/*.md", "skills/*/*.md"]
+neuron = [
+    "data/*.db", "data/*.png", "skills/*.md", "skills/*/*.md",
+    # Explicit per-depth globs (portable across setuptools versions; no `**`
+    # recursion dependency) covering the whole clients/ tree, deepest file is
+    # clients/cowork-plugin/neuron-guard/skills/neuron-usage/SKILL.md.
+    "clients/*", "clients/*/*", "clients/*/*/*",
+    "clients/*/*/*/*", "clients/*/*/*/*/*",
+    # `*` never matches a leading dot, so the plugin manifest needs its own glob.
+    "clients/*/*/.*/*",
+    # Wheel d'emergenza di Gray Matter (fallback offline del bootstrap `neuron
+    # gui`). Va ricostruito a ogni release di GM — vedi RELEASE-CHECKLIST.
+    "_gm_vendor/*.whl",
+]

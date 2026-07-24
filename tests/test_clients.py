@@ -68,30 +68,30 @@ class TestJsoncRead(unittest.TestCase):
 class TestManualSnippet(unittest.TestCase):
     def test_snippet_is_valid_json_with_windows_paths(self):
         # The colleague's log printed  "C:\Users\giuse\..." unescaped → invalid.
-        entry = {"command": r"C:\Users\giuse\AppData\Local\Programs\neuron5\.venv\Scripts\python.exe",
+        entry = {"command": r"C:\Users\giuse\AppData\Local\Programs\neuron\.venv\Scripts\python.exe",
                  "args": ["-m", "neuron"]}
-        snip = C.manual_snippet(["mcpServers"], "neuron5", entry)
+        snip = C.manual_snippet(["mcpServers"], "neuron", entry)
         parsed = json.loads(snip)   # must not raise
-        self.assertIn("giuse", parsed["mcpServers"]["neuron5"]["command"])
+        self.assertIn("giuse", parsed["mcpServers"]["neuron"]["command"])
 
 
 class TestTomlUpsert(unittest.TestCase):
     def test_append_preserves_other_sections(self):
         old = '[mcp_servers.obsidian]\ncommand = "obs"\n'
-        new = C.toml_upsert_section(old, "mcp_servers.neuron5",
+        new = C.toml_upsert_section(old, "mcp_servers.neuron",
                                     C.codex_entry_lines(r"C:\v\python.exe"))
         self.assertIn("[mcp_servers.obsidian]", new)
-        self.assertIn("[mcp_servers.neuron5]", new)
+        self.assertIn("[mcp_servers.neuron]", new)
         self.assertIn('command = "C:\\\\v\\\\python.exe"', new)
 
     def test_replace_only_own_section(self):
-        old = ('[mcp_servers.neuron5]\ncommand = "old"\n\n'
+        old = ('[mcp_servers.neuron]\ncommand = "old"\n\n'
                '[mcp_servers.other]\ncommand = "keep"\n')
-        new = C.toml_upsert_section(old, "mcp_servers.neuron5",
+        new = C.toml_upsert_section(old, "mcp_servers.neuron",
                                     C.codex_entry_lines("newpy"))
         self.assertNotIn('"old"', new)
         self.assertIn('command = "keep"', new)
-        self.assertEqual(new.count("[mcp_servers.neuron5]"), 1)
+        self.assertEqual(new.count("[mcp_servers.neuron]"), 1)
 
 
 class TestClaudeDesktopCandidates(unittest.TestCase):
@@ -132,14 +132,14 @@ class TestRegister(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, self._cursor_env(td):
             with mock.patch("os.path.expanduser",
                             side_effect=lambda p: p.replace("~", td)):
-                r = C.register("cursor", "neuron5", PY, install_dir=td)
+                r = C.register("cursor", "neuron", PY, install_dir=td)
                 self.assertTrue(r.ok, r.line())
                 cfg = json.load(open(os.path.join(td, ".cursor", "mcp.json")))
-                self.assertEqual(cfg["mcpServers"]["neuron5"]["command"], PY)
+                self.assertEqual(cfg["mcpServers"]["neuron"]["command"], PY)
                 # existing keys survive a re-register
                 cfg["mcpServers"]["other"] = {"command": "x"}
                 C.save_json(os.path.join(td, ".cursor", "mcp.json"), cfg)
-                r2 = C.register("cursor", "neuron5", PY, install_dir=td)
+                r2 = C.register("cursor", "neuron", PY, install_dir=td)
                 self.assertTrue(r2.ok)
                 cfg2 = json.load(open(os.path.join(td, ".cursor", "mcp.json")))
                 self.assertIn("other", cfg2["mcpServers"])
@@ -157,7 +157,7 @@ class TestRegister(unittest.TestCase):
                 jsonc = '{\n  // my servers\n  "mcpServers": {},\n}\n'
                 with open(cfg_path, "w") as fh:
                     fh.write(jsonc)
-                r = C.register("cursor", "neuron5", PY)
+                r = C.register("cursor", "neuron", PY)
                 self.assertFalse(r.ok)
                 self.assertIn("JSONC", r.detail)
                 json.loads(r.snippet)          # snippet must be valid JSON
@@ -181,13 +181,13 @@ class TestDoctor(unittest.TestCase):
                 # limit scan to cursor for the test
                 with mock.patch.dict(C.CLIENTS, {k: v for k, v in C.CLIENTS.items()
                                                  if k == "cursor"}, clear=True):
-                    lines, problems = C.doctor("neuron5", PY)
+                    lines, problems = C.doctor("neuron", PY)
                     joined = "\n".join(lines)
                     self.assertIn("BOTH", joined)
                     self.assertIn("missing", joined.lower())
                     self.assertGreaterEqual(problems, 2)
                     # fix mode removes the cruft entry
-                    lines2, _ = C.doctor("neuron5", PY, fix=True)
+                    lines2, _ = C.doctor("neuron", PY, fix=True)
                     cfg = json.load(open(cfg_path))
                     self.assertNotIn("neuron5", cfg["mcpServers"])
                     self.assertIn("neuron", cfg["mcpServers"])   # untouched
@@ -201,17 +201,17 @@ class TestDoctor(unittest.TestCase):
                 cfg_path = os.path.join(p, "mcp.json")
                 other = sys.executable   # exists but pretend current is different
                 C.save_json(cfg_path, {"mcpServers": {
-                    "neuron5": {"command": other, "args": ["-m", "neuron"]}}})
+                    "neuron": {"command": other, "args": ["-m", "neuron"]}}})
                 fake_current = os.path.join(td, "venv-python.exe")
                 with open(fake_current, "w") as fh:
                     fh.write("")
                 with mock.patch.dict(C.CLIENTS, {k: v for k, v in C.CLIENTS.items()
                                                  if k == "cursor"}, clear=True):
-                    lines, problems = C.doctor("neuron5", fake_current)
+                    lines, problems = C.doctor("neuron", fake_current)
                     self.assertTrue(any("DIFFERENT install" in ln for ln in lines))
-                    C.doctor("neuron5", fake_current, fix=True)
+                    C.doctor("neuron", fake_current, fix=True)
                     cfg = json.load(open(cfg_path))
-                    self.assertEqual(cfg["mcpServers"]["neuron5"]["command"],
+                    self.assertEqual(cfg["mcpServers"]["neuron"]["command"],
                                      fake_current)
 
 
@@ -225,14 +225,14 @@ class TestDeregister(unittest.TestCase):
                 os.makedirs(os.path.join(td, ".cursor"))
                 p = os.path.join(td, ".cursor", "mcp.json")
                 C.save_json(p, {"mcpServers": {
-                    "neuron5": {"command": PY}, "other": {"command": "y"}}})
-                r = C.deregister("cursor", "neuron5")
+                    "neuron": {"command": PY}, "other": {"command": "y"}}})
+                r = C.deregister("cursor", "neuron")
                 self.assertTrue(r.ok and r.action == "deregistered")
                 cfg = json.load(open(p))
-                self.assertNotIn("neuron5", cfg["mcpServers"])
+                self.assertNotIn("neuron", cfg["mcpServers"])
                 self.assertIn("other", cfg["mcpServers"])
                 self.assertTrue(os.path.exists(p + ".neuron-bak"))
-                self.assertEqual(C.deregister("cursor", "neuron5").action, "skipped")
+                self.assertEqual(C.deregister("cursor", "neuron").action, "skipped")
 
     def test_deregister_never_rewrites_jsonc(self):
         with tempfile.TemporaryDirectory() as td:
@@ -240,9 +240,9 @@ class TestDeregister(unittest.TestCase):
                             side_effect=lambda p: p.replace("~", td)):
                 os.makedirs(os.path.join(td, ".cursor"))
                 p = os.path.join(td, ".cursor", "mcp.json")
-                jsonc = '{\n  // hi\n  "mcpServers": {"neuron5": {"command": "x"}},\n}\n'
+                jsonc = '{\n  // hi\n  "mcpServers": {"neuron": {"command": "x"}},\n}\n'
                 open(p, "w").write(jsonc)
-                r = C.deregister("cursor", "neuron5")
+                r = C.deregister("cursor", "neuron")
                 self.assertFalse(r.ok)
                 self.assertEqual(open(p).read(), jsonc)
 
@@ -250,15 +250,15 @@ class TestDeregister(unittest.TestCase):
 class TestProcessDoctor(unittest.TestCase):
     """B6b — live-process section coupled with the doctor."""
 
-    PYV5 = r"C:\u\AppData\Local\Programs\neuron5\.venv\Scripts\python.exe"
-    PYOLD = r"C:\u\AppData\Local\Programs\neuron5\.venv-old\Scripts\python.exe"
-    PYV4 = r"C:\u\AppData\Local\Programs\neuron\.venv\Scripts\python.exe"
+    PYV5 = r"C:\u\AppData\Local\Programs\neuron\.venv\Scripts\python.exe"
+    PYOLD = r"C:\u\AppData\Local\Programs\neuron\.venv-old\Scripts\python.exe"
+    PYV4 = r"C:\u\AppData\Local\Programs\neuron4\.venv\Scripts\python.exe"
 
     def _procs(self):
         return [
             # the doctor itself + its PowerShell parent: must be excluded
             {"pid": 50, "ppid": 40, "name": "python.exe",
-             "cmd": f"{self.PYV5} -m neuron doctor --slug neuron5"},
+             "cmd": f"{self.PYV5} -m neuron doctor --slug neuron"},
             {"pid": 40, "ppid": 1, "name": "powershell.exe", "cmd": "powershell"},
             # healthy: launched by a live client
             {"pid": 101, "ppid": 200, "name": "python.exe",
@@ -267,7 +267,7 @@ class TestProcessDoctor(unittest.TestCase):
             # orphan: ppid 999 does not exist
             {"pid": 102, "ppid": 999, "name": "python.exe",
              "cmd": f"{self.PYV5} -m neuron"},
-            # stale OUR-slug install (different venv under Programs\neuron5)
+            # stale OUR-slug install (different venv under Programs\neuron)
             {"pid": 103, "ppid": 300, "name": "python.exe",
              "cmd": f"{self.PYOLD} -m neuron"},
             {"pid": 300, "ppid": 1, "name": "cursor.exe", "cmd": "cursor"},
@@ -279,7 +279,7 @@ class TestProcessDoctor(unittest.TestCase):
 
     def test_classification(self):
         lines, problems = C.process_doctor(
-            "neuron5", self.PYV5, lister=self._procs, self_pid=50)
+            "neuron", self.PYV5, lister=self._procs, self_pid=50)
         joined = "\n".join(lines)
         self.assertIn("4 Neuron server(s)", joined)      # 50/40 excluded
         self.assertIn("ORPHAN", joined)
@@ -291,7 +291,7 @@ class TestProcessDoctor(unittest.TestCase):
     def test_fix_kills_only_orphans(self):
         killed = []
         lines, problems = C.process_doctor(
-            "neuron5", self.PYV5, fix=True,
+            "neuron", self.PYV5, fix=True,
             lister=self._procs, killer=lambda pid: killed.append(pid) or True,
             self_pid=50)
         self.assertEqual(killed, [102])                  # orphan only
@@ -305,14 +305,14 @@ class TestProcessDoctor(unittest.TestCase):
              "cmd": f"{self.PYV5} -m neuron"},
             {"pid": 200, "ppid": 1, "name": "claude.exe", "cmd": "claude"},
         ]
-        lines, _ = C.process_doctor("neuron5", self.PYV5,
+        lines, _ = C.process_doctor("neuron", self.PYV5,
                                     lister=lambda: procs, self_pid=1)
         joined = "\n".join(lines)
         self.assertIn("spawned 2 Neuron servers", joined)
         self.assertIn("duplicate keys", joined)
 
     def test_no_servers(self):
-        lines, problems = C.process_doctor("neuron5", self.PYV5,
+        lines, problems = C.process_doctor("neuron", self.PYV5,
                                            lister=lambda: [], self_pid=1)
         self.assertEqual(problems, 0)
         self.assertIn("no `python -m neuron`", lines[0])

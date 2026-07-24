@@ -181,7 +181,7 @@ def _menu() -> int:
             do_visualize()
         elif ch == "5":
             from neuron.clients import doctor
-            lines, problems = doctor(os.environ.get("NEURON_SLUG", "neuron5"), sys.executable)
+            lines, problems = doctor(os.environ.get("NEURON_SLUG", "neuron"), sys.executable)
             for ln in lines:
                 print(ln)
             print(f"{problems} problem(s)." if problems else "All good.")

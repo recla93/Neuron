@@ -398,7 +398,7 @@ def _build_signpost() -> str:
         status_line = ""
     return SIGNPOST_BASE + status_line
 
-app = Server("neuron5", version=__version__)   # v5 "Synapse" identity (side-by-side with v4); version from neuron/__init__.py
+app = Server("neuron", version=__version__)   # v5 "Synapse" identity (side-by-side with v4); version from neuron/__init__.py
 
 
 # ---------------------------------------------------------------------------
@@ -1854,6 +1854,15 @@ def _maybe_register_gray_matter() -> None:
         except Exception:
             return  # Gray-Matter not installed → standalone
         try:
+            # go-standalone (2026-07-22): se Neuron è uscito dal gateway, NON
+            # deve ri-registrarsi a GM anche se importabile nello stesso venv
+            # (i suoi tool sarebbero pubblicati due volte: diretta + proxy).
+            from gray_matter.clients import unmanaged_tools
+            if "neuron" in unmanaged_tools():
+                return
+        except Exception:
+            pass  # GM vecchio senza unmanaged_tools → comportamento storico
+        try:
             if not autoregister("neuron", list(_HANDLERS.keys())):
                 return
         except Exception:
@@ -1889,7 +1898,7 @@ async def main() -> None:
             write_stream,
             InitializationOptions(
                 # A6: the server identity must match the install slug (v5 =
-                # "neuron5", v4 = "neuron") — was hardcoded "neuron".
+                # "neuron", v4 = "neuron4") — was hardcoded "neuron".
                 server_name=_resolve_slug(),
                 server_version=__version__,
                 # The signpost: injected once at the handshake, present for the

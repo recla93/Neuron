@@ -348,11 +348,23 @@ def _claude_cli() -> str | None:
     return shutil.which("claude")
 
 
+# Windows: nascondi la console dei child (claude CLI) — se lanciato da GUI/pythonw
+# lampeggiava un CMD. Il flag va nel runner DI DEFAULT, non nei call-site: un
+# runner iniettato dai test non deve ricevere `creationflags` a forza.
+# keep-in-sync con neurag/clients.py.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def _default_run(*args, **kwargs):
+    kwargs.setdefault("creationflags", _NO_WINDOW)
+    return subprocess.run(*args, **kwargs)
+
+
 def register_claude_code_via_cli(slug: str, python_exe: str,
                                  runner: Callable | None = None) -> bool:
     """B3: `claude mcp add --scope user <slug> <python> -- -m neuron`.
     Returns True when the CLI reported success."""
-    run = runner or subprocess.run
+    run = runner or _default_run
     try:
         r = run([_claude_cli() or "claude", "mcp", "add", "--scope", "user",
                  slug, python_exe, "--", "-m", "neuron"],
@@ -646,7 +658,8 @@ def _list_processes() -> list[dict]:
                  "Get-CimInstance Win32_Process | "
                  "Select-Object ProcessId,ParentProcessId,Name,CommandLine | "
                  "ConvertTo-Json -Compress"],
-                capture_output=True, text=True, timeout=30).stdout
+                capture_output=True, text=True, timeout=30,
+                creationflags=_NO_WINDOW).stdout
             data = json.loads(out or "[]")
             if isinstance(data, dict):
                 data = [data]
@@ -671,7 +684,8 @@ def _default_killer(pid: int) -> bool:
     try:
         if os.name == "nt":
             r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, timeout=30,
+                               creationflags=_NO_WINDOW)
             return r.returncode == 0
         os.kill(pid, 15)
         return True
@@ -764,7 +778,7 @@ def default_server_python(slug: "str | None" = None) -> str:
     repointed them to the system python, breaking everything). Falls back to
     sys.executable only when no install venv is found (pipx/pip installs,
     where the running interpreter IS the install)."""
-    slug = slug or os.environ.get("NEURON_SLUG", "neuron5")
+    slug = slug or os.environ.get("NEURON_SLUG", "neuron")
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
         cand = os.path.join(base, "Programs", slug, ".venv", "Scripts", "python.exe")
@@ -772,6 +786,35 @@ def default_server_python(slug: "str | None" = None) -> str:
         cand = os.path.join(os.path.expanduser("~"), ".local", "share", slug,
                             ".venv", "bin", "python")
     return cand if os.path.exists(cand) else sys.executable
+
+
+def gm_still_manages(tool: str) -> bool:
+    """True se Gray Matter è presente e gestisce ANCORA `tool` (non l'ha rilasciato
+    in `unmanaged`). Import guardato: senza GM (standalone puro) → False e la
+    registrazione diretta procede liberamente. `tool` = 'neuron' | 'neurag'.
+    keep-in-sync con neurag/clients.py."""
+    try:
+        from gray_matter import settings as _gm
+        unmanaged = str(_gm.load().get("unmanaged", ""))
+    except Exception:  # noqa: BLE001 — GM assente o config illeggibile = standalone
+        return False
+    names = {p.strip() for p in unmanaged.split(",") if p.strip()}
+    return tool not in names
+
+
+def _guard_direct_register(tool: str, force: bool, dry_run: bool) -> bool:
+    """Blocca la registrazione DIRETTA se GM gestisce ancora il tool (doppia
+    registrazione). Ritorna True se si può procedere. `go-standalone` NON passa
+    di qui: fa register+release in modo atomico."""
+    if force or dry_run or not gm_still_manages(tool):
+        return True
+    other = "gray-matter deregister " + tool
+    print(f"[!] Gray Matter ti gestisce ancora (modello gateway): registrarti")
+    print( "    diretto ora crea una DOPPIA registrazione nei client.")
+    print(f"    → entra in standalone pulito:  {tool} go-standalone")
+    print(f"    → oppure rilascia da GM:        {other}")
+    print(f"    → forzare comunque:             {tool} register --force")
+    return False
 
 
 def cli(argv: list[str]) -> int:
@@ -789,17 +832,21 @@ def cli(argv: list[str]) -> int:
     ap.add_argument("cmd", choices=["register", "doctor"])
     ap.add_argument("--client", default="all",
                     help="one of: " + ", ".join(sorted(CLIENTS)) + ", or 'all'")
-    ap.add_argument("--slug", default=os.environ.get("NEURON_SLUG", "neuron5"))
+    ap.add_argument("--slug", default=os.environ.get("NEURON_SLUG", "neuron"))
     ap.add_argument("--python", dest="python_exe", default=None,
                     help="server python (default: the installed venv's, NOT this one)")
     ap.add_argument("--install-dir", default=os.environ.get("NEURON_INSTALL_DIR", ""))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--fix", action="store_true", help="doctor: apply repairs")
+    ap.add_argument("--force", action="store_true",
+                    help="register: procedi anche se GM ti gestisce ancora (doppia registrazione)")
     args = ap.parse_args(argv)
     if not args.python_exe:
         args.python_exe = default_server_python(args.slug)
 
     if args.cmd == "register":
+        if not _guard_direct_register("neuron", args.force, args.dry_run):
+            return 1
         results = (register_all(args.slug, args.python_exe, args.install_dir, args.dry_run)
                    if args.client == "all"
                    else [register(args.client, args.slug, args.python_exe,

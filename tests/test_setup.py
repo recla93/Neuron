@@ -27,12 +27,12 @@ def test_graphs_dir_uses_slug_default(monkeypatch):
 
 def test_status_zero_problems_returns_0(monkeypatch):
     monkeypatch.setattr(C, "doctor", lambda *a, **k: (["all good"], 0))
-    assert S.do_status("neuron5", "python") == 0
+    assert S.do_status("neuron", "python") == 0
 
 
 def test_status_with_problems_returns_1(monkeypatch):
     monkeypatch.setattr(C, "doctor", lambda *a, **k: (["broken"], 3))
-    assert S.do_status("neuron5", "python") == 1
+    assert S.do_status("neuron", "python") == 1
 
 
 def test_repair_invokes_doctor_with_fix(monkeypatch):
@@ -43,7 +43,7 @@ def test_repair_invokes_doctor_with_fix(monkeypatch):
         return (["repaired"], 0)
 
     monkeypatch.setattr(C, "doctor", fake_doctor)
-    assert S.do_repair("neuron5", "python") == 0
+    assert S.do_repair("neuron", "python") == 0
     assert seen["fix"] is True
 
 
@@ -51,7 +51,7 @@ def test_install_reports_doctor_problems(monkeypatch):
     monkeypatch.setattr(C, "register_all", lambda slug, py: [])
     monkeypatch.setattr(C, "doctor", lambda *a, **k: (["x"], 1))
     # non-interactive (yes=True) so no prompts; 1 problem -> exit 1
-    assert S.do_install("neuron5", "python", yes=True) == 1
+    assert S.do_install("neuron", "python", yes=True) == 1
 
 
 def test_main_status_dispatch(monkeypatch):

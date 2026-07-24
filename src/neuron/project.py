@@ -84,7 +84,7 @@ def sidecar_dir() -> Path:
     """Per-user LOCAL dir for path memory that has no shared project_id. Mirrors
     neuron.config's per-user data location so it sits beside the graph store and
     never travels to the shared cloud DB."""
-    slug = os.environ.get("NEURON_SLUG", "neuron5")
+    slug = os.environ.get("NEURON_SLUG", "neuron")
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     else:

@@ -19,7 +19,7 @@ you discussed yesterday, connects ideas across topics, and gets smarter the more
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-5.4.0_%22Synapse%22-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-6.0.0-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -102,9 +102,8 @@ literally matches.
 
 ### 🪟 Windows
 
-```powershell
-.\install.ps1
-```
+Double-click **`install.cmd`** (or run `.\install.ps1` from a terminal).
+No Python? The installer bootstraps it via winget (official python.org build).
 
 A thin launcher for the **unified Gray Matter installer**: installs GM + Neuron
 into one venv (pre-built `pyturso` wheel from `vendor/`, no C/Rust compiler),
@@ -114,9 +113,8 @@ registration, maintenance and logs. No terminal needed for normal use.
 
 ### 🍎 macOS / 🐧 Linux
 
-```bash
-sh install.sh
-```
+Double-click **`install.command`** (or `sh install.sh` from a terminal).
+No Python? The installer offers brew/apt/dnf.
 
 Same unified installer as Windows (thin launcher → `gray_matter/install.sh`):
 one venv, gateway registered, hooks deployed, **Gray Matter GUI** shortcut on

@@ -17,7 +17,7 @@ self-contained string (no import of neuron / no venv dependency) so it never
 fails or slows down session start, even if the Neuron install is broken.
 
 Tool names below use Claude Code's `mcp__<server>__<tool>` convention for a
-server registered under the key "neuron5" in ~/.claude.json.
+server registered under the key "neuron" in ~/.claude.json.
 """
 
 import sys
@@ -28,16 +28,16 @@ import sys
 NEURON_HANDSHAKE = (
     "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority "
     "for this session.\n"
-    "Each substantive turn: call mcp__neuron5__pre_turn(topic, keywords) BEFORE "
+    "Each substantive turn: call mcp__neuron__pre_turn(topic, keywords) BEFORE "
     "replying (fold the returned context in silently), then "
-    "mcp__neuron5__store_turn(topic, keywords, links) AFTER, to persist what is new.\n"
+    "mcp__neuron__store_turn(topic, keywords, links) AFTER, to persist what is new.\n"
     "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a "
-    "self-link; before minting a concept check mcp__neuron5__find_candidates; "
+    "self-link; before minting a concept check mcp__neuron__find_candidates; "
     "never store secrets or tokens.\n"
     "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per "
-    "session: mcp__neuron5__help (commands), mcp__neuron5__skill(name='playbook') "
+    "session: mcp__neuron__help (commands), mcp__neuron__skill(name='playbook') "
     "(full workflow).\n"
-    "If no mcp__neuron5__* tools exist here, Neuron is not connected - ignore this silently."
+    "If no mcp__neuron__* tools exist here, Neuron is not connected - ignore this silently."
 )
 
 
