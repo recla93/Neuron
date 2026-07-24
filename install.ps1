@@ -39,7 +39,7 @@ if ($WantGm -and -not $AssumeYes -and [Environment]::UserInteractive) {
         '^(s|si|y|yes|$)' { $WantGm = $true }
         '^(d|details)$' {
             Write-Host "`nWithout GM you lose:"
-            Write-Host "  - Cross-store bridges (Neuron <-> NeuRAG)"
+            Write-Host '  - Cross-store bridges (Neuron <-> NeuRAG)'
             Write-Host "  - Neighbor auto-surface"
             Write-Host "  - Unified GUI control center"
             Write-Host "  - Auto-registration in MCP clients"
