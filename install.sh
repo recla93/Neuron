@@ -225,8 +225,9 @@ standalone_install() {
     "$VPY" -m pip install --upgrade pip >/dev/null 2>&1 || true
     [ "$FORCE" = "1" ] && echo "Repair: reinstalling Neuron (forced)..."
     FL=""; [ -d "$HERE/vendor" ] && FL="--find-links $HERE/vendor"
+    CONS=""; [ -f "$HERE/constraints.txt" ] && CONS="-c $HERE/constraints.txt"  # caps the majors
     # shellcheck disable=SC2086
-    "$VPY" -m pip install $FL $FORCE_ARGS "$HERE" || "$VPY" -m pip install $FORCE_ARGS "$HERE" \
+    "$VPY" -m pip install $FL $CONS $FORCE_ARGS "$HERE" || "$VPY" -m pip install $CONS $FORCE_ARGS "$HERE" \
         || { echo "ERROR: Neuron install failed — check network, or try: pip install --upgrade pip"; exit 1; }
     save_embed_model "$VPY"
     # Handshake assets (standalone has no GM to deploy them). Idempotent.
@@ -271,7 +272,8 @@ done
 # GM is the required gateway: if missing, fetch it. Safest source first. These
 # remote paths activate once Gray Matter is published (GitHub release / PyPI);
 # until then they fail cleanly and we print guidance below.
-GM_VERSION="${GM_VERSION:-1.1.2}"
+# Bump with every GM release (RELEASE-CHECKLIST) — see the note in install.ps1.
+GM_VERSION="${GM_VERSION:-1.4.0}"
 GM_REPO="${GM_REPO:-recla93/gray-matter}"
 GM_SHA256="${GM_SHA256:-}"          # optional: pin the release tarball checksum
 PY=$(find_python)

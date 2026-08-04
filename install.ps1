@@ -353,10 +353,12 @@ function Install-Standalone {
     & $Vpy -m pip install --upgrade pip | Out-Null
     if ($Force) { Write-Host "Repair: reinstalling Neuron (forced)..." }
     $Vendor = Join-Path $Here "vendor"
-    if (Test-Path $Vendor) { & $Vpy -m pip install --find-links $Vendor @ForceArgs $Here }
-    else { & $Vpy -m pip install @ForceArgs $Here }
+    $Cons = @(); $cf = Join-Path $Here "constraints.txt"
+    if (Test-Path $cf) { $Cons = @("-c", $cf) }   # caps the majors — see constraints.txt
+    if (Test-Path $Vendor) { & $Vpy -m pip install --find-links $Vendor @Cons @ForceArgs $Here }
+    else { & $Vpy -m pip install @Cons @ForceArgs $Here }
     if ($LASTEXITCODE -ne 0) {
-        & $Vpy -m pip install @ForceArgs $Here
+        & $Vpy -m pip install @Cons @ForceArgs $Here
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Neuron install failed — check network, or try: pip install --upgrade pip"; exit 1 }
     }
     Save-EmbedModel $Vpy $Chosen
@@ -417,7 +419,10 @@ foreach ($gm in @((Join-Path $Here "gray_matter"), (Join-Path (Split-Path -Paren
 
 # GM is the required gateway: if missing, fetch it. Safest source first. These
 # remote paths activate once Gray Matter is published (GitHub release / PyPI).
-$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.1.2" }
+# Bump with every GM release (RELEASE-CHECKLIST): a stale default here clones an
+# old GM whose pins may not match this Neuron, which is exactly the venv skew the
+# pip check in GM's installer now reports.
+$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.4.0" }
 $GmRepo    = if ($env:GM_REPO)    { $env:GM_REPO }    else { "recla93/gray-matter" }
 $GmSha256  = $env:GM_SHA256          # optional: pin the release zip checksum
 
@@ -435,11 +440,15 @@ function Get-GrayMatter {
     Write-Host "Gray Matter not found locally - fetching it into $suite (GM is the required gateway)."
     if (Get-Command git -ErrorAction SilentlyContinue) {
         Write-Host "  git clone https://github.com/$GmRepo.git"
-        & git clone --depth 1 --branch "v$GmVersion" "https://github.com/$GmRepo.git" $target 2>&1 | Out-Host
+        # NO `2>&1` on git: it writes normal progress ("Cloning into...") to
+        # stderr, and PS 5.1 turns each redirected stderr line into a scary
+        # NativeCommandError on a clone that actually succeeded. Unredirected,
+        # it just prints. Success is decided by $LASTEXITCODE, not by stderr.
+        & git clone --depth 1 --branch "v$GmVersion" "https://github.com/$GmRepo.git" $target
         if ($LASTEXITCODE -ne 0) {
             # No such tag (or offline): try the default branch before giving up.
             Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue
-            & git clone --depth 1 "https://github.com/$GmRepo.git" $target 2>&1 | Out-Host
+            & git clone --depth 1 "https://github.com/$GmRepo.git" $target
         }
         if (Test-Path (Join-Path $target "install.ps1")) { return $target }
         Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue

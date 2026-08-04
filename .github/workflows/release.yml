@@ -33,6 +33,25 @@ jobs:
       - run: pip install -e .[dev]
       - run: python -m pytest tests/ -q
 
+      # The bootstrap in install.ps1/install.sh clones `v$GM_VERSION` of a
+      # DIFFERENT repo when no local Gray Matter is found. Nothing kept that
+      # constant in sync: it sat at 1.1.2 while GM shipped 1.4.0, so a user
+      # without a local GM got a three-releases-old gateway paired with a
+      # current Neuron — exactly the venv skew the pip check in GM's installer
+      # now reports. A release cannot ship that silently any more.
+      - name: GM_VERSION matches Gray Matter's latest release
+        shell: bash
+        run: |
+          set -eu
+          ps1=$(sed -n 's/^\$GmVersion = .*else { "\(.*\)" }.*/\1/p' install.ps1)
+          sh=$(sed -n 's/^GM_VERSION="\${GM_VERSION:-\(.*\)}"/\1/p' install.sh)
+          latest=$(git ls-remote --tags --refs https://github.com/recla93/gray-matter.git 'v*' \
+                   | sed 's#.*refs/tags/v##' | sort -V | tail -1)
+          echo "install.ps1=$ps1  install.sh=$sh  gray-matter latest=$latest"
+          [ "$ps1" = "$sh" ] || { echo "::error::install.ps1 ($ps1) and install.sh ($sh) disagree on GM_VERSION"; exit 1; }
+          [ -n "$latest" ] || { echo "::error::could not read gray-matter tags"; exit 1; }
+          [ "$ps1" = "$latest" ] || { echo "::error::GM_VERSION is $ps1 but Gray Matter's latest release is $latest — bump it in install.ps1 and install.sh"; exit 1; }
+
   # --- 1. Compile pyturso for Windows (no win_amd64 on PyPI → we build it) ---
   build-pyturso-win:
     needs: test                        # red tests, no release
