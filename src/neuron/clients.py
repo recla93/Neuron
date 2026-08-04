@@ -318,6 +318,20 @@ CLIENTS: dict[str, dict[str, Any]] = {
         "format": "toml",
         "create_if_missing": False,
     },
+    # ChatGPT non gira su questa macchina: non ha un config da scrivere, ci
+    # arriva via HTTP pubblico. Anche in STANDALONE deve esserci — offrire meno
+    # client del gateway vuol dire che standalone non serve a niente. Qui espone
+    # il bridge di Neuron (:8000); `remote` dice a chi registra di non
+    # cercargli un file e di non contarlo come "client non trovato".
+    "chatgpt": {
+        "label": "ChatGPT",
+        "candidates": lambda: [],
+        "keys": [],
+        "entry": lambda py: {},
+        "format": "remote",
+        "remote": True,
+        "create_if_missing": False,
+    },
 }
 
 

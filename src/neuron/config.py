@@ -52,19 +52,42 @@ def default_graphs_dir() -> str:
     return os.path.join(user_data_dir(), "graphs")
 
 
-def user_data_dir() -> str:
-    """The per-user Neuron home — the parent of ``graphs``.
+SUITE_DIR = "GrayMatterEnvironment"
 
-    Deliberately NOT keyed on ``NEURON_HOME``: that variable only picks the
-    *venv* location in install.ps1/install.sh, and honouring it here would
-    silently relocate an existing graph store."""
-    slug = resolve_slug()
+
+def _os_base() -> str:
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     else:
         base = os.environ.get("XDG_DATA_HOME") or os.path.join(
             os.path.expanduser("~"), ".local", "share")
-    return os.path.join(base, slug)
+    # Vuoto (servizio, scheduled task, env ripulito) darebbe un path RELATIVO,
+    # cioe' un graph store nella cwd del processo di turno.
+    return base or os.path.expanduser("~")
+
+
+def user_data_dir() -> str:
+    """The per-user Neuron home — the parent of ``graphs``.
+
+    Sta sotto la radice UNICA della suite: ``<base>/GrayMatterEnvironment/<slug>``.
+    Prima i tre tool scrivevano in tre radici scollegate e nulla diceva che
+    fossero lo stesso prodotto.
+
+    Uno store ESISTENTE nella vecchia posizione vince sempre: cambiare la regola
+    non deve poter far sparire una memoria. Il trasloco e' esplicito
+    (``gray_matter.paths.migrate_to_suite_root``), non un effetto collaterale
+    di un aggiornamento.
+
+    Deliberately NOT keyed on ``NEURON_HOME``: that variable only picks the
+    *venv* location in install.ps1/install.sh, and honouring it here would
+    silently relocate an existing graph store."""
+    slug = resolve_slug()
+    base = _os_base()
+    new = os.path.join(base, SUITE_DIR, slug)
+    legacy = os.path.join(base, slug)
+    if not os.path.isdir(new) and os.path.isdir(legacy):
+        return legacy
+    return new
 
 
 def user_env_file() -> str:

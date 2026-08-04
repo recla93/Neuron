@@ -153,19 +153,25 @@ def _bootstrap_gray_matter() -> bool:
             candidates.append(("cartella sorella", argv))
     except Exception:  # noqa: BLE001 — path non registrato
         pass
-    # Wheel d'emergenza vendorato NEL package (viaggia nel wheel di Neuron): GM
-    # ha solo `mcp` come dep, già presente qui → install completamente OFFLINE,
-    # nessuna dipendenza da rete/PyPI/GitHub.
-    vendor = Path(__file__).resolve().parent / "_gm_vendor"
-    if vendor.is_dir() and any(vendor.glob("gray_matter-*.whl")):
-        candidates.append(("wheel vendorato (offline)",
-                           [py, "-m", "pip", "install", "--find-links", str(vendor),
-                            "gray-matter"]))
     candidates.append(("indice pip", [py, "-m", "pip", "install", "gray-matter>=1.0"]))
     import shutil
     if shutil.which("git"):
         candidates.append(("GitHub", [py, "-m", "pip", "install",
                                       "git+https://github.com/recla93/gray-matter"]))
+    # Wheel d'emergenza vendorata NEL package (viaggia nel wheel di Neuron): GM ha
+    # solo `mcp` come dep, già presente qui → install completamente OFFLINE.
+    #
+    # ULTIMA, non seconda. È un artefatto CONGELATO al momento della release di
+    # Neuron — il pyproject stesso ammette "va ricostruito a ogni release di GM" —
+    # e provandola prima di PyPI e GitHub una macchina con rete perfettamente
+    # funzionante si ritrovava installata una Gray Matter vecchia. Da ultima
+    # continua a fare il suo mestiere (l'unico caso in cui serve è quando la rete
+    # NON c'è) senza poter più scavalcare una versione aggiornata.
+    vendor = Path(__file__).resolve().parent / "_gm_vendor"
+    if vendor.is_dir() and any(vendor.glob("gray_matter-*.whl")):
+        candidates.append(("wheel vendorata (offline, ultima risorsa)",
+                           [py, "-m", "pip", "install", "--no-index",
+                            "--find-links", str(vendor), "gray-matter"]))
     for label, argv in candidates:
         print(f"[gui] Gray Matter is not installed: installing it ({label})...")
         try:

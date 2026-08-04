@@ -293,7 +293,17 @@ function Install-Standalone {
     # Ask before the long pip phase, write after it (needs the venv's python).
     $Chosen = Select-EmbedModel
     $PyExe = Ensure-Python      # installs it from python.org if absent
-    $Home_ = if ($env:NEURON_HOME) { $env:NEURON_HOME } else { Join-Path $env:LOCALAPPDATA "neuron" }
+    # Anche lo standalone vive nella radice UNICA della suite: se domani si
+    # aggiunge Gray Matter, i dati sono gia' dove la suite li cerca e non serve
+    # traslocare niente. Un'install esistente nella posizione piatta pre-suite
+    # continua a essere usata (un venv non e' spostabile).
+    $NBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
+    $Home_ = if ($env:NEURON_HOME) { $env:NEURON_HOME }
+             else { Join-Path (Join-Path $NBase "GrayMatterEnvironment") "neuron" }
+    $NLegacy = Join-Path $NBase "neuron"
+    if ((Test-Path (Join-Path $NLegacy ".venv")) -and -not (Test-Path (Join-Path $Home_ ".venv"))) {
+        $Home_ = $NLegacy
+    }
     $Venv = Join-Path $Home_ ".venv"
     # INSTALLER-UX §5.3 — kill what runs from this venv BEFORE pip writes to it.
     # A loaded .pyd cannot be replaced on Windows: pip dies with

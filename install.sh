@@ -201,7 +201,13 @@ standalone_install() {
     # `exit 1` inside $( ) only kills the subshell — propagate it explicitly
     # rather than relying on set -e to notice the assignment failed.
     PY=$(ensure_python) || exit 1
-    VENV="${NEURON_HOME:-$HOME/.local/share/neuron}/.venv"
+    # Radice UNICA della suite anche in standalone — vedi la nota in install.ps1.
+    _nbase="${XDG_DATA_HOME:-$HOME/.local/share}"
+    NEURON_DIR_HOME="${NEURON_HOME:-$_nbase/GrayMatterEnvironment/neuron}"
+    if [ -d "$_nbase/neuron/.venv" ] && [ ! -d "$NEURON_DIR_HOME/.venv" ]; then
+        NEURON_DIR_HOME="$_nbase/neuron"
+    fi
+    VENV="$NEURON_DIR_HOME/.venv"
     # INSTALLER-UX §5.3 — stop what runs from this venv before pip writes to it.
     # POSIX unlinks mapped files happily, so this is not the Windows lock, but a
     # stale server writing to the same store during an upgrade is its own hazard.
