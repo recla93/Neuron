@@ -1,12 +1,16 @@
 """Regressioni della CLI di Neuron: aiuto, refusi e chiusura pulita."""
 
 import asyncio
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from neuron.__main__ import COMMANDS, _usage
+
+_SRC = str(Path(__file__).resolve().parents[1] / "src")
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
@@ -14,11 +18,23 @@ def _run(*args: str) -> subprocess.CompletedProcess:
 
     stdin chiuso è il punto: se il comando cade nel ramo "server MCP" legge EOF
     e termina, invece di restare appeso — così il test non può bloccarsi.
+
+    PYTHONPATH punta a `src` di QUESTO albero perché il figlio non vede il
+    conftest di root, che è ciò che mette `neuron/src` in testa a sys.path per i
+    test in-process. Senza questa riga `import neuron` nel figlio risolveva
+    qualunque copia fosse installata altrove — misurato il 2026-08-17: un
+    checkout 5.4.1 in PycharmProjects, che precede la guardia sui comandi
+    sconosciuti, mentre l'albero sotto test era 6.4.0. I quattro test qui sotto
+    fallivano tutti su codice che nessuno di noi stava modificando, e un test
+    che non decide da dove importa misura ciò che trova, non ciò che vuoi.
     """
+    env = {**os.environ,
+           "PYTHONPATH": os.pathsep.join(
+               p for p in (_SRC, os.environ.get("PYTHONPATH", "")) if p)}
     return subprocess.run(
         [sys.executable, "-m", "neuron", *args],
         capture_output=True, text=True, timeout=180,
-        stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace", env=env,
     )
 
 

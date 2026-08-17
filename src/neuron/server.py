@@ -320,7 +320,47 @@ _bootstrap_domain_keywords()
 _load_domain_signal()
 
 
-def _signal_domain_switch(domain: str, intent: str) -> tuple[bool, "str | None", int]:
+def _switch_leaves_a_trail(prev_ctx: str, new_ctx: str, keywords) -> None:
+    """Record what the subject was when the context moved, so the two halves of
+    a session stay reachable from each other.
+
+    The auto-switch relocated the active graph and left nothing behind, so one
+    continuous stretch of work ended up split across two graphs with no link
+    between them — observed 2026-08-17, half a session in `default` and half in
+    `ai`, neither holding the whole thing.
+
+    `CrossLink` is keyword-to-keyword, not context-to-context, which is the
+    better shape anyway: "this concept led to that one" is a fact you can search
+    for, where "these two folders are related" is not. Source is the outgoing
+    context's most salient node — what you were actually working on — and target
+    is this turn's first keyword. Best-effort: a switch must never fail because
+    the trail could not be written.
+    """
+    try:
+        prev_g = _g.get(prev_ctx)
+        # Seed rows sit at turn 0; anything the user stored is turn >= 1. A
+        # context is never really empty — `get()` warm-starts it from the seed —
+        # so "has nodes?" let through trails whose source was whatever the seed
+        # shipped: the first draft of this recorded "you moved from docs/TOOLS
+        # to benchmark" about work nobody had done. The graph-level
+        # `_seed_loaded` flag is no good here either: adding nodes does not
+        # clear it, only saving does, so it suppresses legitimate trails out of
+        # a context you have written to but not yet checkpointed.
+        mine = [n for n in prev_g.nodes if (getattr(n, "turn", 0) or 0) > 0]
+        if not mine or not keywords:
+            return
+        src = max(mine, key=lambda n: getattr(n, "salience", 0) or 0)
+        _g.add_cross_link(
+            prev_ctx, src.keyword, new_ctx, keywords[0],
+            link_type="evolution", weight="medium",
+            rationale=f"the subject moved from {prev_ctx} to {new_ctx} here",
+        )
+    except Exception as e:  # noqa: BLE001 - a missing trail beats a failed switch
+        log.debug("could not record the cross-context trail: %s", e)
+
+
+def _signal_domain_switch(domain: str, intent: str,
+                          keywords=None) -> tuple[bool, "str | None", int]:
     """Domain-hysteresis auto-switch — SHARED by `auto` and `store_turn` (T65).
 
     Historically this lived only inside `auto`; once the curated loop made
@@ -342,7 +382,9 @@ def _signal_domain_switch(domain: str, intent: str) -> tuple[bool, "str | None",
             _domain_signal["domain"] = domain
             _domain_signal["count"] = 1
     if _domain_signal["count"] >= CONTEXT_SWITCH_THRESHOLD:
+        prev_ctx = _g.active
         _g.switch(domain)
+        _switch_leaves_a_trail(prev_ctx, domain, keywords)
         _domain_signal["domain"] = None
         _domain_signal["count"] = 0
         _save_domain_signal()
@@ -495,7 +537,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "topic": {"type": "string", "description": "Topic of the turn (3-5 words)"},
                     "keywords": {"type": "array", "items": {"type": "string"}, "description": "Abstract keywords (3-5)"},
-                    "domain": {"type": "string", "description": "Optional, defaults to 'general'. Free-form topic label. Common values: AI, backend, frontend, gaming, architecture, general — but ANY label works (e.g. biology, finance, music, devops).", "default": "general"},
+                    "domain": {"type": "string", "description": "Optional, defaults to 'general'. Free-form topic label: common values are AI, backend, frontend, gaming, architecture, general, but ANY label works (e.g. biology, finance, music, devops). NOT just a label — sending the same non-'general' domain on two consecutive turns SWITCHES the active context, and later turns are stored in that other graph. Use it when the subject really has changed; keep 'general' to stay put. A session that changes domain mid-way ends up split across two graphs, neither of which holds the whole session.", "default": "general"},
                     "intent": {"type": "string", "enum": ["question", "task", "exploration", "clarification", "feedback"], "description": "Optional, defaults to 'exploration'.", "default": "exploration"},
                     "sentiment": {"type": "string", "enum": ["neutral", "positive", "critical", "urgent"], "description": "Optional, defaults to 'neutral'.", "default": "neutral"},
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
@@ -1274,7 +1316,8 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # unless the caller pinned an explicit context (explicit always wins).
     _ctx_switched, _pend_dom, _pend_n = False, None, 0
     if not ctx:
-        _ctx_switched, _pend_dom, _pend_n = _signal_domain_switch(domain, intent)
+        _ctx_switched, _pend_dom, _pend_n = _signal_domain_switch(
+            domain, intent, keywords)
         if _ctx_switched:
             g = _g.get()   # the freshly activated context graph
     g.turn_count += 1
@@ -1789,41 +1832,18 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
         intent=extraction.intent, sentiment=extraction.sentiment,
         tags=tags,
     )
-    # auto-switch context with hysteresis
-    # Only switch after CONTEXT_SWITCH_THRESHOLD consecutive turns signaling
-    # the same domain. Feedback/clarification turns don't count as signals.
-    switched = False
-    pending_domain: str | None = None
-    pending_turns: int = 0
-
-    if domain != "general" and domain != _g.active:
-        # This turn signals a domain change — is it the same as before?
-        if extraction.intent not in ("feedback", "clarification"):
-            if _domain_signal["domain"] == domain:
-                _domain_signal["count"] += 1
-            else:
-                # New domain signal — reset counter
-                _domain_signal["domain"] = domain
-                _domain_signal["count"] = 1
-
-        pending_domain = _domain_signal["domain"]
-        pending_turns = _domain_signal["count"]
-
-        if _domain_signal["count"] >= CONTEXT_SWITCH_THRESHOLD:
-            # Threshold reached — commit the switch
-            _g.switch(domain)
-            g = _g.get()
-            ctx = domain
-            switched = True
-            _domain_signal["domain"] = None
-            _domain_signal["count"] = 0
-            pending_domain = None
-            pending_turns = 0
-    else:
-        # We're already in the right context (or domain is general) — clear signal
-        if domain == _g.active:
-            _domain_signal["domain"] = None
-            _domain_signal["count"] = 0
+    # Auto-switch with hysteresis, through the SHARED helper. This used to be an
+    # inline copy of `_signal_domain_switch` — same rules, separately maintained,
+    # and already diverged twice: the copy never called `_save_domain_signal()`,
+    # so a signal counted here was forgotten between turns and the threshold
+    # could not be reached across a restart; and when the switch learned to leave
+    # a cross-context trail, only the shared version got it. Two copies of one
+    # rule drift silently, because nothing fails when they do.
+    switched, pending_domain, pending_turns = _signal_domain_switch(
+        domain, extraction.intent, extraction.keywords)
+    if switched:
+        g = _g.get()          # the freshly activated context graph
+        ctx = domain
 
     err = validate_turn_input(extraction.keywords, extraction.topic, [], entities=extraction.entities, tags=extraction.tags)
     if err:
@@ -2025,9 +2045,26 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         parts_pt.append("patterns:" + ",".join(f"{h['next']}(x{h['count']})"
                                                for h in pats_pt[:3]))
     ctx_text_pt = " | ".join(parts_pt) if parts_pt else "no context"
-    # L1: expire old cache entries, then show working memory
+    # L1: expire old cache entries, then show the part of working memory this
+    # turn can actually use.
+    #
+    # The line used to print every warm concept, unranked and unfiltered, so a
+    # turn spent debugging a vault lock opened with "cache: ada(·) | pranzo(·) |
+    # calcolatore ral(↑) | tooltip(↑)" — and when nothing ranked it prepended six
+    # irrelevant concepts in front of the honest "no context" the line above
+    # already produces, hiding the one useful signal behind noise. Recency is not
+    # a filter here: those three were all `↑`.
+    #
+    # Paying tokens to say nothing teaches the caller that the tool is noise, and
+    # a caller that has learned that stops calling it — measured on 2026-08-17,
+    # a session that dropped the loop after three unhelpful returns and ended at
+    # pre_turn 2 / store_turn 2 over fourteen turns. Working memory in full is
+    # still one `status` away; what belongs in a per-turn line is what bears on
+    # the turn.
     g_pt.cache_expire()
-    cache_entries = g_pt.cache_get_all()
+    _relevant = ({kw for kw, _ in nodes_pt}
+                 | {lk.source for lk in lks} | {lk.target for lk in lks})
+    cache_entries = [e for e in g_pt.cache_get_all() if e[0] in _relevant]
     if cache_entries:
         cache_str = " | ".join(
             f"{kw}({'↑' if turns < 3 else '·'})" for kw, _score, turns in cache_entries

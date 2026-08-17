@@ -379,6 +379,66 @@ def test_pre_turn_returns_status_and_context():
         srv._g = old_g
 
 
+def _pre_turn_with_ranking(monkeypatch, ranked, warm, topic):
+    """Run pre_turn with the resolver pinned to `ranked`.
+
+    The ranking is stubbed rather than coaxed out of a fixture graph: with a
+    small graph the vector fallback surfaces whatever node exists, so "nothing
+    relevant" is not something a fixture can guarantee -- an earlier test that
+    merely loads the embedder changes the outcome. A first draft of these two
+    tests passed in isolation and failed in the full suite for exactly that
+    reason.
+    """
+    import asyncio
+    import neuron.server as srv
+    from neuron.models import Graph, Node
+
+    g = Graph(turn_count=5)
+    for kw in warm:
+        g.add_node(Node(keyword=kw, turn=1, topic="t", domain="general",
+                        sentiment="neutral", salience=4))
+        g.cache_add(kw)
+    monkeypatch.setattr(srv, "_resolve_context",
+                        lambda *a, **k: ([], list(ranked), False, "", None, []))
+    old_g = srv._g
+    srv._g = _make_registry_with({"default": g}, "default")
+    try:
+        return asyncio.run(srv.call_tool("pre_turn", {"topic": topic}))[0].text
+    finally:
+        srv._g = old_g
+
+
+def test_pre_turn_cache_line_carries_only_what_bears_on_the_turn(monkeypatch):
+    """A warm concept with nothing to do with this turn must not be printed.
+
+    The cache line used to print all of working memory, unranked: a turn spent
+    debugging a vault lock opened with "cache: ada(·) | pranzo(·) | calcolatore
+    ral(↑) | tooltip(↑)". Recency does not separate the useful from the useless
+    -- three of those four were `↑` -- relevance does.
+    """
+    pytest.importorskip("mcp")
+    text = _pre_turn_with_ranking(
+        monkeypatch, ranked=[("kotlin flow", 8.0)],
+        warm=["kotlin flow", "pranzo"], topic="kotlin flow")
+    assert "pranzo" not in text, f"an unranked warm concept was billed: {text!r}"
+    assert "kotlin flow" in text, f"the relevant one was dropped too: {text!r}"
+
+
+def test_pre_turn_admits_it_has_nothing_instead_of_padding(monkeypatch):
+    """With nothing relevant warm, the honest "no context" must stand alone.
+
+    This is the half that mattered: the admission already existed on the line
+    above, and the unfiltered cache line covered it up -- so the tool spent
+    tokens to say nothing, every turn, and taught its caller to stop calling it.
+    """
+    pytest.importorskip("mcp")
+    text = _pre_turn_with_ranking(
+        monkeypatch, ranked=[], warm=["pranzo"], topic="vault lock contention")
+    assert "cache:" not in text, f"padded an empty answer: {text!r}"
+    assert "pranzo" not in text, text
+    assert "no context" in text, f"the admission must survive: {text!r}"
+
+
 def test_pre_turn_declares_the_route_it_answered_through():
     """R1: uno stato che cambia il comportamento dev'essere osservabile nella
     risposta del tool. Il degrado L2 (Turso -> sqlite3 sullo stesso file)

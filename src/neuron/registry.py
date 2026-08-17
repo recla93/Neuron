@@ -48,8 +48,22 @@ class GraphRegistry:
         try:
             if os.path.isfile(self._active_file):
                 saved = open(self._active_file, encoding="utf-8").read().strip()
-                if saved and os.path.isfile(self._db_path(saved)):
+                # The pointer is a NAME, not a file handle. This used to restore
+                # it only `if os.path.isfile(self._db_path(saved))`, which is
+                # inconsistent with how contexts work everywhere else: `get()`
+                # materialises them lazily, and an empty context legitimately
+                # has no file yet — `save_sqlite` writes nothing when there is
+                # nothing to write. So switching to a fresh context and
+                # restarting before storing anything silently dropped you back
+                # into "default", while the pointer kept naming the context you
+                # had chosen. Seen on a live install: the file said "ai", no
+                # `graph_ai.db` existed, and the running server said "default"
+                # — permanently, with nothing reporting the disagreement.
+                if saved:
                     self._active = saved
+                    if not os.path.isfile(self._db_path(saved)):
+                        log.debug("active context %r has no graph file yet "
+                                  "(empty context, materialised on demand)", saved)
         except Exception:
             pass
         self._cross_db = os.path.join(graphs_dir, "_cross_links.json")
@@ -198,7 +212,31 @@ class GraphRegistry:
             pass
         return self._active
 
+    def _contexts_on_disk(self) -> list[str]:
+        """Context names that have a graph file, whether or not it is loaded."""
+        out = []
+        try:
+            for p in os.listdir(self._graphs_dir):
+                if p.startswith("graph_") and p.endswith(".db"):
+                    out.append(p[len("graph_"):-len(".db")].replace("__", "/"))
+        except OSError:
+            pass
+        return out
+
     def list_contexts(self, parent: str | None = None) -> list[dict[str, Any]]:
+        # This listed `self._graphs` — the contexts already touched IN THIS
+        # PROCESS — while calling itself "all available contexts". On a freshly
+        # started server it answered with an empty list; on a live install it
+        # reported one context while four had files on disk (arredamento,
+        # veicoli and frontend were invisible, so nobody could switch back to
+        # something they had built). Disk is the source of truth for what
+        # exists; memory only decides what is loaded right now.
+        #
+        # ponytail: `get()` loads each one to count its nodes, which is a read
+        # of every graph file on an explicit user action, then cached. Swap in a
+        # cheap SELECT COUNT if someone ends up with enough contexts to notice.
+        for ctx in self._contexts_on_disk():
+            self.get(ctx)
         result = []
         prefix = (parent or "").lower().strip("/")
         for ctx in sorted(self._graphs):
@@ -216,10 +254,28 @@ class GraphRegistry:
         return result
 
     def save_all(self) -> None:
-        """Persist all dirty graphs to disk (never writes to seed)."""
+        """Persist every dirty graph to disk.
+
+        This used to skip `ctx in self._seed_loaded`, under the heading "never
+        writes to seed" — but it writes to `self._db_path(ctx)`, the context's
+        own file, and never to `self._seed_path`. The guard protected nothing
+        and excluded exactly the contexts most likely to be lost: `get()` marks
+        EVERY newly created context as seed-loaded, because it warm-starts them
+        from the seed.
+
+        Both durability nets run through here — the worker's periodic checkpoint
+        and its shutdown handler (`gray_matter/_worker.py`, the one written so a
+        dirty kill on Windows still keeps data). So a fresh context was invisible
+        to both, and survived only if an explicit per-turn `save(ctx)` happened
+        to fire. Observed live: `_active_context.txt` naming a context with no
+        graph file, and three turns stored under it that reached no file at all.
+
+        Dirtiness is the right gate and `save_sqlite` already applies it, so a
+        context warm-started from the seed and never modified still writes
+        nothing — which is what the old guard was reaching for.
+        """
         for ctx, g in self._graphs.items():
-            if ctx not in self._seed_loaded:
-                g.save_sqlite(self._db_path(ctx), context=ctx)
+            g.save_sqlite(self._db_path(ctx), context=ctx)
         self._save_cross_links()
 
     def save(self, context: str | None = None) -> None:
@@ -264,6 +320,24 @@ class GraphRegistry:
         target_context: str, target_keyword: str,
         link_type: str = "analogy", weight: str = "medium", rationale: str = "",
     ) -> None:
+        """Record that a concept in one context led to a concept in another.
+
+        Deduplicated on the two (context, keyword) endpoints: `_cross_links` is
+        a flat list loaded whole at startup, and the auto-switch appends to it
+        every time the subject moves. The same passage recurs across sessions —
+        without this, months of use grow an unbounded list of identical rows,
+        all of them re-read on every start.
+
+        ponytail: the first entry wins and the repeat is dropped. Recording that
+        a passage happened AGAIN would be the Hebbian thing to do (this codebase
+        promotes link weight monotonically elsewhere), but nothing reads the
+        count yet — add it when something does.
+        """
+        key = (source_context, source_keyword, target_context, target_keyword)
+        for cl in self._cross_links:
+            if (cl.source_context, cl.source_keyword,
+                    cl.target_context, cl.target_keyword) == key:
+                return
         self._cross_links.append(CrossLink(
             source_context=source_context, source_keyword=source_keyword,
             target_context=target_context, target_keyword=target_keyword,

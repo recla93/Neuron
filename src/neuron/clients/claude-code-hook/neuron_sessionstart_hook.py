@@ -45,6 +45,22 @@ It also fixes the mirror bug: the tool-name prefix used to be hardcoded to
 do not exist in that session (exactly the old `mcp__neuron5__*` failure, in the
 other direction).
 
+WHEN THE TOOLS ARE NOT LOADED YET
+---------------------------------
+The escape clause fired on the wrong condition. Some clients defer MCP tool
+schemas -- the tools are present, but a call made before the schema is loaded
+fails -- while the closing line said that no reachable tool means memory is not
+connected. So the first failed call of the session and the permission to ignore
+the loop arrived together, at the worst possible moment.
+
+"Not loaded" and "not there" are now two different things: load the schema and
+retry once, and only a tool list with no entry at all silences the loop. The
+retry is capped at one because a genuinely absent tool must stay cheap.
+
+Measured while writing this, on a session that carried this block in context
+from its first turn: pre_turn 2, store_turn 2, across fourteen substantive
+turns.
+
 WHY IT CANNOT BREAK YOUR SESSION
 --------------------------------
 stdlib only, and it never imports neuron / neurag / gray_matter: the registry is
@@ -136,7 +152,9 @@ def _memory_block(p: str, with_knowledge: bool) -> str:
         + extra +
         "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per "
         f"session: {p}help (commands), {p}skill(name='playbook') (full workflow).\n"
-        f"If no {p}* tools exist here, memory is not connected - ignore this silently."
+        "If a call fails because the tool is not loaded, load its schema and retry "
+        f"once - some clients defer MCP tools. Only a tool list with no {p}* entry "
+        "at all means memory is not connected: then ignore this silently."
     )
 
 
@@ -148,8 +166,9 @@ def _knowledge_block(p: str) -> str:
         "indexed material; cite what you used.\n"
         f"Once per session: {p}skill(name='usage') for the retrieval workflow "
         "(chunking, filters, when NOT to search).\n"
-        f"If no {p}* tools exist here, the knowledge base is not connected - "
-        "ignore this silently."
+        "If a call fails because the tool is not loaded, load its schema and retry "
+        f"once - some clients defer MCP tools. Only a tool list with no {p}* entry "
+        "at all means the knowledge base is not connected: then ignore this silently."
     )
 
 

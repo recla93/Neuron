@@ -149,3 +149,22 @@ def test_defaults_are_applied_not_just_tolerated(_isolated):
                          "keywords": ["cosa", "qualsiasi"]})
     status = _call("status", {})
     assert "error" not in status.lower(), status
+
+
+def test_domain_declares_that_it_switches_the_context():
+    """`domain` non è un'etichetta: due turni consecutivi con lo stesso valore
+    non-'general' spostano il contesto attivo, e i turni successivi finiscono in
+    un ALTRO grafo.
+
+    La descrizione diceva solo "free-form topic label... ANY label works", e chi
+    chiama non poteva sapere il resto. Osservato il 2026-08-17: una sessione di
+    lavoro continua passata a `domain="AI"` due volte si è divisa fra il grafo
+    `default` (154 nodi di storia del progetto) e `ai` (il lavoro di quel
+    giorno), e nessuno dei due conteneva la sessione intera. Il meccanismo va
+    bene ed ha già l'isteresi; quello che mancava era dirlo a chi chiama.
+    """
+    desc = _schema_of("store_turn")["properties"]["domain"]["description"]
+    low = desc.lower()
+    assert "switch" in low, f"la conseguenza non è dichiarata: {desc}"
+    assert "consecutive" in low, "manca la condizione che fa scattare lo switch"
+    assert "general" in low, "manca come restare nel contesto corrente"
