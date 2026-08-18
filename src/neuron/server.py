@@ -1546,14 +1546,26 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
         if top_nodes:
             node_strs = [f"{kw}({sc:.0f})" for kw, sc in top_nodes[:5]]
             parts.append("nodes:" + ",".join(node_strs))
+        # UNA NOTA SU *COME* NON DECIDE SE C'E' UN *COSA*.
+        # `(vector fallback)` e `(from:...)` dicono per quale strada si e'
+        # risposto; finivano nella stessa lista dei concetti, quindi bastava una
+        # di loro perche' `parts` non fosse vuota e l'onesto "no context" non
+        # uscisse mai. Misurato su un grafo vuoto: `_resolve_context` torna
+        # fallback=True con zero nodi e zero link, e la riga diceva
+        # "(vector fallback)" al posto di "no context". E' lo stesso errore che
+        # il commento sulla cache descrive piu' sotto, un livello piu' in su.
+        # `patterns:` resta contenuto: dice qualcosa del grafo, non del metodo.
+        notes: list[str] = []
         if used_fallback:
-            parts.append("(vector fallback)")
+            notes.append("(vector fallback)")
         if inherited_ctx:
-            parts.append(f"(from:{inherited_ctx})")
+            notes.append(f"(from:{inherited_ctx})")
         if pattern_hits:
             parts.append("patterns:" + ",".join(f"{h['next']}(x{h['count']})"
                                                 for h in pattern_hits[:3]))
         out = " | ".join(parts) if parts else "no context"
+        if notes:
+            out += " | " + " | ".join(notes)
         return [TextContent(type="text", text=out[:char_budget])]
 
     # Full format (default)
@@ -2037,14 +2049,20 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     _files.append(f)
         if _files:
             parts_pt.append("files: " + " | ".join(_files))
+    # Stessa regola del formato compatto di get_context: la nota sul metodo non
+    # puo' far sembrare che ci sia contenuto. (keep-in-sync: le due liste sono
+    # costruite in due posti, e questa e' gia' la seconda volta che si scrive.)
+    notes_pt: list[str] = []
     if fallback_pt:
-        parts_pt.append("(vector fallback)")
+        notes_pt.append("(vector fallback)")
     if inh_pt:
-        parts_pt.append(f"(from:{inh_pt})")
+        notes_pt.append(f"(from:{inh_pt})")
     if pats_pt:
         parts_pt.append("patterns:" + ",".join(f"{h['next']}(x{h['count']})"
                                                for h in pats_pt[:3]))
     ctx_text_pt = " | ".join(parts_pt) if parts_pt else "no context"
+    if notes_pt:
+        ctx_text_pt += " | " + " | ".join(notes_pt)
     # L1: expire old cache entries, then show the part of working memory this
     # turn can actually use.
     #

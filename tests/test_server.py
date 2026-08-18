@@ -501,6 +501,34 @@ def test_pre_turn_facts_span_several_nodes():
         srv._g = old_g
 
 
+def test_a_note_about_method_cannot_pass_for_context(monkeypatch):
+    """Con zero contenuto, "no context" deve uscire comunque.
+
+    `test_pre_turn_empty_graph` copre lo stesso patto ma passa per il motivo
+    sbagliato: nella suite intera `_mockdeps` avvelena `turso`, il tier
+    vettoriale non parte e la nota non viene mai emessa. Da solo quel file
+    falliva, e falliva anche PRIMA del commit che ha toccato pre_turn --
+    verificato su ce51324. Qui il flag e' forzato, cosi' l'esito non dipende
+    da quali altri file hanno girato prima.
+    """
+    pytest.importorskip("mcp")
+    import asyncio
+    import neuron.server as srv
+    from neuron.models import Graph
+
+    # zero link, zero nodi, ma la strada vettoriale dice di essere stata usata
+    monkeypatch.setattr(srv, "_resolve_context",
+                        lambda *a, **kw: ([], [], True, None, None, []))
+    old_g = srv._g
+    srv._g = _make_registry_with({"default": Graph(turn_count=0)}, "default")
+    try:
+        text = asyncio.run(srv.call_tool("pre_turn", {"topic": "qualunque"}))[0].text
+    finally:
+        srv._g = old_g
+    assert "no context" in text, f"la nota ha coperto l'ammissione: {text!r}"
+    assert "(vector fallback)" in text, "la nota deve restare, solo non al posto del contenuto"
+
+
 def test_pre_turn_empty_graph():
     """pre_turn on empty graph returns status with 'no context'."""
     pytest.importorskip("mcp")
