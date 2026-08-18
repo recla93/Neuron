@@ -343,6 +343,21 @@ class GraphRegistry:
             target_context=target_context, target_keyword=target_keyword,
             link_type=link_type, weight=weight, rationale=rationale,
         ))
+        # Scritto QUI, non solo al checkpoint. `store_turn` fa `save(ctx)` a
+        # ogni turno, ma `save(ctx)` non tocca il trail: fino a `save_all()` la
+        # riga viveva solo in memoria. Uno switch seguito da una morte sporca
+        # del processo lasciava quindi i turni sul disco e il collegamento fra
+        # le due meta' della sessione perso -- che e' esattamente il guasto per
+        # cui il trail e' stato scritto, un giro piu' in la'.
+        #
+        # Costa poco: la dedup sopra fa uscire in anticipo i passaggi ripetuti,
+        # quindi si scrive solo quando nasce davvero una riga nuova, cioe' a un
+        # cambio di contesto mai visto prima. Best-effort come il chiamante: un
+        # trail non salvato non puo' far fallire lo switch che lo ha generato.
+        try:
+            self._save_cross_links()
+        except OSError as e:
+            log.debug("could not persist the cross-context trail: %s", e)
 
     def get_cross_links(self, context: str) -> list[CrossLink]:
         ctx    = context.lower().strip("/")

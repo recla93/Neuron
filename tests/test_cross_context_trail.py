@@ -57,8 +57,9 @@ def test_a_trail_is_reachable_from_both_ends(reg):
 
 
 def test_a_trail_survives_a_restart(reg):
-    """Persistence is via `save_all`, which is also what the worker's periodic
-    checkpoint and shutdown handler call."""
+    """Il checkpoint del worker e il suo shutdown handler chiamano `save_all`,
+    che scrive anche il trail. Resta vero, ma non e' piu' l'unica strada: vedi
+    il test sotto."""
     reg.add_cross_link("default", "vault lock", "ai", "benchmark",
                        rationale="il soggetto si e' spostato")
     reg.save_all()
@@ -68,6 +69,24 @@ def test_a_trail_survives_a_restart(reg):
     assert [(t.source_keyword, t.target_keyword) for t in trails] \
         == [("vault lock", "benchmark")]
     assert trails[0].rationale == "il soggetto si e' spostato"
+
+
+def test_a_trail_survives_a_dirty_death(reg):
+    """Senza nessun checkpoint: la riga deve essere gia' sul disco.
+
+    `store_turn` fa `save(ctx)` a ogni turno, ma `save(ctx)` non tocca il trail.
+    Fino a un `save_all()` la riga viveva solo in memoria, quindi uno switch
+    seguito da una morte sporca del processo lasciava i turni salvati e il
+    collegamento fra le due meta' della sessione perso -- lo stesso guasto per
+    cui il trail esiste, un giro piu' in la'.
+    """
+    reg.add_cross_link("default", "vault lock", "ai", "benchmark",
+                       rationale="il soggetto si e' spostato")
+    # niente save_all(): e' esattamente cio' che una morte sporca non concede
+
+    riavviato = GraphRegistry(graphs_dir=reg._graphs_dir)
+    trails = riavviato.get_cross_links("ai")
+    assert [(t.source_keyword, t.target_keyword) for t in trails]         == [("vault lock", "benchmark")], "il trail non e' arrivato al disco"
 
 
 def test_the_switch_records_the_concept_it_left_behind(reg, monkeypatch):
