@@ -485,7 +485,7 @@ foreach ($gm in @((Join-Path $Here "gray_matter"), (Join-Path (Split-Path -Paren
 # Bump with every GM release (RELEASE-CHECKLIST): a stale default here clones an
 # old GM whose pins may not match this Neuron, which is exactly the venv skew the
 # pip check in GM's installer now reports.
-$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.4.1" }
+$GmVersion = if ($env:GM_VERSION) { $env:GM_VERSION } else { "1.4.2" }
 $GmRepo    = if ($env:GM_REPO)    { $env:GM_REPO }    else { "recla93/gray-matter" }
 $GmSha256  = $env:GM_SHA256          # optional: pin the release zip checksum
 

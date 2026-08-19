@@ -326,7 +326,7 @@ done
 # remote paths activate once Gray Matter is published (GitHub release / PyPI);
 # until then they fail cleanly and we print guidance below.
 # Bump with every GM release (RELEASE-CHECKLIST) — see the note in install.ps1.
-GM_VERSION="${GM_VERSION:-1.4.1}"
+GM_VERSION="${GM_VERSION:-1.4.2}"
 GM_REPO="${GM_REPO:-recla93/gray-matter}"
 GM_SHA256="${GM_SHA256:-}"          # optional: pin the release tarball checksum
 PY=$(find_python)
