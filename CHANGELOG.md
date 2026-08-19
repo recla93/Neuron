@@ -1,4 +1,24 @@
-# Changelog — Neuron
+﻿# Changelog — Neuron
+
+## 6.4.3 (2026-08-19)
+- **La riga del trail si salva quando nasce, non al checkpoint successivo.**
+  `store_turn` chiude con `_g.save(ctx)`, ma `save(ctx)` non toccava il trail:
+  `_save_cross_links()` viveva solo dentro `save_all()`. Fra uno switch e il
+  checkpoint successivo la riga stava solo in memoria, quindi una morte sporca
+  del processo lasciava i turni salvati in due grafi e perso il collegamento fra
+  le due meta' della sessione -- esattamente il guasto per cui il trail esiste.
+  Misurato su una copia dei grafi veri: switch ai->veicoli senza save_all,
+  `_cross_links.json` fermo a `[]`. Ora `add_cross_link` scrive appena la riga
+  esiste; la dedup che sta sopra fa uscire in anticipo i passaggi gia' noti,
+  quindi si scrive solo a un cambio di contesto mai visto.
+- **Una nota su COME non decide piu' se c'e' un COSA.** `(vector fallback)` e
+  `(from:...)` dicono per quale strada si e' risposto, ma finivano nella stessa
+  lista dei concetti, e la riga finale e' `" | ".join(parts) if parts else "no
+  context"`: bastava una delle due perche' `parts` non fosse vuota e l'ammissione
+  onesta non uscisse mai. Misurato su un grafo vuoto: `_resolve_context` torna
+  `fallback=True` con zero nodi e zero link, e pre_turn rispondeva
+  "(vector fallback)" invece di "no context". Corretto in tutti e due i posti
+  dove la lista viene costruita.
 
 ## 6.4.2 (2026-08-05)
 - **L'handshake non e' mai partito sulle installazioni col layout nuovo.** Il

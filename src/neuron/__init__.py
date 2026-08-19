@@ -9,4 +9,4 @@ _load_dotenv_once()
 
 # Neuron 6 (gateway era). Keep this line clean (value only, no trailing comment) —
 # naive parsers in deploy.ps1 read it verbatim.
-__version__ = "6.4.2"
+__version__ = "6.4.3"
