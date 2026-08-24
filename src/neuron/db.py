@@ -440,6 +440,7 @@ def _open_local_engine(path: str):
     if cached is not None:
         try:
             cached._conn.execute("SELECT 1")
+            DEGRADED_PATHS.discard(path)
             return cached
         except Exception:  # noqa: BLE001 — stale/dead cached connection
             _local_conn_cache.pop(path, None)
@@ -449,6 +450,10 @@ def _open_local_engine(path: str):
         try:
             conn = _CachedLocalConn(_local_turso.connect(path))
             _local_conn_cache[path] = conn
+            # Un-degrade: the sqlite3 fallback is never cached, so every
+            # connect() already retries Turso. Only the FLAG was sticky, so
+            # route() kept saying "degraded" long after the lock holder exited.
+            DEGRADED_PATHS.discard(path)
             return conn
         except Exception as e:  # noqa: BLE001 — transient concurrent-open race
             last = e
