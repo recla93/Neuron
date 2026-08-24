@@ -639,12 +639,12 @@ async def list_tools() -> list[Tool]:
                     "mode": {
                         "type": "string",
                         "enum": ["semantic", "focus", "pattern"],
-                        "description": "Modalità di retrieval: semantic (default), focus (boost sul compito attivo), pattern (prossimo passo da schemi ricorrenti). Per i candidati inattesi serve gray_matter_brainstorm: richiede il grafo intero piú i chunk, che una modalità non ha.",
+                        "description": "Retrieval mode: semantic (default), focus (boosts the active task), pattern (next step from recurring patterns). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
                         "default": "semantic",
                     },
                     "focus": {
                         "type": "string",
-                        "description": "Compito attivo per la modalità focus (iniettato dal proxy GM dal blackboard).",
+                        "description": "Active task for focus mode (injected by the GM proxy from the blackboard).",
                         "default": "",
                     },
                 },
@@ -971,17 +971,17 @@ async def list_tools() -> list[Tool]:
                     "mode": {
                         "type": "string",
                         "enum": ["semantic", "focus", "pattern"],
-                        "description": "Modalità di retrieval: semantic (default), focus (boost sul compito attivo), pattern (prossimo passo da schemi ricorrenti). Per i candidati inattesi serve gray_matter_brainstorm: richiede il grafo intero piú i chunk, che una modalità non ha.",
+                        "description": "Retrieval mode: semantic (default), focus (boosts the active task), pattern (next step from recurring patterns). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
                         "default": "semantic",
                     },
                     "focus": {
                         "type": "string",
-                        "description": "Compito attivo per la modalità focus (iniettato dal proxy GM dal blackboard).",
+                        "description": "Active task for focus mode (injected by the GM proxy from the blackboard).",
                         "default": "",
                     },
                     "fact_nodes": {
                         "type": "integer",
-                        "description": f"Quanti nodi in cima alla classifica contribuiscono facts/files (default {FACT_NODES}, minimo 1). Alzalo per un richiamo più largo, abbassalo a 1 per il solo nodo primo.",
+                        "description": f"How many top-ranked nodes contribute facts/files (default {FACT_NODES}, minimum 1). Raise it for broader recall, drop it to 1 for the top node only.",
                         "default": FACT_NODES,
                         "minimum": 1,
                     },

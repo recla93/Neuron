@@ -1685,10 +1685,11 @@ class Graph:
             if _vec_incompatible:
                 import sys as _sys
                 print(
-                    f"neuron: store '{path}' ha vettori del modello '{_stored_model}' "
-                    f"(dim {_stored_dim}) ma il modello attivo e' '{EMBED_MODEL}' "
-                    f"(dim {VECTOR_DIM}). Vettori salvati IGNORATI (ricalcolati col "
-                    f"modello attivo). Rigenera: python scripts/reembed.py",
+                    f"neuron: store '{path}' holds vectors from model "
+                    f"'{_stored_model}' (dim {_stored_dim}) but the active model is "
+                    f"'{EMBED_MODEL}' (dim {VECTOR_DIM}). Stored vectors are IGNORED "
+                    f"and recomputed with the active model. Regenerate them with: "
+                    f"python scripts/reembed.py",
                     file=_sys.stderr,
                 )
 
