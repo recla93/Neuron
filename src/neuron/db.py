@@ -95,7 +95,13 @@ def route() -> str:
     change the engine under you owes you that word.
     """
     if DEGRADED_PATHS:
-        return "sqlite!degraded"
+        # Name the files. The flag is process-global but the degrade is
+        # per-path: one stale entry — a context nobody reopens — made the whole
+        # status line say "degraded" while the ACTIVE graph was happily on
+        # Turso. That ambiguity cost a full afternoon of bisecting the wrong
+        # thing; the filename would have answered it in a second.
+        names = ",".join(sorted(os.path.basename(x) for x in DEGRADED_PATHS))
+        return f"sqlite!degraded({names})"
     if REMOTE_TURSO:
         return "turso-cloud"
     if LOCAL_TURSO_ENGINE:
@@ -460,8 +466,21 @@ def _open_local_engine(path: str):
             _time.sleep(0.05 * (attempt + 1))
             _ensure_parent_dir(path)
     import sys as _sys
-    print(f"neuron: local Turso open failed ({last!r}) after retries — degrading "
-          f"to sqlite3 for this connection (L2 guard).", file=_sys.stderr)
+    # Say WHY. "open failed, degrading" covers two different worlds: a broken
+    # file, and the ordinary case of a second process holding the same graph.
+    # The engine takes an EXCLUSIVE lock and never releases it while the owner
+    # lives, so the second opener is locked out by design, not by accident —
+    # and the fallback is not free: sqlite3 cannot read a pending libSQL WAL,
+    # so a degraded process can read stale state and write over it.
+    if "Locking" in repr(last) or "os error 33" in repr(last):
+        print(f"neuron: '{os.path.basename(path)}' is already open in another "
+              f"process (exclusive lock) — this one degrades to sqlite3 and "
+              f"loses native vector SQL. Use ONE writer per graph: close the "
+              f"other client, or put Gray-Matter in front as the single writer.",
+              file=_sys.stderr)
+    else:
+        print(f"neuron: local Turso open failed ({last!r}) after retries — degrading "
+              f"to sqlite3 for this connection (L2 guard).", file=_sys.stderr)
     DEGRADED_PATHS.add(path)
     return _sqlite3.connect(path)
 
