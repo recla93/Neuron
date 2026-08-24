@@ -25,7 +25,12 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-NS_EMBED_MODEL = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2").strip()
+# Single source of truth: models.py already resolves NS_EMBED_MODEL (env, then
+# the shipped default). Duplicating the default here had drifted to the OLD
+# model, so a bare `python scripts/reembed.py` re-embedded with the very model
+# the mismatch warning tells you to migrate AWAY from — cementing the bug it
+# was advertised to fix. Import is stdlib-only and costs ~0.3s.
+from neuron.models import EMBED_MODEL as NS_EMBED_MODEL
 
 
 # ---------------------------------------------------------------------------
