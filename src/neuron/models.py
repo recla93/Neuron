@@ -906,6 +906,13 @@ class Graph:
         return removed
 
     def increment_inactivity(self, active_sources: set[str]) -> None:
+        # Confronto su chiavi NORMALIZZATE (fix 2026-08-25): link e nodi sono
+        # memorizzati normalizzati (_norm in add_link/add_node), ma
+        # active_sources arrivava raw da set(keywords) e la curation preserva
+        # il caso superficiale — un keyword "Spring" usato a ogni turno non
+        # azzerava i propri link, che scadevanlo comunque. Stessa normalizzazione
+        # di reinforce_coactivation.
+        active = {self._norm(k) for k in active_sources}
         # A1 (Piano 05, closes the T12/Fase 2 residual): only the links that are
         # ACTIVE this turn get persisted (their last_active_turn changes). The
         # in-memory ``inactive_turns`` of every other link still ticks up — the
@@ -915,14 +922,14 @@ class Graph:
         # so inactive links no longer need an O(total links) re-upsert per turn.
         # On Turso Cloud that was O(L) network rows per turn.
         for lk in self.links:
-            if lk.source in active_sources or lk.target in active_sources:
+            if lk.source in active or lk.target in active:
                 lk.inactive_turns = 0
                 lk.last_active_turn = self.turn_count
                 self._dirty_links.add(self._link_key(lk))
             else:
                 lk.inactive_turns += 1   # in-memory only; derived on load
         for nd in self.nodes:
-            if nd.keyword not in active_sources and nd.salience > 0:
+            if nd.keyword not in active and nd.salience > 0:
                 if (self.turn_count - nd.turn) > SALIENCE_DECAY_THRESHOLD:
                     nd.salience = max(0, nd.salience - SALIENCE_DECAY_AMOUNT)
                     self._dirty_nodes.add(nd.keyword)   # only decayed nodes

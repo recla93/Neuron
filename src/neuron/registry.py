@@ -411,15 +411,49 @@ class GraphRegistry:
                 except FileNotFoundError:
                     break
 
+    def _delete_context_rows(self, contexts: list[str] | None) -> None:
+        """Cancella le righe di un contesto dallo STORE, qualunque sia il tier.
+        ``contexts=None`` = tutti i contesti del store (reset totale).
+
+        Sul Turso Cloud il grafo vive nelle tabelle condivise (connect ignora
+        il path): prima del 2026-08-25 reset unlinkava solo eventuali file
+        locali stantii e svuotava la memoria — e il reload ripartiva dal cloud
+        IDENTICO, rispondendo "Graph reset." a un wipe che non era avvenuto.
+        NB: se più macchine condividono lo STESSO DB via env, il reset totale
+        è condiviso anche per loro — è il contratto del tool."""
+        conn = _db.connect(self._db_path(contexts[0] if contexts else "default"))
+        try:
+            marks = ",".join("?" * len(contexts)) if contexts else None
+            for table in ("episodes", "refs", "_graveyard", "node_vectors",
+                          "links", "nodes"):
+                sql = (f"DELETE FROM {table} WHERE context IN ({marks})"
+                       if contexts else f"DELETE FROM {table}")
+                try:
+                    conn.execute(sql, tuple(contexts) if contexts else ())
+                except Exception as e:  # noqa: BLE001 — tabella assente: prosegui
+                    log.debug("reset: skip %s: %s", table, e)
+            conn.commit()
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
     def reset(self, context: str | None = None) -> None:
         if context:
             ctx = context.lower().strip("/")
-            db  = self._db_path(ctx)
+            if _db.REMOTE_TURSO:
+                self._delete_context_rows([ctx])
+            db = self._db_path(ctx)
             if os.path.exists(db):
                 self._unlink_db(db)
             self._graphs.pop(ctx, None)
             self._seed_loaded.discard(ctx)
         else:
+            if _db.REMOTE_TURSO:
+                # Reset totale: sul cloud il store È la memoria dell'utente,
+                # si spazzano tutti i contesti presenti, non solo i caricati.
+                self._delete_context_rows(None)
             for ctx in list(self._graphs):
                 db = self._db_path(ctx)
                 if os.path.exists(db):
