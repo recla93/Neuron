@@ -224,3 +224,31 @@ def test_pre_turn_serves_a_ready_confirm_call(_isolated):
     # le keyword proposte sono quelle servite dal turno, non un segnaposto
     suggerite = recall.split("confirm(keywords=")[1].split(")")[0]
     assert '"ada"' in suggerite, f"suggerite: {suggerite}, attesa 'ada'"
+
+
+def test_the_hint_has_a_kill_switch(_isolated, monkeypatch):
+    """NEURON_CONFIRM_HINT=0 torna al comportamento precedente: nessuna riga,
+    nessun costo. Una feature senza interruttore e' una dipendenza."""
+    monkeypatch.setenv("NEURON_CONFIRM_HINT", "0")
+    _call("store_turn", {"topic": "pranzo con Ada",
+                         "keywords": ["ada", "pranzo"]})
+    recall = _call("pre_turn", {"topic": "ada", "keywords": ["ada"]})
+    assert "confirm(keywords=" not in recall, recall
+
+
+def test_confirm_has_a_cooldown(_isolated):
+    """Con l'hint nel pre_turn il confirm e' a attrito zero: senza antirimbalzo
+    un modello riflessivo gonfia salience/trust dello stesso nodo a ogni turno
+    e diluisce il segnale. Seconda conferma nello stesso turno -> cooled, non
+    applicata."""
+    _call("store_turn", {"topic": "pranzo con Ada",
+                         "keywords": ["ada", "pranzo"]})
+    first = _call("confirm", {"keywords": ["ada"]})
+    assert '"cooled"' not in first, first
+
+    again = _call("confirm", {"keywords": ["ada"]})
+    assert '"cooled": ["ada"]' in again, again
+
+    # il refute non entra nel cooldown: degradare deve restare sempre possibile
+    dis = _call("dismiss", {"keywords": ["ada"], "penalty": 1})
+    assert '"dismissed"' in dis.lower(), dis

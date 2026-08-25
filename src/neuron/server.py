@@ -2153,7 +2153,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # la riga sta DOPO il budget (mai troncata) ma deve costare poco — due
     # keyword top e tre parole di testo, ~12 token. Solo con contenuto servito.
     _served = [kw for kw, _sc in nodes_pt[:2]]
-    if _served:
+    if _served and _confirm_hint_enabled():
         tail += ("\n→ useful? confirm(keywords="
                  f"{json.dumps(_served, ensure_ascii=False)})")
     out_pt = out_pt[:char_budget_pt] + staged_line + stim_line + tail
@@ -2167,11 +2167,21 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
         confidence = min(1.0, max(-1.0, float(arguments.get("confidence", 1.0))))
     except (TypeError, ValueError):
         confidence = 1.0
+    # Antirimbalzo: con l'hint nel pre_turn il confirm costa zero sforzo e un
+    # modello per riflessivo lo ripeterebbe a ogni turno, gonfiando salience e
+    # trust fino a diluire il segnale. Stessa idea di HEBBIAN_COOLDOWN.
+    cooldown = _config.env_int("NEURON_CONFIRM_COOLDOWN", 2) if confidence >= 0 else 0
     confirmed: list[str] = []
     skipped:   list[str] = []
+    cooled:    list[str] = []
     for kw in keywords:
         nd = g.get_node(kw)
         if nd:
+            last = g._confirm_at.get(nd.keyword)
+            if cooldown and last is not None and g.turn_count - last < cooldown:
+                cooled.append(kw)      # rinforzo rimandato, nodo già caldo
+                continue
+            g._confirm_at[nd.keyword] = g.turn_count
             if confidence >= 0:      # un refute non deve anche premiare la salience
                 nd.salience += boost
             nd.trust = max(0.0, nd.trust + confidence)
@@ -2189,7 +2199,14 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
         "boost": boost,
         "confidence": confidence,
         "skipped": skipped,
+        **({"cooled": cooled} if cooled else {}),
     }, ensure_ascii=False))]
+
+
+def _confirm_hint_enabled() -> bool:
+    """Kill switch dell'hint nel pre_turn: NEURON_CONFIRM_HINT=0."""
+    return os.environ.get("NEURON_CONFIRM_HINT", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
 
 
 async def _tool_dismiss(arguments: dict, ctx: str, g) -> list[TextContent]:

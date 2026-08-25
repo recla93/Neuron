@@ -301,6 +301,12 @@ class Graph:
     # Persisted in meta table, survives restarts. Entries expire after
     # SESSION_CACHE_TURNS turns without being mentioned/confirmed.
     _session_cache: dict = field(default_factory=dict)   # {keyword: {"turn": int, "score": float}}
+    # Antirimbalzo del confirm (2026-08-25): keyword -> ultimo turn_count in cui
+    # un confirm l'ha rinforzata. RUNTIME ONLY (non serializzato): con la riga
+    # "useful? confirm(...)" nel pre_turn il confirm è a attrito zero e senza
+    # cooldown lo stesso nodo verrebbe gonfiato a ogni turno. Stesso schema di
+    # HEBBIAN_COOLDOWN; NEURON_CONFIRM_COOLDOWN=0 lo disattiva.
+    _confirm_at: dict = field(default_factory=dict)
     # Save mode for the next write:
     #   _needs_full_write  — upsert EVERY in-memory row (not just the dirty delta),
     #     additively (no deletes). Needed when the store may be missing rows we
