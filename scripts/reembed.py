@@ -63,18 +63,22 @@ def reembed_conn(conn, embed_fn, pack_fn, dim: int, model_name: str, dry_run: bo
     if dry_run:
         return {"nodes": len(rows), "contexts": contexts, "dry_run": True}
 
-    for ctx, kw in rows:
-        blob = pack_fn(embed_fn(kw))
+    # Embed EVERYTHING before the first write: an embed failure mid-loop must
+    # not leave a half-old/half-new vector space behind an OLD model stamp.
+    # Autocommitting engines land every statement immediately, so write-as-you-
+    # go poisoned the space on any crash (2026-08-25).
+    payloads = [(ctx, kw, pack_fn(embed_fn(kw))) for ctx, kw in rows]
+
+    for ctx, kw, blob in payloads:
         conn.execute(
             "INSERT OR REPLACE INTO node_vectors (context, keyword, embedding, dim) VALUES (?,?,?,?)",
             (ctx, kw, blob, dim),
         )
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('embed_model', ?)", (model_name,))
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('embed_dim', ?)", (str(dim),))
-    try:
-        conn.commit()
-    except Exception:
-        pass
+    # Loud commit: a swallowed failure here reported success while nothing was
+    # stamped — worse than an honest error.
+    conn.commit()
     return {"nodes": len(rows), "contexts": contexts, "dry_run": False}
 
 
@@ -144,8 +148,10 @@ def main(argv=None) -> int:
         print(f"Tier: {_db.ENGINE_NAME} — store condiviso remoto")
         targets.append(("<remote Turso>", _db.connect("")))
     else:
-        graphs_dir = os.environ.get("NS_GRAPHS_DIR") or os.path.join(
-            os.path.expanduser("~"), ".local", "share", "neuron", "graphs")
+        # SSOT resolution (env override -> per-user dir): the hardcoded POSIX
+        # fallback found NO databases on a stock Windows install.
+        from neuron.config import graphs_dir as _graphs_dir
+        graphs_dir = os.environ.get("NS_GRAPHS_DIR") or _graphs_dir()
         graphs_dir = os.path.normpath(graphs_dir)
         paths = _discover_local_dbs(graphs_dir, args.context, args.db)
         if not paths:

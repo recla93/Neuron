@@ -179,8 +179,11 @@ def _search_embeddings(
         db_paths = []
         if s._seed_usable(seed_path):
             db_paths.append(seed_path)
+        # On the Turso Cloud tier saves go to the shared store: a local
+        # graph_<ctx>.db is a FROZEN SNAPSHOT, and max-per-keyword merging let
+        # its outdated vectors outrank current cloud ones (ghost concepts).
         adp = s._active_db_path()
-        if adp and os.path.exists(adp):
+        if adp and os.path.exists(adp) and not getattr(s._db, "REMOTE_TURSO", False):
             db_paths.append(adp)
         # MERGE across all DBs; keep the max sim per keyword, then rank.
         merged: dict[str, float] = {}
@@ -376,6 +379,15 @@ def cross_context_matches(query_vec, active_ctx: str, graphs_dir: str,
     import glob
     if not CROSS_ENABLED or not query_vec:
         return []
+    # On the Turso Cloud tier the local graph files are stale snapshots:
+    # cross-context recall over them surfaces fossils, not other contexts'
+    # real state. Read-only extra — better honest-empty than wrong.
+    try:
+        from neuron import db as _db
+        if getattr(_db, "REMOTE_TURSO", False):
+            return []
+    except Exception:  # noqa: BLE001
+        pass
     top_n = top_n or CROSS_TOP_N
     threshold = threshold or CROSS_SIM
     s = _S()

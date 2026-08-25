@@ -1,5 +1,5 @@
 """One-time migration: populate node_vectors in existing base_knowledge.db.
-Run once, then commit the updated seed. Removes node_vectors-wal if present.
+Run once, then commit the updated seed. Removes a stale -wal BEFORE opening.
 """
 import os, sys, struct, time
 
@@ -9,10 +9,13 @@ SEED = os.path.normpath(SEED)
 from neuron import db as sqlite3
 TURSO = sqlite3.LOCAL_TURSO_ENGINE
 
+# SSOT: models.py resolves NS_EMBED_MODEL. The hardcoded retired model here is
+# exactly the drift reembed.py's header documents as a past bug.
+from neuron.models import EMBED_MODEL as _MODEL_NAME
 from fastembed import TextEmbedding
-_embedder = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+_embedder = TextEmbedding(_MODEL_NAME)
 DIM = 384
-print("fastembed — 384-dim vectors")
+print(f"fastembed — {DIM}-dim vectors ({_MODEL_NAME})")
 
 
 def _get_embedding(text: str) -> list[float]:
@@ -28,11 +31,14 @@ def main():
         print(f"Seed not found: {SEED}")
         sys.exit(1)
 
-    conn = sqlite3.connect(SEED)
+    # Stale -wal must go BEFORE the connection opens: deleting a live database's
+    # WAL can lose committed-but-not-checkpointed data.
     wal = str(SEED) + "-wal"
     if os.path.exists(wal):
         os.remove(wal)
         print("Removed stale -wal file")
+
+    conn = sqlite3.connect(SEED)
 
     kw_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
     existing_vecs = conn.execute("SELECT COUNT(*) FROM node_vectors").fetchone()[0]
