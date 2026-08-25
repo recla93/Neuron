@@ -301,11 +301,11 @@ class Graph:
     # Persisted in meta table, survives restarts. Entries expire after
     # SESSION_CACHE_TURNS turns without being mentioned/confirmed.
     _session_cache: dict = field(default_factory=dict)   # {keyword: {"turn": int, "score": float}}
-    # Antirimbalzo del confirm (2026-08-25): keyword -> ultimo turn_count in cui
-    # un confirm l'ha rinforzata. RUNTIME ONLY (non serializzato): con la riga
-    # "useful? confirm(...)" nel pre_turn il confirm è a attrito zero e senza
-    # cooldown lo stesso nodo verrebbe gonfiato a ogni turno. Stesso schema di
-    # HEBBIAN_COOLDOWN; NEURON_CONFIRM_COOLDOWN=0 lo disattiva.
+    # Confirm anti-bounce (2026-08-25): keyword -> last turn_count a confirm
+    # reinforced it. RUNTIME ONLY (not serialised): with the "useful? confirm(...)"
+    # line in pre_turn, confirming costs zero effort and without a cooldown the
+    # same node would be inflated every single turn. Same pattern as
+    # HEBBIAN_COOLDOWN; NEURON_CONFIRM_COOLDOWN=0 disables it.
     _confirm_at: dict = field(default_factory=dict)
     # Save mode for the next write:
     #   _needs_full_write  — upsert EVERY in-memory row (not just the dirty delta),
@@ -912,12 +912,11 @@ class Graph:
         return removed
 
     def increment_inactivity(self, active_sources: set[str]) -> None:
-        # Confronto su chiavi NORMALIZZATE (fix 2026-08-25): link e nodi sono
-        # memorizzati normalizzati (_norm in add_link/add_node), ma
-        # active_sources arrivava raw da set(keywords) e la curation preserva
-        # il caso superficiale — un keyword "Spring" usato a ogni turno non
-        # azzerava i propri link, che scadevanlo comunque. Stessa normalizzazione
-        # di reinforce_coactivation.
+        # Compare on NORMALIZED keys (fix 2026-08-25): links and nodes are stored
+        # normalized (_norm in add_link/add_node) but active_sources arrived raw
+        # from set(keywords), and curation deliberately preserves surface case —
+        # a "Spring" keyword used every turn never reset its own links, which
+        # expired anyway. Same normalization as reinforce_coactivation.
         active = {self._norm(k) for k in active_sources}
         # A1 (Piano 05, closes the T12/Fase 2 residual): only the links that are
         # ACTIVE this turn get persisted (their last_active_turn changes). The

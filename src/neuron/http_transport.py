@@ -32,12 +32,12 @@ def _bearer_token() -> str:
 
 
 def _refuse_open_bind(host: str) -> bool:
-    """True se il bind non-loopback senza token deve essere rifiutato.
+    """True when a non-loopback bind without a token must be refused.
 
-    Un endpoint MCP su 0.0.0.0 (o dietro tunnel) SENZA shared secret espone
-    l'intera superficie MCP a chiunque lo raggiunga: si rifiuta all'avvio,
-    rumorosamente. NEURON_BRIDGE_ALLOW_OPEN=1 è la via di fuga per chi sa
-    cosa sta facendo."""
+    An MCP endpoint on 0.0.0.0 (or behind a tunnel) WITHOUT a shared secret
+    exposes the whole MCP surface to whoever reaches it: refuse loudly at
+    startup. NEURON_BRIDGE_ALLOW_OPEN=1 is the escape hatch for people who
+    know what they are doing."""
     loopback = {"127.0.0.1", "localhost", "::1", ""}
     if host in loopback:
         return False
@@ -67,8 +67,8 @@ def serve(app, host: str = "127.0.0.1", port: int = 8000,
     """
     import hmac
 
-    # La guardia PRIMA di ogni import: rifiutare un bind aperto non deve
-    # dipendere da uvicorn/mcp (e nella suite il mcp finto non ha il manager).
+    # The guard BEFORE any import: refusing an open bind must not depend on
+    # uvicorn/mcp being importable.
     if _refuse_open_bind(host):
         print(
             f"neuron bridge: refusing to bind {host} without NEURON_BRIDGE_TOKEN "

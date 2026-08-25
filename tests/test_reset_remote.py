@@ -16,9 +16,9 @@ from neuron import registry as _registry         # noqa: E402
 
 
 def _cloud_stub():
-    """Un store 'cloud' condiviso in memoria con lo schema vero."""
+    """A shared in-memory 'cloud' store with the real schema."""
     conn = sqlite3.connect(":memory:")
-    # _create_store_schema non tocca self: basta l'istanza vuota per il DDL
+    # _create_store_schema never touches self: an empty instance is enough for the DDL
     g = _registry.Graph.__new__(_registry.Graph)
     g._create_store_schema(conn, "test")
     conn.execute("INSERT INTO nodes (context, keyword, salience) VALUES ('test','ada',5)")
@@ -29,8 +29,8 @@ def _cloud_stub():
 
 
 class _SharedConn:
-    """Ogni connect() remoto è una connessione nuova; qui invece il test
-    riusa lo stesso sqlite3, quindi close() non deve chiudere davvero."""
+    """Each remote connect() returns a fresh connection; this test reuses the
+    same sqlite3 instead, so close() must not actually close it."""
 
     def __init__(self, inner):
         self._inner = inner
@@ -56,7 +56,7 @@ def test_reset_on_remote_tier_deletes_rows(monkeypatch, tmp_path):
     for table in ("nodes", "links", "node_vectors", "episodes", "refs", "_graveyard"):
         n = cloud.execute(f"SELECT COUNT(*) FROM {table} "
                           "WHERE context='test'").fetchone()[0]
-        assert n == 0, f"{table}: il contesto non è stato svuotato"
+        assert n == 0, f"{table}: context not wiped"
 
 
 def test_reset_all_on_remote_tier_sweeps_every_context(monkeypatch, tmp_path):
@@ -71,4 +71,4 @@ def test_reset_all_on_remote_tier_sweeps_every_context(monkeypatch, tmp_path):
     reg.reset()
 
     n = cloud.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-    assert n == 0, "il reset totale ha lasciato righe nel cloud"
+    assert n == 0, "full reset left rows in the cloud"

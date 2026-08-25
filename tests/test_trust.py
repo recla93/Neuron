@@ -101,11 +101,11 @@ def test_confirm_confidence_raises_trust():
             {"keywords": ["kafka"], "confidence": 0.4}, "", g))
         assert g.get_node("kafka").trust == pytest.approx(0.4)
         assert '"confidence": 0.4' in out[0].text
-        # clamp: >1 → 1.0 — ma il secondo confirm cade NEL COOLDOWN
-        # (2026-08-25): stesso turno, il rinforzo è rimandato, non sommato.
+        # clamp: >1 → 1.0 — but the second confirm falls INSIDE THE COOLDOWN
+        # (2026-08-25): same turn, reinforcement is deferred, not summed.
         second = asyncio.run(srv._tool_confirm({"keywords": ["kafka"], "confidence": 7}, "", g))
         assert '"cooled"' in second[0].text
-        # turno dopo: il cooldown è scaduto e il clamp a 1.0 si applica
+        # next turn: cooldown expired and the 1.0 clamp applies
         g.turn_count += srv._config.env_int("NEURON_CONFIRM_COOLDOWN", 2)
         asyncio.run(srv._tool_confirm({"keywords": ["kafka"], "confidence": 7}, "", g))
     finally:

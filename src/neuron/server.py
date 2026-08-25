@@ -112,9 +112,9 @@ SEMANTIC_DEDUP_THRESHOLD = 0.90
 
 
 
-# Enum chiusi dichiarati anche nello schema MCP: validati qui così un client
-# che manda "Strong"/"high" viene rifiitato al confine invece di crascare dopo
-# che add_link ha già mutato il grafo (WEIGHT_ORDER[lk.weight] → KeyError).
+# Closed enums, also declared in the MCP schema: validated here so a client
+# sending "Strong"/"high" is rejected at the boundary instead of crashing after
+# add_link already mutated the graph (WEIGHT_ORDER[lk.weight] → KeyError).
 VALID_LINK_TYPES = {"cause-effect", "analogy", "evolution", "contrast",
                     "deepening", "instance-of"}
 VALID_WEIGHTS = {"strong", "medium", "tangential"}
@@ -158,8 +158,8 @@ def validate_turn_input(keywords: list[str], topic: str, links: list[dict],
 
 
 def _clamp_int(raw, default: int, lo: int, hi: int) -> int:
-    """Feedback numerico dal modello: mai fidato. Fuori range → clamp,
-    non-numero → default. (int('abc') non deve uccidere il tool.)"""
+    """Numeric feedback from the model: never trusted. Out of range → clamp,
+    not-a-number → default. (int('abc') must not kill the tool.)"""
     try:
         return max(lo, min(int(raw), hi))
     except (TypeError, ValueError):
@@ -2149,9 +2149,9 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             if (staged_line or stim_line) else
             "\n→ next: fold this context into your reply silently, then call "
             "store_turn(topic, keywords, links) to persist the turn.")
-    # Enforcing del ciclo di rinforzo (2026-08-25), versione a basso costo:
-    # la riga sta DOPO il budget (mai troncata) ma deve costare poco — due
-    # keyword top e tre parole di testo, ~12 token. Solo con contenuto servito.
+    # Reinforcement-loop enforcement (2026-08-25), low-cost edition: the line
+    # sits AFTER the budget (never truncated) but must stay cheap — top-2
+    # keywords, three words of prose, ~12 tokens. Only with content served.
     _served = [kw for kw, _sc in nodes_pt[:2]]
     if _served and _confirm_hint_enabled():
         tail += ("\n→ useful? confirm(keywords="
@@ -2167,9 +2167,9 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
         confidence = min(1.0, max(-1.0, float(arguments.get("confidence", 1.0))))
     except (TypeError, ValueError):
         confidence = 1.0
-    # Antirimbalzo: con l'hint nel pre_turn il confirm costa zero sforzo e un
-    # modello per riflessivo lo ripeterebbe a ogni turno, gonfiando salience e
-    # trust fino a diluire il segnale. Stessa idea di HEBBIAN_COOLDOWN.
+    # Anti-bounce: with the hint in pre_turn, confirming costs zero effort and
+    # a reflexive model would repeat it every turn, inflating salience and
+    # trust until the signal dilutes. Same idea as HEBBIAN_COOLDOWN.
     cooldown = _config.env_int("NEURON_CONFIRM_COOLDOWN", 2) if confidence >= 0 else 0
     confirmed: list[str] = []
     skipped:   list[str] = []
@@ -2179,7 +2179,7 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
         if nd:
             last = g._confirm_at.get(nd.keyword)
             if cooldown and last is not None and g.turn_count - last < cooldown:
-                cooled.append(kw)      # rinforzo rimandato, nodo già caldo
+                cooled.append(kw)      # reinforcement deferred, node still hot
                 continue
             g._confirm_at[nd.keyword] = g.turn_count
             if confidence >= 0:      # un refute non deve anche premiare la salience
@@ -2204,7 +2204,7 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 
 def _confirm_hint_enabled() -> bool:
-    """Kill switch dell'hint nel pre_turn: NEURON_CONFIRM_HINT=0."""
+    """Kill switch for the pre_turn hint: NEURON_CONFIRM_HINT=0."""
     return os.environ.get("NEURON_CONFIRM_HINT", "1").strip().lower() \
         not in ("0", "false", "no", "off")
 

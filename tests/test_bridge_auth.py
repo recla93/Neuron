@@ -1,7 +1,7 @@
-"""Il bridge HTTP non si pubblica aperto senza chiave.
+"""The HTTP bridge must not publish itself open without a key.
 
-keep-in-sync con neurag/tests/test_bridge_auth.py: stesso attacco, stessa
-difesa, env con prefisso NEURON_.
+keep-in-sync with neurag/tests/test_bridge_auth.py: same attack, same defense,
+env prefixed NEURON_.
 """
 import sys
 from pathlib import Path

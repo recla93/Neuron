@@ -175,7 +175,7 @@ class SemanticNetwork:
         active = self.get_active_links()
         return sorted(
             active,
-            # .get: righe legacy con weight fuori enum non devono crascare il sort
+            # .get: legacy rows with an out-of-enum weight must not crash the sort
             key=lambda lk: (WEIGHT_ORDER.get(lk.weight, 0), -lk.inactive_turns),
             reverse=True,
         )[:n]

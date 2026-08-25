@@ -337,11 +337,11 @@ def _start_cli(argv) -> int:
         except (ValueError, OSError):
             pass  # PID file corrotto: ignora, sovrascriverà
 
-    # NATIVE transport: il bridge è `python -m neuron.bridge`, niente mcp-proxy.
-    # (resolve_proxy_runner è morto con l'era mcp-proxy e finiva nell'except
-    # qui sotto: ogni `neuron start` moriva su ImportError con un messaggio
-    # fuorviante. --no-check perché il poll+log-tail di seguito È il check,
-    # e il preflight da 3s dà falsi negativi sul warmup di fastembed.)
+    # NATIVE transport: the bridge is `python -m neuron.bridge`, no mcp-proxy.
+    # (resolve_proxy_runner died with the mcp-proxy era and ended in the except
+    # below: every `neuron start` died on ImportError with a misleading
+    # message. --no-check because the poll+log-tail below IS the check, and the
+    # 3s preflight gave false negatives during fastembed warmup.)
     full = [sys.executable, "-m", "neuron.bridge",
             f"--port={args.port}", f"--host={args.host}", "--no-check"]
 

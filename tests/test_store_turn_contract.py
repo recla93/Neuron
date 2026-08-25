@@ -171,10 +171,10 @@ def test_domain_declares_that_it_switches_the_context():
 
 
 def test_a_bad_weight_is_rejected_at_the_boundary(_isolated):
-    """Regression 2026-08-25: `weight` fuori enum ("Strong", "high") passava la
-    validazione, `add_link` mutava il grafo e POI `WEIGHT_ORDER[lk.weight]`
-    sollevava KeyError → l'intero turno perso e il grafo mezzo mutato.
-    L'enum va fatti rispettare al confine, prima di ogni mutazione."""
+    """Regression 2026-08-25: an out-of-enum `weight` ("Strong", "high") passed
+    validation, `add_link` mutated the graph and THEN WEIGHT_ORDER[lk.weight]
+    raised KeyError → whole turn lost, graph half-mutated. Enums must be
+    enforced at the boundary, before any mutation."""
     out = _call("store_turn", {
         "topic": "peso sbagliato",
         "keywords": ["ada", "pranzo"],
@@ -197,38 +197,38 @@ def test_a_bad_weight_is_rejected_at_the_boundary(_isolated):
 
 
 def test_dismiss_and_confirm_survive_hostile_numbers(_isolated):
-    """boost/penalty/trust_penalty arrivano dal modello: negativi (un penalty
-    NEGATIVO aumentava la salience), stringhe, float assurdi. Nessuno dei tre
-    deve crascare il tool né muovere i numeri nella direzione sbagliata."""
+    """boost/penalty/trust_penalty come from the model: negatives (a NEGATIVE
+    penalty used to INCREASE salience), strings, absurd floats. None of the
+    three may crash the tool or move the numbers the wrong way."""
     _call("store_turn", {"topic": "feedback", "keywords": ["ada"]})
 
     ok = _call("confirm", {"keywords": ["ada"], "boost": -50})
-    assert '"boost": 0' in ok, ok                      # clampato a 0, non -50
+    assert '"boost": 0' in ok, ok                      # clamped to 0, not -50
 
     weird = _call("confirm", {"keywords": ["ada"], "boost": "abc"})
-    assert '"boost": 2' in weird, weird                # default, non crash
+    assert '"boost": 2' in weird, weird                # default, no crash
 
     dis = _call("dismiss", {"keywords": ["ada"], "penalty": "abc",
                             "trust_penalty": -5})
-    assert '"dismissed"' in dis.lower(), dis           # default applicati, no crash
+    assert '"dismissed"' in dis.lower(), dis           # defaults applied, no crash
 
 
 def test_pre_turn_serves_a_ready_confirm_call(_isolated):
-    """Enforcing del rinforzo (2026-08-25): il confirm non puo' dipendere dalla
-    memoria del modello. Quando pre_turn serve contenuto, la risposta porta con
-    se la chiamata GIA' SCRITTA con le keyword esatte servite."""
+    """Reinforcement enforcement (2026-08-25): confirm must not depend on the
+    model's memory. When pre_turn serves content, the reply carries the ALREADY
+    WRITTEN call with the exact served keywords."""
     _call("store_turn", {"topic": "pranzo con Ada",
                          "keywords": ["ada", "pranzo", "venerdi"]})
     recall = _call("pre_turn", {"topic": "ada", "keywords": ["ada"]})
     assert "confirm(keywords=" in recall, recall
-    # le keyword proposte sono quelle servite dal turno, non un segnaposto
+    # suggested keywords are this turn's served ones, not a generic placeholder
     suggerite = recall.split("confirm(keywords=")[1].split(")")[0]
-    assert '"ada"' in suggerite, f"suggerite: {suggerite}, attesa 'ada'"
+    assert '"ada"' in suggerite, f"suggested: {suggerite}, expected 'ada'"
 
 
 def test_the_hint_has_a_kill_switch(_isolated, monkeypatch):
-    """NEURON_CONFIRM_HINT=0 torna al comportamento precedente: nessuna riga,
-    nessun costo. Una feature senza interruttore e' una dipendenza."""
+    """NEURON_CONFIRM_HINT=0 restores the previous behaviour: no line, no cost.
+    A feature without a switch is a dependency."""
     monkeypatch.setenv("NEURON_CONFIRM_HINT", "0")
     _call("store_turn", {"topic": "pranzo con Ada",
                          "keywords": ["ada", "pranzo"]})
@@ -237,10 +237,10 @@ def test_the_hint_has_a_kill_switch(_isolated, monkeypatch):
 
 
 def test_confirm_has_a_cooldown(_isolated):
-    """Con l'hint nel pre_turn il confirm e' a attrito zero: senza antirimbalzo
-    un modello riflessivo gonfia salience/trust dello stesso nodo a ogni turno
-    e diluisce il segnale. Seconda conferma nello stesso turno -> cooled, non
-    applicata."""
+    """With the pre_turn hint, confirming costs zero effort: without anti-bounce
+    a reflexive model inflates salience/trust on the same node every turn and
+    dilutes the signal. Second confirmation in the same turn -> cooled, not
+    applied."""
     _call("store_turn", {"topic": "pranzo con Ada",
                          "keywords": ["ada", "pranzo"]})
     first = _call("confirm", {"keywords": ["ada"]})
@@ -249,6 +249,6 @@ def test_confirm_has_a_cooldown(_isolated):
     again = _call("confirm", {"keywords": ["ada"]})
     assert '"cooled": ["ada"]' in again, again
 
-    # il refute non entra nel cooldown: degradare deve restare sempre possibile
+    # refutes bypass the cooldown: downgrading must always remain possible
     dis = _call("dismiss", {"keywords": ["ada"], "penalty": 1})
     assert '"dismissed"' in dis.lower(), dis
