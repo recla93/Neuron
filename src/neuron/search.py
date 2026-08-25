@@ -17,6 +17,7 @@ commit. Until then this file only owns LOGIC, byte-equivalent to the original.
 from __future__ import annotations
 
 import logging
+import os
 import weakref
 
 from neuron.extraction import DOMAIN_ALIASES
@@ -325,3 +326,86 @@ def _refine_domain(keywords: list[str]) -> tuple["str | None", list[str]]:
 
     alt = [d for d, sc in ranked[1:] if best_score - sc < TIE_MARGIN and d != "general"]
     return (best, alt)
+
+
+# ---------------------------------------------------------------------------
+# Cross-context recall (READ-ONLY)
+# ---------------------------------------------------------------------------
+# Perche' esiste. I contesti erano compartimenti stagni nei fatti, non nelle
+# intenzioni: i drift link nascono solo per OMONIMIA ESATTA fra due grafi
+# caricati (server.py, form_drift_link su `kw, kw`), e keyword scritte bene —
+# concettuali, specifiche, come il tool stesso chiede — non si ripetono fra
+# domini. Misurato su uno store reale: 191 keyword in `ai`, 144 in `default`,
+# ZERO in comune. Il canale c'era e non poteva scattare.
+#
+# Questa e' la meta' in LETTURA, e solo quella: nessun link viene creato, niente
+# tocca il disco. Se la soglia e' sbagliata si cambia una variabile d'ambiente e
+# non resta traccia nel grafo — al contrario di un drift scritto a tappeto, che
+# poi va ripulito. La promozione a link persistente, se mai, spetta a `confirm`:
+# solo i ponti che sono serviti davvero meritano di sopravvivere al turno.
+#
+# Costo, misurato: ~0.9 ms per grafo via `vector_distance_cos` nativo, contro i
+# 7.5 ms dell'embedding della query che si paga comunque. Quattro contesti in
+# piu' stanno sotto il rumore.
+#
+# Richiede il tier vettoriale SQL: senza (sqlite3 puro dopo un degrado L2) la
+# funzione tace invece di caricare in Python i vettori di ogni grafo. Un extra
+# di richiamo non giustifica una scansione lineare su tutto lo store.
+CROSS_ENABLED = os.environ.get(
+    "NEURON_CROSS_CONTEXT", "1").strip().lower() not in ("0", "false", "no", "off")
+# Alta di proposito. Il refine-domain usa 0.3, ma quello sceglie fra domini gia'
+# candidati; qui si pesca a strascico in archivi che non c'entrano, e il codice
+# stesso definisce i drift "the noisiest". Meglio due ponti veri che dieci forse.
+CROSS_SIM = float(os.environ.get("NEURON_CROSS_SIM", "0.55"))
+CROSS_TOP_N = int(os.environ.get("NEURON_CROSS_TOP_N", "2"))
+
+
+def cross_context_matches(query_vec, active_ctx: str, graphs_dir: str,
+                          top_n: int = 0, threshold: float = 0.0) -> list[tuple]:
+    """Concetti simili che vivono in ALTRI contesti. Ritorna [(ctx, keyword, sim)].
+
+    Interroga i file `graph_*.db` per path, senza istanziare i Graph: servono le
+    righe di `node_vectors`, non la memoria di lavoro di ogni contesto. Il lock
+    esclusivo di pyturso non e' un problema qui — vale fra processi, e queste
+    aperture stanno tutte in quello corrente, esattamente come `resolve_chain`
+    tiene gia' aperti corrente e default insieme.
+
+    Best-effort per costruzione: qualunque errore su un contesto lo salta. E'
+    un extra di richiamo, non deve poter far fallire un pre_turn.
+    """
+    import glob
+    if not CROSS_ENABLED or not query_vec:
+        return []
+    top_n = top_n or CROSS_TOP_N
+    threshold = threshold or CROSS_SIM
+    s = _S()
+    active_file = os.path.basename(
+        os.path.join(graphs_dir,
+                      f"graph_{active_ctx.replace('/', '__') if active_ctx != 'default' else 'default'}.db"))
+    query_blob = pack_vector(query_vec)
+    out: list[tuple] = []
+    for db in sorted(glob.glob(os.path.join(graphs_dir, "graph_*.db"))):
+        base = os.path.basename(db)
+        if base == active_file or not _seed_usable(db):
+            continue
+        ctx = base[len("graph_"):-len(".db")].replace("__", "/")
+        try:
+            conn = s._db.connect_local(db)
+            try:
+                rows = conn.execute(
+                    "SELECT keyword, sim FROM ("
+                    "  SELECT keyword, 1.0 - vector_distance_cos(embedding, ?) AS sim "
+                    "  FROM node_vectors"
+                    ") WHERE sim > ? ORDER BY sim DESC LIMIT ?",
+                    (query_blob, threshold, top_n),
+                ).fetchall()
+            finally:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            out.extend((ctx, kw, round(float(sim), 4)) for kw, sim in rows)
+        except Exception as e:  # noqa: BLE001 — motore senza vector SQL, file in uso, ...
+            log.debug("cross-context search skipped %s: %s", ctx, e)
+    out.sort(key=lambda r: -r[2])
+    return out[:top_n]
