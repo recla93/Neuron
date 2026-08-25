@@ -175,7 +175,8 @@ class SemanticNetwork:
         active = self.get_active_links()
         return sorted(
             active,
-            key=lambda lk: (WEIGHT_ORDER[lk.weight], -lk.inactive_turns),
+            # .get: righe legacy con weight fuori enum non devono crascare il sort
+            key=lambda lk: (WEIGHT_ORDER.get(lk.weight, 0), -lk.inactive_turns),
             reverse=True,
         )[:n]
 
@@ -867,7 +868,7 @@ class Neuron:
             # Update salience of involved nodes
             for nd in self._net.nodes:
                 if nd.keyword in (lk.source, lk.target):
-                    nd.salience += WEIGHT_ORDER[lk.weight]
+                    nd.salience += WEIGHT_ORDER.get(lk.weight, 2)
         self._net.increment_inactivity(active_sources)
 
     def _build_thread(self, extraction: Extraction, turn: int) -> str:

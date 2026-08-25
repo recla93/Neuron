@@ -112,6 +112,14 @@ SEMANTIC_DEDUP_THRESHOLD = 0.90
 
 
 
+# Enum chiusi dichiarati anche nello schema MCP: validati qui così un client
+# che manda "Strong"/"high" viene rifiitato al confine invece di crascare dopo
+# che add_link ha già mutato il grafo (WEIGHT_ORDER[lk.weight] → KeyError).
+VALID_LINK_TYPES = {"cause-effect", "analogy", "evolution", "contrast",
+                    "deepening", "instance-of"}
+VALID_WEIGHTS = {"strong", "medium", "tangential"}
+
+
 def validate_turn_input(keywords: list[str], topic: str, links: list[dict],
                         entities: list[str] | None = None,
                         tags: list[str] | None = None,
@@ -140,7 +148,29 @@ def validate_turn_input(keywords: list[str], topic: str, links: list[dict],
         rat = ld.get("rationale", "")
         if len(rat) > RATIONALE_MAX_LENGTH:
             return f"links[{j}].rationale: max {RATIONALE_MAX_LENGTH} caratteri"
+        ltype = ld.get("link_type", "deepening")
+        if ltype not in VALID_LINK_TYPES:
+            return f"links[{j}].link_type: non valida ({ltype!r})"
+        weight = ld.get("weight", "medium")
+        if weight not in VALID_WEIGHTS:
+            return f"links[{j}].weight: non valida ({weight!r})"
     return None
+
+
+def _clamp_int(raw, default: int, lo: int, hi: int) -> int:
+    """Feedback numerico dal modello: mai fidato. Fuori range → clamp,
+    non-numero → default. (int('abc') non deve uccidere il tool.)"""
+    try:
+        return max(lo, min(int(raw), hi))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_float(raw, default: float, lo: float, hi: float) -> float:
+    try:
+        return max(lo, min(float(raw), hi))
+    except (TypeError, ValueError):
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +271,7 @@ _vector_sql_ok = True
 from neuron.search import (  # noqa: E402
     _drop_seed_connection, _embed_one, _get_embedder, _get_embedding,
     _normalize_domain, _refine_domain, _search_embeddings, _seed_connection,
-    _seed_usable,
+    _seed_usable, cross_context_matches,
 )
 
 
@@ -1442,10 +1472,10 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             lk.weight = "medium"
         g.add_link(lk)
         if src:
-            src.salience += WEIGHT_ORDER[lk.weight]
+            src.salience += WEIGHT_ORDER.get(lk.weight, 2)
             g.mark_node_dirty(src.keyword)
         if tgt:
-            tgt.salience += WEIGHT_ORDER[lk.weight]
+            tgt.salience += WEIGHT_ORDER.get(lk.weight, 2)
             g.mark_node_dirty(tgt.keyword)
 
     g.last_sentiment = sentiment
@@ -1938,10 +1968,10 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
             lk.weight = "medium"
         g.add_link(lk)
         if src:
-            src.salience += WEIGHT_ORDER[lk.weight]
+            src.salience += WEIGHT_ORDER.get(lk.weight, 2)
             g.mark_node_dirty(src.keyword)
         if tgt:
-            tgt.salience += WEIGHT_ORDER[lk.weight]
+            tgt.salience += WEIGHT_ORDER.get(lk.weight, 2)
             g.mark_node_dirty(tgt.keyword)
 
     g.last_sentiment = extraction.sentiment
@@ -2049,6 +2079,22 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     _files.append(f)
         if _files:
             parts_pt.append("files: " + " | ".join(_files))
+    # Ponti verso ALTRI contesti (sola lettura, E3.5). I drift link nascono per
+    # omonimia esatta, e keyword scritte come il tool chiede — concettuali,
+    # specifiche — non si ripetono fra domini: misurate 191 in `ai` e 144 in
+    # `default`, zero in comune. Qui la somiglianza la decide il vettore, non la
+    # stringa. Nessun link viene scritto: se la soglia e' sbagliata si cambia
+    # NEURON_CROSS_SIM e il grafo non se ne accorge.
+    try:
+        if search_kws_pt:          # il flag lo controlla la funzione stessa
+            _cross = cross_context_matches(
+                _get_embedding(" ".join(sorted(search_kws_pt))),
+                _g.active, GRAPHS_DIR)
+            if _cross:
+                parts_pt.append("altri contesti: " + " | ".join(
+                    f"[{c}] {kw} ({sim:.2f})" for c, kw, sim in _cross))
+    except Exception as _e:  # noqa: BLE001 — extra di richiamo, mai fatale
+        log.debug("cross-context recall skipped: %s", _e)
     # Stessa regola del formato compatto di get_context: la nota sul metodo non
     # puo' far sembrare che ci sia contenuto. (keep-in-sync: le due liste sono
     # costruite in due posti, e questa e' gia' la seconda volta che si scrive.)
@@ -2104,13 +2150,22 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             if (staged_line or stim_line) else
             "\n→ next: fold this context into your reply silently, then call "
             "store_turn(topic, keywords, links) to persist the turn.")
+    # Enforcing del ciclo di rinforzo (2026-08-25): fino ad ora il confirm
+    # dipendeva tutta dalla disciplina del modello ("se ti serve, ricordalo").
+    # Quando c'è contenuto servito la riga diventa PRONTA: keyword esatte,
+    # chiamata già scritta, da copiare. Con "no context" nessun rinforzo ha
+    # senso e la riga non appare.
+    _served = [kw for kw, _sc in nodes_pt[:3]]
+    if _served:
+        tail += ("\n→ if this context helped your answer, reinforce it now: "
+                 f"confirm(keywords={json.dumps(_served, ensure_ascii=False)})")
     out_pt = out_pt[:char_budget_pt] + staged_line + stim_line + tail
     return [TextContent(type="text", text=out_pt)]
 
 
 async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     keywords = [str(k) for k in arguments.get("keywords", [])]
-    boost    = min(int(arguments.get("boost", 2)), 5)
+    boost    = _clamp_int(arguments.get("boost", 2), default=2, lo=0, hi=5)
     try:      # B1/C1 — graded feedback: [-1, 1]; negativa = refute (abbassa trust)
         confidence = min(1.0, max(-1.0, float(arguments.get("confidence", 1.0))))
     except (TypeError, ValueError):
@@ -2143,8 +2198,9 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
 async def _tool_dismiss(arguments: dict, ctx: str, g) -> list[TextContent]:
     """Suppress noisy/misleading nodes: lower salience and trust."""
     keywords    = [str(k) for k in arguments.get("keywords", [])]
-    penalty     = min(int(arguments.get("penalty", 3)), 5)
-    trust_panel = float(arguments.get("trust_penalty", 0.5))
+    penalty     = _clamp_int(arguments.get("penalty", 3), default=3, lo=0, hi=5)
+    trust_panel = _clamp_float(arguments.get("trust_penalty", 0.5),
+                               default=0.5, lo=0.0, hi=5.0)
     dismissed: list[str] = []
     skipped:   list[str] = []
     for kw in keywords:

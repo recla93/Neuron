@@ -168,3 +168,59 @@ def test_domain_declares_that_it_switches_the_context():
     assert "switch" in low, f"la conseguenza non è dichiarata: {desc}"
     assert "consecutive" in low, "manca la condizione che fa scattare lo switch"
     assert "general" in low, "manca come restare nel contesto corrente"
+
+
+def test_a_bad_weight_is_rejected_at_the_boundary(_isolated):
+    """Regression 2026-08-25: `weight` fuori enum ("Strong", "high") passava la
+    validazione, `add_link` mutava il grafo e POI `WEIGHT_ORDER[lk.weight]`
+    sollevava KeyError → l'intero turno perso e il grafo mezzo mutato.
+    L'enum va fatti rispettare al confine, prima di ogni mutazione."""
+    out = _call("store_turn", {
+        "topic": "peso sbagliato",
+        "keywords": ["ada", "pranzo"],
+        "links": [{"source": "ada", "target": "pranzo", "weight": "Strong"}],
+    })
+    assert "validation error" in out.lower(), out
+    assert "weight" in out.lower(), out
+
+    bad_type = _call("store_turn", {
+        "topic": "tipo sbagliato",
+        "keywords": ["ada", "pranzo"],
+        "links": [{"source": "ada", "target": "pranzo",
+                   "link_type": "causes-effect"}],
+    })
+    assert "validation error" in bad_type.lower(), bad_type
+
+    # e il turno NON è salvato: le keywords non esistono nel grafo
+    recall = _call("pre_turn", {"topic": "peso sbagliato", "keywords": ["pranzo"]})
+    assert "peso sbagliato" not in recall.lower() or "no context" in recall.lower()
+
+
+def test_dismiss_and_confirm_survive_hostile_numbers(_isolated):
+    """boost/penalty/trust_penalty arrivano dal modello: negativi (un penalty
+    NEGATIVO aumentava la salience), stringhe, float assurdi. Nessuno dei tre
+    deve crascare il tool né muovere i numeri nella direzione sbagliata."""
+    _call("store_turn", {"topic": "feedback", "keywords": ["ada"]})
+
+    ok = _call("confirm", {"keywords": ["ada"], "boost": -50})
+    assert '"boost": 0' in ok, ok                      # clampato a 0, non -50
+
+    weird = _call("confirm", {"keywords": ["ada"], "boost": "abc"})
+    assert '"boost": 2' in weird, weird                # default, non crash
+
+    dis = _call("dismiss", {"keywords": ["ada"], "penalty": "abc",
+                            "trust_penalty": -5})
+    assert '"dismissed"' in dis.lower(), dis           # default applicati, no crash
+
+
+def test_pre_turn_serves_a_ready_confirm_call(_isolated):
+    """Enforcing del rinforzo (2026-08-25): il confirm non puo' dipendere dalla
+    memoria del modello. Quando pre_turn serve contenuto, la risposta porta con
+    se la chiamata GIA' SCRITTA con le keyword esatte servite."""
+    _call("store_turn", {"topic": "pranzo con Ada",
+                         "keywords": ["ada", "pranzo", "venerdi"]})
+    recall = _call("pre_turn", {"topic": "ada", "keywords": ["ada"]})
+    assert "confirm(keywords=" in recall, recall
+    # le keyword proposte sono quelle servite dal turno, non un segnaposto
+    suggerite = recall.split("confirm(keywords=")[1].split(")")[0]
+    assert '"ada"' in suggerite, f"suggerite: {suggerite}, attesa 'ada'"
