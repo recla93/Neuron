@@ -301,23 +301,21 @@ def _start_cli(argv) -> int:
     """Avvia il server Neuron come processo background (bridge HTTP).
 
     DEPENDENCIES:
-    - neuron.bridge.resolve_proxy_runner: mcp-proxy (uv, uvx, o pipx)
+    - python -m neuron.bridge: trasporto nativo Streamable HTTP (MCP SDK)
     - neuron.paths.data_dir(): cartella dati per PID file
-    - subprocess.Popen con stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL
+    - subprocess.Popen con stdin=DEVNULL, stdout=log, stderr=STDOUT
 
     SAFETY CHECKS:
     1. PID file esistente + processo vivo → return 0 (no-op)
     2. PID file corrotto (ValueError/OSError) → viene ignorato, sovrascritto
-    3. mcp-proxy non trovato → return 1, messaggio stderr
-    4. bridge import fallisce → return 1, messaggio stderr
-    5. FileNotFoundError (exe non trovato) → return 1, messaggio stderr
-    6. Processo fallisce subito (poll != None dopo 1s) → PID file rimosso, return 1
-    7. Permessi insufficienti → PermissionError gestito, return 1
+    3. FileNotFoundError (exe non trovato) → return 1, messaggio stderr
+    4. Processo fallisce subito (poll != None entro 5s) → PID file rimosso,
+       coda del log stampata, return 1
+    5. Permessi insufficienti → PermissionError gestito, return 1
 
     FALLBACK:
     - Se PID file esistente ma processo morto → sovrascrive e avvia nuovo processo
     - Se PID file corrotto → viene ignorato, nuovo processo avviato
-    - Se mcp-proxy mancante → return 1 con messaggio chiaro
     """
     import argparse, json, os, subprocess, sys, time
     from pathlib import Path
@@ -339,17 +337,13 @@ def _start_cli(argv) -> int:
         except (ValueError, OSError):
             pass  # PID file corrotto: ignora, sovrascriverà
 
-    neuron_cmd = [sys.executable, "-m", "neuron"]
-    try:
-        from neuron.bridge import resolve_neuron_cmd, resolve_proxy_runner
-        proxy = resolve_proxy_runner()
-        if proxy is None:
-            print("mcp-proxy not found. Install uv or pipx.", file=sys.stderr)
-            return 1
-        full = proxy + [f"--port={args.port}", f"--host={args.host}", "--"] + neuron_cmd
-    except ImportError:
-        print("Bridge not available. Update Neuron.", file=sys.stderr)
-        return 1
+    # NATIVE transport: il bridge è `python -m neuron.bridge`, niente mcp-proxy.
+    # (resolve_proxy_runner è morto con l'era mcp-proxy e finiva nell'except
+    # qui sotto: ogni `neuron start` moriva su ImportError con un messaggio
+    # fuorviante. --no-check perché il poll+log-tail di seguito È il check,
+    # e il preflight da 3s dà falsi negativi sul warmup di fastembed.)
+    full = [sys.executable, "-m", "neuron.bridge",
+            f"--port={args.port}", f"--host={args.host}", "--no-check"]
 
     flags = 0
     if os.name == "nt":
