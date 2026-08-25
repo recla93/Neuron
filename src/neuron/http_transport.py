@@ -23,6 +23,28 @@ keep-in-sync with `neurag/http_transport.py`.
 from __future__ import annotations
 
 import contextlib
+import os
+import sys
+
+
+def _bearer_token() -> str:
+    return (os.environ.get("NEURON_BRIDGE_TOKEN") or "").strip()
+
+
+def _refuse_open_bind(host: str) -> bool:
+    """True se il bind non-loopback senza token deve essere rifiutato.
+
+    Un endpoint MCP su 0.0.0.0 (o dietro tunnel) SENZA shared secret espone
+    l'intera superficie MCP a chiunque lo raggiunga: si rifiuta all'avvio,
+    rumorosamente. NEURON_BRIDGE_ALLOW_OPEN=1 è la via di fuga per chi sa
+    cosa sta facendo."""
+    loopback = {"127.0.0.1", "localhost", "::1", ""}
+    if host in loopback:
+        return False
+    if _bearer_token():
+        return False
+    return os.environ.get("NEURON_BRIDGE_ALLOW_OPEN", "").strip().lower() \
+        not in ("1", "true", "yes")
 
 
 def serve(app, host: str = "127.0.0.1", port: int = 8000,
@@ -38,12 +60,36 @@ def serve(app, host: str = "127.0.0.1", port: int = 8000,
 
     Use `/mcp` (Streamable HTTP), not `/sse`: Cloudflare buffers the SSE
     handshake, which is the tunnel most of these setups sit behind.
+
+    Auth: if `NEURON_BRIDGE_TOKEN` is set, every /mcp request must carry
+    `Authorization: Bearer <token>`; a bind to a non-loopback host without a
+    token is refused at startup (override: NEURON_BRIDGE_ALLOW_OPEN=1).
     """
+    import hmac
+
+    # La guardia PRIMA di ogni import: rifiutare un bind aperto non deve
+    # dipendere da uvicorn/mcp (e nella suite il mcp finto non ha il manager).
+    if _refuse_open_bind(host):
+        print(
+            f"neuron bridge: refusing to bind {host} without NEURON_BRIDGE_TOKEN "
+            f"(an open MCP endpoint exposes destructive tools). Set the token, "
+            f"or NEURON_BRIDGE_ALLOW_OPEN=1 to accept the risk.",
+            file=sys.stderr)
+        raise SystemExit(2)
+
     import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
+    token = _bearer_token()
     manager = StreamableHTTPSessionManager(app=app, stateless=True)
     accepted = {path, path.rstrip("/") + "/"}
+
+    def _authorized(headers) -> bool:
+        if not token:
+            return True
+        auth = dict(headers).get(b"authorization", b"")
+        expected = f"Bearer {token}".encode()
+        return hmac.compare_digest(auth.strip(), expected)
 
     async def asgi(scope, receive, send):
         # Plain ASGI rather than Starlette routing. `Mount("/mcp")` answers
@@ -64,6 +110,11 @@ def serve(app, host: str = "127.0.0.1", port: int = 8000,
                         await send({"type": "lifespan.shutdown.complete"})
                         return
         elif scope["type"] == "http" and scope["path"] in accepted:
+            if not _authorized(scope.get("headers", [])):
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"text/plain")]})
+                await send({"type": "http.response.body", "body": b"unauthorized"})
+                return
             await manager.handle_request(scope, receive, send)
         else:
             await send({"type": "http.response.start", "status": 404,
