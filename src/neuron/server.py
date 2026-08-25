@@ -1534,8 +1534,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             f"context will switch if it persists)" if _pend_dom else ""))
         + _cur.curation_note(_cur_notes)   # T54: teach curation in-context
         + _stimulus_block(g, keywords)   # E2.5: piggyback the top stimulus
-        + "\n→ if the loaded context helped this turn, call confirm(keywords); "
-          "start the next turn with pre_turn."
+        + "\n→ next: pre_turn; confirm(keywords) if context helped."
     ))]
 
 
@@ -2150,15 +2149,13 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             if (staged_line or stim_line) else
             "\n→ next: fold this context into your reply silently, then call "
             "store_turn(topic, keywords, links) to persist the turn.")
-    # Enforcing del ciclo di rinforzo (2026-08-25): fino ad ora il confirm
-    # dipendeva tutta dalla disciplina del modello ("se ti serve, ricordalo").
-    # Quando c'è contenuto servito la riga diventa PRONTA: keyword esatte,
-    # chiamata già scritta, da copiare. Con "no context" nessun rinforzo ha
-    # senso e la riga non appare.
-    _served = [kw for kw, _sc in nodes_pt[:3]]
+    # Enforcing del ciclo di rinforzo (2026-08-25), versione a basso costo:
+    # la riga sta DOPO il budget (mai troncata) ma deve costare poco — due
+    # keyword top e tre parole di testo, ~12 token. Solo con contenuto servito.
+    _served = [kw for kw, _sc in nodes_pt[:2]]
     if _served:
-        tail += ("\n→ if this context helped your answer, reinforce it now: "
-                 f"confirm(keywords={json.dumps(_served, ensure_ascii=False)})")
+        tail += ("\n→ useful? confirm(keywords="
+                 f"{json.dumps(_served, ensure_ascii=False)})")
     out_pt = out_pt[:char_budget_pt] + staged_line + stim_line + tail
     return [TextContent(type="text", text=out_pt)]
 
