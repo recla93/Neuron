@@ -110,7 +110,10 @@ def deploy_claude_code(root: Path, dry_run: bool) -> str:
     if not isinstance(data, dict):
         return f"SKIPPED: {settings} root is not a JSON object"
 
-    cmd = f'python "{dst}"'
+    # Absolute interpreter (like Gray Matter's own deployer): a bare "python"
+    # resolves via PATH and dies on machines where it is the Store stub or
+    # another env without our deps.
+    cmd = f'"{sys.executable}" "{dst}"'
     hooks = data.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         return f"SKIPPED: {settings} 'hooks' is not an object"
@@ -119,10 +122,10 @@ def deploy_claude_code(root: Path, dry_run: bool) -> str:
         return f"SKIPPED: {settings} 'SessionStart' is not a list"
 
     # Match on the SCRIPT, not on the exact command string. Gray Matter
-    # registers it as `"<venv>\python.exe" "<hook>"` and this deployer as
-    # `python "<hook>"`; comparing whole strings saw those as different and
-    # appended a second entry -- the double handshake, back again, from the
-    # very code meant to prevent it. Observed on a live machine.
+    # registers it with ITS venv interpreter and this deployer with ours;
+    # comparing whole strings saw those as different and appended a second
+    # entry -- the double handshake, back again, from the very code meant to
+    # prevent it. Observed on a live machine.
     ours = [e for e in starts
             if isinstance(e, dict)
             and any(isinstance(h, dict) and src.name in (h.get("command") or "")
