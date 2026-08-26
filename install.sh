@@ -282,6 +282,19 @@ PY
     "$VPY" -m pip install $FL $CONS $(repair_args) "$HERE" || "$VPY" -m pip install $CONS $(repair_args) "$HERE" \
         || { echo "ERROR: Neuron install failed — check network, or try: pip install --upgrade pip"; exit 1; }
     save_embed_model "$VPY"
+    # Ship our OWN copy of gray_matter (the vendored wheel) into the standalone
+    # venv: without it `import gray_matter` fails, silently disabling the
+    # direct-register guard, go-standalone/release_tool and the GME write below.
+    GMWHEEL=$(ls "$HERE"/src/neuron/_gm_vendor/gray_matter-*.whl 2>/dev/null | head -n 1)
+    [ -n "$GMWHEEL" ] && "$VPY" -m pip install --no-deps --no-index "$GMWHEEL" >/dev/null 2>&1 || true
+    # Coming FROM a gateway install? Release Neuron BEFORE the direct
+    # registration (double registration otherwise). Needs the wheel above.
+    SUITE="${GM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/GrayMatterEnvironment}"
+    if [ -f "$SUITE/graymatter/manifest.json" ] || [ -f "$SUITE/graymatter/settings.json" ]; then
+        echo "Gray Matter detected: releasing Neuron from gateway management..."
+        "$VPY" -c "from gray_matter.clients import release_tool; [print('  ' + l) for l in release_tool('neuron')]" 2>/dev/null \
+            || echo "  (!) automatic release failed — complete the switch with: neuron go-standalone"
+    fi
     # Handshake assets (standalone has no GM to deploy them). Idempotent.
     _hooks=$("$VPY" -c "import neuron,os;print(os.path.join(os.path.dirname(neuron.__file__),'clients','deploy_hooks.py'))" 2>/dev/null || true)
     [ -n "$_hooks" ] && [ -f "$_hooks" ] && "$VPY" "$_hooks" || true
@@ -296,7 +309,7 @@ PY
     # One line instead of ~35 of hand-written JSON: gray_matter/gme.py is the
     # single writer (and the reader). Six shell copies in two languages is what
     # let the PowerShell BOM and the macOS path divergence ship unnoticed.
-    # Best-effort — standalone means Gray Matter may be absent.
+    # Works thanks to the vendored wheel installed above; best-effort anyway.
     "$VPY" -m gray_matter.gme register "$HERE" 2>/dev/null || true
     
     # Desktop icon "Neuron" → apre il control center (bootstrappa GM al 1° click).

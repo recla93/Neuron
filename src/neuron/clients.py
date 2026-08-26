@@ -995,15 +995,33 @@ def default_server_python(slug: "str | None" = None) -> str:
     every correct registration as 'DIFFERENT install' (and --fix would have
     repointed them to the system python, breaking everything). Falls back to
     sys.executable only when no install venv is found (pipx/pip installs,
-    where the running interpreter IS the install)."""
+    where the running interpreter IS the install). Candidate order mirrors
+    what the installers actually create: NEURON_HOME override, current suite
+    layout, then the two historic layouts."""
     slug = slug or os.environ.get("NEURON_SLUG", "neuron")
+    home = os.environ.get("NEURON_HOME") or ""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        cand = os.path.join(base, "Programs", slug, ".venv", "Scripts", "python.exe")
+        py = os.path.join("Scripts", "python.exe")
+        cands = [
+            os.path.join(home, ".venv", py) if home else "",
+            os.path.join(base, "GrayMatterEnvironment", slug, ".venv", py),
+            os.path.join(base, slug, ".venv", py),                     # pre-suite
+            os.path.join(base, "Programs", slug, ".venv", py),         # Programs era
+        ]
     else:
-        cand = os.path.join(os.path.expanduser("~"), ".local", "share", slug,
-                            ".venv", "bin", "python")
-    return cand if os.path.exists(cand) else sys.executable
+        share = os.environ.get("XDG_DATA_HOME") or os.path.join(
+            os.path.expanduser("~"), ".local", "share")
+        py = os.path.join(".venv", "bin", "python")
+        cands = [
+            os.path.join(home, ".venv", "bin", "python") if home else "",
+            os.path.join(share, "GrayMatterEnvironment", slug, py),
+            os.path.join(share, slug, py),
+        ]
+    for cand in cands:
+        if cand and os.path.exists(cand):
+            return cand
+    return sys.executable
 
 
 def gm_still_manages(tool: str) -> bool:
