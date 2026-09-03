@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time as _time
 import weakref
 
 from neuron.extraction import DOMAIN_ALIASES
@@ -111,9 +112,35 @@ def _seed_usable(path: "str | None") -> bool:
         return False
 
 
+# Un ripiego messo in cache non si aggiorna da solo.
+#
+# `_open_local_engine` si disingaggia (`DEGRADED_PATHS.discard`) solo quando
+# viene RICHIAMATO, e il suo commento dice «the sqlite3 fallback is never
+# cached, so every connect() already retries Turso» — vero per
+# `_local_conn_cache`, che accoglie solo handle Turso, FALSO qui, dove finiva
+# qualunque cosa uscisse da `connect_local`. Un lock transitorio sul seed
+# lasciava quindi il processo su sqlite3, e su `degraded` nella riga di stato,
+# per sempre: riprodotto con lock rilasciato, `_seed_connection` restituiva
+# ancora l'handle sqlite3 mentre `connect_local` sullo stesso path tornava
+# subito a turso-local.
+#
+# Non basta smettere di mettere in cache: la cache esiste perche' riaprire
+# costa ~300 ms quando un altro processo tiene il file, e li pagheremmo a ogni
+# query vettoriale. Quindi si riprova a cadenza — 300 ms ogni 30 s invece che
+# sempre.
+_SEED_RETRY_SEC = float(os.environ.get("NEURON_SEED_RETRY_SEC", "30"))
+_seed_retry_at: dict[str, float] = {}
+
+
 def _seed_connection(path: str):
     s = _S()
     conn = s._seed_conn_cache.get(path)
+    if conn is not None and path in s._db.DEGRADED_PATHS:
+        now = _time.monotonic()
+        if now - _seed_retry_at.get(path, 0.0) >= _SEED_RETRY_SEC:
+            _seed_retry_at[path] = now
+            _drop_seed_connection(path)
+            conn = None
     if conn is None:
         conn = s._db.connect_local(path)
         s._seed_conn_cache[path] = conn
@@ -136,7 +163,7 @@ def _drop_seed_connection(path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _permanent_vector_failure(exc: Exception) -> bool:
+def _permanent_vector_failure(exc: Exception, path: str | None = None) -> bool:
     """True if `exc` says the engine has NO vector_distance_cos at all.
 
     That's permanent for this process (plain sqlite3, or a pyturso build without
@@ -144,10 +171,21 @@ def _permanent_vector_failure(exc: Exception) -> bool:
     query *plus* the seed reconnect that `_drop_seed_connection` forces on the
     next one. Transient errors (locks, corrupt handle) are NOT latched — they
     keep the existing drop-and-retry behaviour.
+
+    `path` distingue i due casi, che l'errore da solo non separa. Un FILE caduto
+    su sqlite3 per il degrado L2 (un altro processo teneva il lock) alza la
+    stessa `no such function` di un motore senza vettori, ma non dice niente sul
+    motore: pyturso sta benissimo, e' quell'handle a non avere la funzione.
+    Latchare il globale li' spegneva il tier SQL nativo anche sui grafi sani —
+    e con esso `cross_context_matches`, cioe' l'instradamento di contesto. Con
+    il path noto il salto resta file-scoped: si torna True (salta QUESTO file)
+    senza toccare `_vector_sql_ok`.
     """
     if "no such function" not in str(exc).lower():
         return False
     s = _S()
+    if path is not None and path in s._db.DEGRADED_PATHS:
+        return True
     if s._vector_sql_ok:
         s._vector_sql_ok = False
         log.warning(
@@ -206,7 +244,7 @@ def _search_embeddings(
                     if kw not in merged or v > merged[kw]:
                         merged[kw] = v
             except Exception as e:
-                if _permanent_vector_failure(e):
+                if _permanent_vector_failure(e, db):
                     continue
                 if is_seed:
                     s._drop_seed_connection(db)
@@ -284,7 +322,7 @@ def _refine_domain(keywords: list[str]) -> tuple["str | None", list[str]]:
                 """, (query_blob,)).fetchall()
             except Exception as e:
                 log.debug("seed vector search failed (using Python fallback): %s", e)
-                if not _permanent_vector_failure(e):
+                if not _permanent_vector_failure(e, seed_path):
                     s._drop_seed_connection(seed_path)
 
     # Fallback: Python loop over loaded graphs — TRUE cosine, same scale as Turso.
