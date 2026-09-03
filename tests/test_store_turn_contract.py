@@ -16,6 +16,27 @@ from neuron import server as S
 _SERVER_SRC = pathlib.Path(S.__file__)
 
 
+def _literal(node):
+    """`ast.literal_eval`, ma tollera le f-string.
+
+    Una description che interpola una costante — `f"max {EPISODE_MAX_CHARS}
+    caratteri"`, che è il modo giusto di tenere il testo allineato al codice —
+    è un `JoinedStr`, non un literal: `literal_eval` alza `ValueError` e
+    l'INTERO schema diventa illeggibile, quindi una descrizione di un campo
+    faceva cadere i test sui campi di tutti gli altri. Qui i pezzi interpolati
+    diventano `…`: questi test verificano quali CAMPI lo schema espone e cosa
+    dichiarano, non i numeri dentro la prosa.
+    """
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) else "…"
+                       for v in node.values)
+    if isinstance(node, ast.Dict):
+        return {_literal(k): _literal(v) for k, v in zip(node.keys, node.values)}
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [_literal(e) for e in node.elts]
+    return ast.literal_eval(node)
+
+
 def _schema_of(tool_name: str) -> dict:
     """`inputSchema` di un tool, letto dal SORGENTE.
 
@@ -33,7 +54,7 @@ def _schema_of(tool_name: str) -> dict:
         name = kw.get("name")
         if isinstance(name, ast.Constant) and name.value == tool_name:
             if "inputSchema" in kw:
-                return ast.literal_eval(kw["inputSchema"])
+                return _literal(kw["inputSchema"])
     raise AssertionError(f"schema di '{tool_name}' non trovato in {_SERVER_SRC}")
 
 

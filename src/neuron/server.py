@@ -58,6 +58,7 @@ from neuron.models import (
     WEIGHT_ORDER, TANGENTIAL_EXPIRY_TURNS,
     SALIENCE_DECAY_THRESHOLD, SALIENCE_DECAY_AMOUNT,
     CONSOLIDATE_SIM_THRESHOLD,
+    EPISODE_MAX_CHARS, EPISODES_PER_NODE,
 
     VECTOR_DIM, pack_vector, unpack_vector, register_embed_fn,
 )
@@ -573,16 +574,20 @@ async def list_tools() -> list[Tool]:
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                     "episode": {
                         "type": "string",
-                        "description": ("ONE compact fact sentence for this turn, e.g. 'chose https "
-                                        "over wss because Turso rejects the ws handshake'. Attached "
-                                        "to the first keyword; pre_turn will surface it later as a "
-                                        "fact, not just a theme. Two hard limits, both raisable by "
-                                        "env var and both reported back in 'episode_lost' when you "
-                                        "cross them: the sentence is cut past a character cap "
-                                        "(NEURON_EPISODE_MAX_CHARS), and each node keeps only its "
-                                        "most recent episodes (NEURON_EPISODES_PER_NODE) — past "
-                                        "that the OLDEST is evicted, so a heavily used node loses "
-                                        "its early history."),
+                        "description": (f"ONE compact fact sentence for this turn — max "
+                                        f"{EPISODE_MAX_CHARS} CHARACTERS (~{EPISODE_MAX_CHARS // 6} "
+                                        "words): past that the sentence is CUT mid-word, not "
+                                        "summarized, so write within the cap rather than relying on "
+                                        "graceful truncation. E.g. 'chose https over wss because "
+                                        "Turso rejects the ws handshake'. Attached to the first "
+                                        "keyword; pre_turn will surface it later as a fact, not "
+                                        f"just a theme. Second limit: each node keeps only its "
+                                        f"{EPISODES_PER_NODE} most recent episodes — past that the "
+                                        "OLDEST is evicted, so a heavily used node loses its early "
+                                        "history. Both caps are raisable by env var "
+                                        "(NEURON_EPISODE_MAX_CHARS / NEURON_EPISODES_PER_NODE) and "
+                                        "both are reported back in 'episode_lost' when you cross "
+                                        "them."),
                     },
                     "entities": {
                         "type": "array", "items": {"type": "string"},
