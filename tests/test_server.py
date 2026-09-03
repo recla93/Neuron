@@ -374,7 +374,9 @@ def test_pre_turn_returns_status_and_context():
         assert "[neuron]" in text, "Should contain status line"
         lines = text.split("\n")
         assert len(lines) >= 2
-        assert "links:" in lines[1] or "no context" in lines[1]
+        # La riga 2 non e' piu' garantita: un avviso di rilevanza o di
+        # instradamento sta fra la riga di stato e il contesto, ed e' il punto.
+        assert "links:" in text or "no context" in text
     finally:
         srv._g = old_g
 
@@ -437,6 +439,73 @@ def test_pre_turn_admits_it_has_nothing_instead_of_padding(monkeypatch):
     assert "cache:" not in text, f"padded an empty answer: {text!r}"
     assert "pranzo" not in text, text
     assert "no context" in text, f"the admission must survive: {text!r}"
+
+
+def _pre_turn_via_vectors(monkeypatch, ranked, best_sim, topic, cross=None):
+    """pre_turn con la risposta poggiata SUI VETTORI (fallback), non su un
+    richiamo esatto per keyword: e' il solo caso in cui la soglia di rilevanza
+    morde. Il punteggio e' iniettato invece che coaxato da un grafo finto — con
+    poche decine di nodi il coseno reale dipende da quale test ha caricato
+    l'embedder prima, ed e' gia' il motivo per cui esiste il fratello
+    `_pre_turn_with_ranking`."""
+    import asyncio
+    import neuron.server as srv
+    from neuron.models import Graph, Node
+
+    g = Graph(turn_count=5)
+    for kw, _sc in ranked:
+        g.add_node(Node(keyword=kw, turn=1, topic="t", domain="general",
+                        sentiment="neutral", salience=4))
+    monkeypatch.setattr(srv, "_resolve_context",
+                        lambda *a, **k: ([], list(ranked), True, None, None, []))
+    monkeypatch.setattr(srv, "_search_embeddings", lambda *a, **k: [("x", best_sim)])
+    monkeypatch.setattr(srv, "cross_context_matches", lambda *a, **k: list(cross or []))
+    old_g = srv._g
+    srv._g = _make_registry_with({"default": g}, "default")
+    try:
+        return asyncio.run(srv.call_tool("pre_turn", {"topic": topic}))[0].text
+    finally:
+        srv._g = old_g
+
+
+def test_pre_turn_admits_it_when_the_best_match_is_still_bad(monkeypatch):
+    """F1: sotto soglia si dichiara di non sapere, non si serve il meno peggio.
+
+    Un risultato vuoto insegna al chiamante «grafo ancora povero, riprovo». Un
+    risultato irrilevante ma servito con sicurezza gli insegna «questo tool e'
+    rumore», e quello non si disimpara nell'arco della sessione: il 2026-09-02
+    il loop e' morto dopo UNA pre_turn fuori bersaglio, venti turni senza
+    memoria."""
+    pytest.importorskip("mcp")
+    text = _pre_turn_via_vectors(monkeypatch, ranked=[("extraheader", 0.0)],
+                                 best_sim=0.14, topic="bash shell scripting")
+    assert "nessun contesto rilevante" in text, text
+    assert "best=0.14" in text, f"il punteggio dev'essere ispezionabile: {text!r}"
+    assert "extraheader" not in text, f"servito il meno peggio: {text!r}"
+    assert "confirm(" not in text, f"chiede di confermare un errore: {text!r}"
+
+
+def test_pre_turn_still_serves_a_good_vector_hit(monkeypatch):
+    """La soglia non deve spegnere il richiamo semantico che funziona: stessa
+    strada (fallback vettoriale), punteggio sopra soglia, contenuto servito."""
+    pytest.importorskip("mcp")
+    text = _pre_turn_via_vectors(monkeypatch, ranked=[("due-fasi-bash", 3.0)],
+                                 best_sim=0.71, topic="bash shell scripting")
+    assert "nessun contesto rilevante" not in text, text
+    assert "due-fasi-bash" in text, text
+
+
+def test_pre_turn_names_the_context_that_actually_holds_the_topic(monkeypatch):
+    """F2: la causa radice era la stanza sbagliata, non il retrieval.
+
+    I due numeri esistevano gia' entrambi — somiglianza col contesto attivo e
+    somiglianza col migliore degli altri — e nessuno li sottraeva mai."""
+    pytest.importorskip("mcp")
+    text = _pre_turn_via_vectors(monkeypatch, ranked=[("extraheader", 0.0)],
+                                 best_sim=0.11, topic="bash shell scripting",
+                                 cross=[("studio/bash", "due-fasi-bash", 0.71)])
+    assert "topic distante" in text, text
+    assert "switch_context('studio/bash')" in text, text
 
 
 def test_pre_turn_declares_the_route_it_answered_through():

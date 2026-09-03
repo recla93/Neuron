@@ -2089,6 +2089,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # `default`, zero in comune. Qui la somiglianza la decide il vettore, non la
     # stringa. Nessun link viene scritto: se la soglia e' sbagliata si cambia
     # NEURON_CROSS_SIM e il grafo non se ne accorge.
+    _cross: list = []
     try:
         if search_kws_pt:          # il flag lo controlla la funzione stessa
             _cross = cross_context_matches(
@@ -2099,6 +2100,51 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     f"[{c}] {kw} ({sim:.2f})" for c, kw, sim in _cross))
     except Exception as _e:  # noqa: BLE001 — extra di richiamo, mai fatale
         log.debug("cross-context recall skipped: %s", _e)
+
+    # F1/F2 — il tool deve sapere quando NON sa.
+    #
+    # I due numeri servivano gia' entrambi e non venivano mai confrontati:
+    # quanto la richiesta somiglia a QUESTO contesto, e quanto somiglia al
+    # migliore degli altri (cross_context_matches, qui sopra, ce l'aveva in mano
+    # e lo stampava soltanto). Senza quel confronto pre_turn serve il meno
+    # peggio del contesto sbagliato con la stessa faccia con cui servirebbe un
+    # risultato buono.
+    #
+    # I due fallimenti non costano uguale. Una risposta vuota insegna «grafo
+    # ancora povero, riprovo»; una risposta irrilevante ma sicura insegna
+    # «questo tool e' rumore», e quella e' irreversibile nell'arco della
+    # sessione. Misurato il 2026-09-02: il chiamante ha mollato il loop dopo UNA
+    # pre_turn fuori bersaglio (ctx `ai`, domanda su Bash) e non l'ha piu'
+    # chiamato per venti turni.
+    #
+    # Stesso top_n di _resolve_context, cosi' la chiamata cade nel memo di turno.
+    _best_sim = 0.0
+    if search_kws_pt:
+        try:
+            _norm_kws = sorted({k.strip().lower() for k in search_kws_pt if k.strip()})
+            _best_sim = max((sim for _, sim in _search_embeddings(
+                _norm_kws, top_n=max(len(g_pt.nodes), 1), graph=g_pt)), default=0.0)
+        except Exception as _e:  # noqa: BLE001 — la rilevanza e' un extra, mai fatale
+            log.debug("relevance score skipped: %s", _e)
+    warns_pt: list[str] = []
+    _min_rel = _config.env_float("NEURON_MIN_RELEVANCE", 0.35)
+    # La soglia morde SOLO quando la risposta poggia sui vettori (fallback o
+    # eredita'). Una keyword centrata nel grafo e' attinente per costruzione,
+    # anche con un coseno basso: sopprimerla toglierebbe il richiamo esatto.
+    _suppress = bool(fallback_pt or inh_pt) and _best_sim < _min_rel
+    if _suppress:
+        warns_pt.append(f"⚠ nessun contesto rilevante "
+                        f"(best={_best_sim:.2f}, soglia={_min_rel:.2f})")
+        # Restano i ponti verso altri contesti: dicono dove guardare, e sono
+        # l'unica cosa utile quando qui non c'e' niente.
+        parts_pt = [pp for pp in parts_pt if pp.startswith("altri contesti:")]
+        lks, nodes_pt = [], []
+    if _cross and _cross[0][2] > _best_sim + _config.env_float(
+            "NEURON_ROUTE_MARGIN", 0.15):
+        _c, _ckw, _csim = _cross[0]
+        warns_pt.append(f"⚠ topic distante dal contesto attivo '{ctx_label}' "
+                        f"({_best_sim:.2f}) — '{_c}' e' piu' vicino "
+                        f"({_ckw} {_csim:.2f}): switch_context('{_c}')?")
     # Stessa regola del formato compatto di get_context: la nota sul metodo non
     # puo' far sembrare che ci sia contenuto. (keep-in-sync: le due liste sono
     # costruite in due posti, e questa e' gia' la seconda volta che si scrive.)
@@ -2138,7 +2184,13 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             f"{kw}({'↑' if turns < 3 else '·'})" for kw, _score, turns in cache_entries
         )
         ctx_text_pt = f"cache: {cache_str} | {ctx_text_pt}"
-    out_pt = f"{status_line}\n{ctx_text_pt}"
+    # Gli avvisi stanno su riga propria e FUORI dal budget: un avviso
+    # annegato in coda a 400 caratteri di riga di stato non e' un avviso —
+    # `(vector fallback)` e `db=...degraded` c'erano gia' in E1 e il
+    # chiamante non li ha registrati ne' come avvisi ne' come diagnosi. Il
+    # budget resta quello di sempre ma si applica al contesto, che e' la
+    # parte che puo' crescere.
+    out_pt = "\n".join([status_line, *warns_pt, ctx_text_pt[:char_budget_pt]])
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
     # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.
@@ -2161,7 +2213,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if _served and _confirm_hint_enabled():
         tail += ("\n→ useful? confirm(keywords="
                  f"{json.dumps(_served, ensure_ascii=False)})")
-    out_pt = out_pt[:char_budget_pt] + staged_line + stim_line + tail
+    out_pt = out_pt + staged_line + stim_line + tail
     return [TextContent(type="text", text=out_pt)]
 
 
