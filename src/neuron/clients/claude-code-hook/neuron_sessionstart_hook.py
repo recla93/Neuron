@@ -269,6 +269,33 @@ def _session_id() -> str:
         return ""
 
 
+def _fingerprint() -> str:
+    """Eight hex of THIS file's bytes — the version of the handshake it speaks.
+
+    Part of the claim marker, so that updating the hook lets a session that is
+    already open hear the new block once. Without it the claim keyed on the
+    session alone, and the marker outlives the session that created it: a long
+    session stayed frozen on the handshake it was born with.
+
+    Observed 2026-09-09: a session opened on the 4th, `active_context` deployed
+    on the 7th, resumed on the 9th. The marker from the 4th was still there, the
+    hook exited silently, and the block in context never gained the line naming
+    the active graph — the very line that exists to stop a save landing in the
+    wrong context, which is then exactly what happened.
+
+    Reading own bytes and not the handshake TEXT: the text carries the active
+    context, which changes on every switch_context, and SessionStart also fires
+    on `compact` and `clear`. Keyed on the text, a long session would repeat the
+    whole block every time the subject moved — noise, where the thing worth
+    saying again is a hook that actually changed.
+    """
+    try:
+        import hashlib
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:8]
+    except (OSError, NameError):   # __file__ missing under exec/frozen imports
+        return "nofp"
+
+
 def claim(session_id: str, tmpdir=None) -> bool:
     """True if THIS process is the one that speaks for ``session_id``.
 
@@ -276,13 +303,17 @@ def claim(session_id: str, tmpdir=None) -> bool:
     creates the marker and the loser stays quiet. Fail-open — an empty id or an
     unwritable temp dir returns True, because the cost of speaking twice is
     tokens and the cost of never speaking is the whole loop.
+
+    The marker carries the hook's fingerprint too (see `_fingerprint`), so the
+    guard still blocks a duplicate — two processes running the SAME file race
+    on the same name — while an UPDATED file gets to speak once more.
     """
     if not session_id:
         return True
     import tempfile
     base = Path(tmpdir) if tmpdir else Path(tempfile.gettempdir())
-    marker = base / ("neuron-handshake-%s" % "".join(
-        c for c in session_id if c.isalnum() or c in "-_")[:64])
+    marker = base / ("neuron-handshake-%s-%s" % ("".join(
+        c for c in session_id if c.isalnum() or c in "-_")[:64], _fingerprint()))
     try:
         fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
