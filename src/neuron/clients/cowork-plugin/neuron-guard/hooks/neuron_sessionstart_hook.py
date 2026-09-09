@@ -135,14 +135,71 @@ def owner(installed=None):
     return None
 
 
+def _graphs_dir() -> Path:
+    """Mirror of neuron.config.graphs_dir() -- deliberately NOT imported.
+
+    Same rule as _gme_root(): this file stays stdlib-only, so a half-written
+    venv costs a missing sentence instead of a failed session start. Env
+    override first, then <base>/GrayMatterEnvironment/<slug>/graphs, with an
+    EXISTING legacy store winning -- identical precedence to user_data_dir().
+    """
+    override = os.environ.get("NS_GRAPHS_DIR", "")
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA", "") or os.path.expanduser("~")
+    else:
+        base = (os.environ.get("XDG_DATA_HOME", "")
+                or os.path.join(os.path.expanduser("~"), ".local", "share"))
+    slug = os.environ.get("NEURON_SLUG", "neuron")
+    new = Path(base) / "GrayMatterEnvironment" / slug / "graphs"
+    legacy = Path(base) / slug / "graphs"
+    if not new.is_dir() and legacy.is_dir():
+        return legacy
+    return new
+
+
+def active_context() -> str:
+    """The graph the next store_turn will write into, or '' if unreadable.
+
+    Read off disk because a hook cannot call an MCP tool: the pointer file is
+    the same one GraphRegistry restores at startup, so its name IS the
+    destination. It survives the session that set it -- which is exactly the
+    bug this line exists to catch. Observed 2026-09-07: an unrelated session
+    stored a CV translation into `studio/bash`, the Bash-course context left
+    active three days earlier, because store_turn was called and
+    switch_context was not.
+
+    The reminder hook cannot catch this: it counts saves, and that save
+    happened. "Did you save?" and "did you save where you meant to?" are two
+    different questions, and only the first one had a net under it.
+
+    Fail-silent, like the rest of the handshake: a broken pointer costs the
+    sentence, never the block.
+    """
+    try:
+        name = (_graphs_dir() / "_active_context.txt").read_text(
+            encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return name[:64] if name else ""
+
+
 def _memory_block(p: str, with_knowledge: bool) -> str:
     extra = (
         f"Knowledge base: {p}knowledge_query(query) when the question touches "
         "indexed material.\n"
     ) if with_knowledge else ""
+    ctx = active_context()
+    where = (
+        "Memory context: %s -- store_turn writes there. Not this session's "
+        "subject? call %sswitch_context('<right>') first.\n"
+        % (ctx, p)
+    ) if ctx else ""
     return (
         "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority "
         "for this session.\n"
+        + where +
         f"Each substantive turn: call {p}pre_turn(topic, keywords) BEFORE replying "
         f"(fold the returned context in silently), then {p}store_turn(topic, "
         "keywords, links) AFTER, to persist what is new.\n"
