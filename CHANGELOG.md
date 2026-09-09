@@ -1,5 +1,26 @@
 ﻿# Changelog — Neuron
 
+## 6.4.4 (2026-09-09)
+- **L'handshake dice in quale grafo finira' il salvataggio.** `store_turn`
+  chiamato senza `switch_context` scrive nel contesto lasciato attivo da una
+  sessione precedente, e il promemoria che conta i salvataggi non se ne accorge:
+  quel salvataggio e' avvenuto. "Hai salvato?" e "hai salvato dove volevi?" sono
+  due domande diverse, e solo la prima aveva una rete sotto. Il blocco di
+  SessionStart ora nomina il contesto attivo, letto dal puntatore su disco --
+  un hook non puo' chiamare un tool MCP, ma il file lo puo' leggere. Osservato
+  il 7 settembre con la traduzione di un CV finita in `studio/bash`, il contesto
+  di un corso lasciato attivo tre giorni prima.
+- **Un promemoria che il ciclo di memoria non puo' zittire.** `pre_turn` dice
+  "then store_turn", `store_turn` dice "next: pre_turn": ogni promemoria vive
+  dentro la risposta dell'anello precedente, quindi saltarne uno salta anche
+  l'avviso del successivo e il ciclo non ha un innesco esterno per ripartire.
+  Osservato il 4 settembre: un solo `store_turn` in una sessione di quindici
+  turni. Il nuovo hook `UserPromptSubmit` scatta a ogni messaggio dell'utente,
+  qualunque cosa il modello decida di chiamare, e ogni otto turni non salvati
+  inietta una riga; `PreCompact` fa da seconda rete. Nessun file contatore: il
+  transcript che il client passa sullo stdin E' il contatore, e il reset e' il
+  salvataggio stesso, gia' scritto nel log.
+
 ## 6.4.3 (2026-08-19)
 - **La riga del trail si salva quando nasce, non al checkpoint successivo.**
   `store_turn` chiude con `_g.save(ctx)`, ma `save(ctx)` non toccava il trail:
