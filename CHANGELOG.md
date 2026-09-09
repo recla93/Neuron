@@ -1,5 +1,21 @@
 ﻿# Changelog — Neuron
 
+## 6.4.5 (2026-09-09)
+- **Il claim di sessione si lega anche alla versione dell'hook.** Il marker che
+  impedisce il doppio handshake era chiavato sulla SOLA sessione, e sopravvive
+  alla sessione che lo ha creato: una sessione lunga restava congelata
+  sull'handshake con cui era nata. Osservato il 9 settembre: sessione aperta il
+  4, `active_context` deployato il 7, ripresa il 9 -- il marker del 4 era ancora
+  li', l'hook e' uscito muto, e il blocco in contesto non ha mai avuto la riga
+  che nomina il grafo attivo. Che e' esattamente la riga scritta per evitare un
+  salvataggio nel contesto sbagliato, ed e' poi quello che e' successo: il
+  rimedio esisteva, funzionava, ed era irraggiungibile. Ora nel nome del marker
+  entrano otto hex del file: stesso hook = un solo parlante e il guard sul
+  duplicato regge intatto, hook aggiornato = una voce in piu', una volta sola.
+  L'impronta viene dai BYTE del file e non dal testo dell'handshake, perche' il
+  testo porta il contesto attivo (cambia a ogni `switch_context`) e SessionStart
+  scatta anche su `compact` e `clear`.
+
 ## 6.4.4 (2026-09-09)
 - **L'handshake dice in quale grafo finira' il salvataggio.** `store_turn`
   chiamato senza `switch_context` scrive nel contesto lasciato attivo da una
