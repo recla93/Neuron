@@ -7,7 +7,7 @@ letto automaticamente all'avvio di ogni chat: contiene le regole di lavoro sulle
 
 ## Struttura progetto (riferimento rapido)
 
-- **Repo sorgente (sviluppo):** `C:\Users\recla\Desktop\Gray Matter Enviroment\neuron`
+- **Repo sorgente (sviluppo):** `C:\Users\<utente>\Desktop\Gray Matter Enviroment\neuron`
   — sibling di `neurag` e `gray_matter`; la cartella contenitore NON è un repo git,
   i tre tool sì (repo separati, tool standalone).
 - **Installazione attiva (server MCP):** venv condiviso creato da Gray Matter in

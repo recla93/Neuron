@@ -30,7 +30,7 @@ qui sotto sistema tutto una volta sola.
 ## Bonifica one-shot (esegui in locale, ~2 minuti)
 
 ```powershell
-cd C:\Users\recla\Desktop\NEURON\Update\neuron-project
+cd C:\Users\<utente>\Desktop\NEURON\Update\neuron-project
 
 # 0. Ispeziona gli stash prima di buttarli (roba del 9-10 luglio, quasi certo obsoleta)
 git stash show -p stash@{0} | more   # ripeti per {1} e {2}; se non serve nulla:
