@@ -1,5 +1,28 @@
 ﻿# Changelog — Neuron
 
+## 6.4.6 (2026-09-10)
+- **Il walk sul grafo era morto per i concetti capitalizzati.**
+  `_resolve_context` minuscolava la query e la confrontava con le chiavi del
+  grafo, sotto un commento che affermava che quelle chiavi fossero minuscole.
+  Non lo sono: `add_node`/`add_link` passano da `_norm`, ma il path di
+  CARICAMENTO fa `nodes.append()` diretto e lo salta, quindi le righe scritte da
+  altre strade — l'ingest della knowledge base genera `AGENTS`,
+  `DESIGN-CROSSLINKS`, `neuron/README` — tornano in memoria capitalizzate: su un
+  grafo reale, 37 nodi su 52. Il match esatto non scattava mai e OGNI ricerca
+  finiva nel fallback vettoriale. Non se n'era accorto nessuno perche' il
+  fallback funziona e restituisce risultati giusti — solo per la strada
+  sbagliata, e con `related_nodes` che riceveva una variante minuscola, cioe' un
+  concetto che nel grafo non esiste. Il sintomo visibile era `(vector fallback)`
+  su ogni risposta, incluso un `get_context(topic="Neuron")` che nella stessa
+  riga elencava `nodes:Neuron(1)`. Ora la query viene riportata alla
+  capitalizzazione reale del grafo: i dati non si toccano, e il marker resta per
+  i topic che nel grafo davvero non ci sono.
+- **Il promemoria esterno viene deployato.** `neuron_reminder_hook.py` era in
+  repo dalla 6.4.4, con il suo test, e non lo copiava nessuno dei due deployer.
+  Il loop di memoria e' auto-referenziale, quindi saltare un anello salta anche
+  il promemoria dell'anello dopo: UserPromptSubmit e' l'unico trigger esterno al
+  ciclo, ed e' esattamente quello che non e' mai arrivato su una macchina.
+
 ## 6.4.5 (2026-09-09)
 - **Il claim di sessione si lega anche alla versione dell'hook.** Il marker che
   impedisce il doppio handshake era chiavato sulla SOLA sessione, e sopravvive
