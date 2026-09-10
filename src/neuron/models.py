@@ -71,7 +71,11 @@ STAGE_FRESH_SECONDS      = _env_int("NEURON_STAGE_FRESH_SECONDS", 6 * 3600) # st
 
 # Episodic payload (T56): nodes carry compact FACTS, not just themes.
 EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)     # cap per node; oldest dropped (consolidation-lite)
-EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 200)   # one compact sentence, ~40 tokens
+EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 400)   # one compact sentence, ~65 words
+# 200 cut the WHY off the fact — the half an episode exists for. On a real
+# graph 7 of 9 episodes sat at exactly 200, i.e. truncated. Raising it cannot
+# run the cost up: what governs an injection is `max_tokens` (pre_turn: 200
+# tokens = 800 chars), and the cap only decides how that budget is spent.
 # Embedding dimension. Default 384 (the multilingual MiniLM-L12-v2 default below,
 # and the common 384-dim models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).

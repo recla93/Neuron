@@ -1,5 +1,15 @@
 ﻿# Changelog — Neuron
 
+## 6.4.7 (2026-09-10)
+- **Il tetto degli episodi passa da 200 a 400 caratteri.** 200 tagliava il
+  PERCHE' del fatto, che e' la meta' per cui un episodio esiste: su un grafo
+  reale 7 episodi su 9 stavano esattamente a 200, cioe' troncati a meta' frase.
+  Alzarlo non fa salire il consumo — quello che governa un'iniezione e'
+  `max_tokens` (pre_turn: 200 token = 800 caratteri), e il cap decide solo
+  *come* si spende quel budget, non quanto se ne spende. Resta regolabile con
+  `NEURON_EPISODE_MAX_CHARS`, e lo schema di `store_turn` annuncia il numero
+  attivo al modello, cosi' chi scrive l'episodio sa dove sta il confine.
+
 ## 6.4.6 (2026-09-10)
 - **Il walk sul grafo era morto per i concetti capitalizzati.**
   `_resolve_context` minuscolava la query e la confrontava con le chiavi del
