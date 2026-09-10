@@ -1047,6 +1047,26 @@ async def list_tools() -> list[Tool]:
     ]
 
 
+def _canon_kws(g: "Graph", kws) -> set[str]:
+    """The search keywords, mapped back to the REAL capitalisation of `g`.
+
+    Whatever does not exist in the graph stays lowercased: that is what goes on
+    to the vector search, where capitalisation does not matter. A node beats a
+    link endpoint on the same key: the node is the data, the link only cites it.
+
+    When two keys differ only in case ('Data' and 'data') one of them wins —
+    they are already a duplicate in the graph, not a case to resolve here.
+    """
+    canon: dict[str, str] = {}
+    for lk in g.links:
+        canon.setdefault(lk.source.lower(), lk.source)
+        canon.setdefault(lk.target.lower(), lk.target)
+    for nd in g.nodes:
+        canon[nd.keyword.lower()] = nd.keyword
+    return {canon.get(k, k)
+            for k in (kw.strip().lower() for kw in kws if kw.strip())}
+
+
 def _resolve_context(
     search_kws: set[str],
     depth: int,
@@ -1060,8 +1080,21 @@ def _resolve_context(
     Returns (related_links_sorted, top_nodes, used_fallback, inherited_ctx, g).
     `g` may change when context inheritance kicks in.
     """
-    # Normalize search keywords to match graph's lowercased node/link keys
-    search_kws = {kw.strip().lower() for kw in search_kws if kw.strip()}
+    # The graph's keys are NOT lowercased — this comment used to claim they were
+    # and it was believed for the whole life of this function. On a real graph:
+    # 37 nodes out of 52 carry capitals ('Neuron', 'AGENTS',
+    # 'DESIGN-CROSSLINKS'), and the links preserve them ('Neuron' -> 'pre_turn').
+    # Lowercasing ONLY the query makes `{"neuron"} & {"Neuron", ...}` empty and
+    # `lk.source in current` never match: the direct link walk — the graph
+    # itself — was dead for most concepts, and EVERY search fell through to the
+    # vector fallback. Nobody noticed because the fallback works: it recovers the
+    # real keywords, with their capitalisation, and the second walk runs from
+    # there. Right answers, wrong road, and a query naming an exact node treated
+    # as if that node did not exist.
+    # So canonicalise the QUERY to the graph's real capitalisation: the data is
+    # untouched, every comparison downstream stays as it was, and the results
+    # carry the real name instead of a lowercase variant that exists nowhere.
+    search_kws = _canon_kws(g, search_kws)
     related_nodes: set[str] = set()
     related_links: list = []
     current = search_kws.copy()
@@ -1110,10 +1143,14 @@ def _resolve_context(
     if not related_links:
         chain = _g.resolve_chain(ctx or None)
         for ancestor_g in chain[1:]:
+            # Re-canonicalised against the ANCESTOR: capitalisation is
+            # per-graph, and reusing the child's here would dig the same hole
+            # one level up.
+            anc_kws = _canon_kws(ancestor_g, search_kws)
             for lk in ancestor_g.links:
                 if lk.link_type == "drift":
                     continue
-                if lk.source in search_kws or lk.target in search_kws:
+                if lk.source in anc_kws or lk.target in anc_kws:
                     related_links.append(lk)
                     related_nodes.add(lk.source)
                     related_nodes.add(lk.target)
