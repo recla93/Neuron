@@ -30,6 +30,44 @@ COWORK = "cowork-plugin/neuron-guard"
 
 _MATCHER = "startup|resume|clear|compact"
 
+# The second hook of the pair: the external reminder. The memory loop is
+# self-referential (pre_turn says "then store_turn", store_turn says "then
+# pre_turn"), so skipping one link also skips the reminder for the next one:
+# UserPromptSubmit is the only trigger OUTSIDE the cycle. Shipped since 6.4.4
+# and deployed by nobody. It imports neuron_sessionstart_hook, so it belongs in
+# the SAME directory and never travels alone.
+REMINDER = "claude-code-hook/neuron_reminder_hook.py"
+# UserPromptSubmit takes no matcher in Claude Code; PreCompact does. The hook
+# tells the two apart via `hook_event_name`, so both entries are needed.
+_REMINDER_EVENTS = (("UserPromptSubmit", None), ("PreCompact", "manual|auto"))
+
+
+def _upsert(hooks: dict, event: str, matcher, marker: str, cmd: str):
+    """Upsert OUR entry for `event`. True when written, False when already fine,
+    a string when `hooks` has a shape we refuse to write into.
+
+    Same rule as always: match on the SCRIPT NAME (not on the whole command, or
+    two deployers with different interpreters append two entries for the same
+    hook) and rewrite an entry of ours that cannot run.
+    """
+    entries = hooks.setdefault(event, [])
+    if not isinstance(entries, list):
+        return f"SKIPPED: '{event}' is not a list"
+    ours = [e for e in entries
+            if isinstance(e, dict)
+            and any(isinstance(h, dict) and marker in (h.get("command") or "")
+                    for h in (e.get("hooks") or []))]
+    dead = [e for e in ours
+            if any(_dead_cmd(h.get("command") or "")
+                   for h in (e.get("hooks") or []) if isinstance(h, dict))]
+    if ours and not dead:
+        return False
+    for e in dead:
+        entries.remove(e)
+    fresh = {"hooks": [{"type": "command", "command": cmd, "timeout": 10}]}
+    entries.append({"matcher": matcher, **fresh} if matcher else fresh)
+    return True
+
 
 def _load_json(p: Path):
     try:
@@ -96,7 +134,12 @@ def _codex_enable(cfg: Path, plugin_name: str) -> bool:
 
 
 def deploy_claude_code(root: Path, dry_run: bool) -> str:
-    """Copy the hook and register it under hooks.SessionStart."""
+    """Copy BOTH claude-code hooks and register them.
+
+    SessionStart for the handshake, UserPromptSubmit + PreCompact for the
+    reminder. The reminder imports the sessionstart hook, so the two travel
+    together or not at all.
+    """
     src = root / HOOK
     dst_dir = Path.home() / ".claude" / "hooks"
     dst = dst_dir / src.name
@@ -117,40 +160,30 @@ def deploy_claude_code(root: Path, dry_run: bool) -> str:
     hooks = data.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         return f"SKIPPED: {settings} 'hooks' is not an object"
-    starts = hooks.setdefault("SessionStart", [])
-    if not isinstance(starts, list):
-        return f"SKIPPED: {settings} 'SessionStart' is not a list"
 
-    # Match on the SCRIPT, not on the exact command string. Gray Matter
-    # registers it with ITS venv interpreter and this deployer with ours;
-    # comparing whole strings saw those as different and appended a second
-    # entry -- the double handshake, back again, from the very code meant to
-    # prevent it. Observed on a live machine.
-    ours = [e for e in starts
-            if isinstance(e, dict)
-            and any(isinstance(h, dict) and src.name in (h.get("command") or "")
-                    for h in (e.get("hooks") or []))]
-    # Una entry NOSTRA che non puo' girare va RISCRITTA, non lasciata stare:
-    # "gia' presente = non toccare" ha tenuto in vita un comando che puntava a
-    # un interprete sparito quando l'install e' passato alla radice GME, e
-    # nessun reinstall lo aggiornava piu'. Un `python` nudo non si giudica
-    # (dipende dal PATH); un path assoluto inesistente si'.
-    dead = [e for e in ours
-            if any(_dead_cmd(h.get("command") or "")
-                   for h in (e.get("hooks") or []) if isinstance(h, dict))]
+    rem_src = root / REMINDER
+    rem_dst = dst_dir / rem_src.name
     if dry_run:
-        return f"[dry-run] would deploy {dst}" + ("" if (ours and not dead) else " + SessionStart entry")
+        return f"[dry-run] would deploy {dst}" + (f" + {rem_dst.name}" if rem_src.exists() else "")
     dst_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dst)
-    if dead or not ours:
-        for e in dead:
-            starts.remove(e)
-        starts.append({"matcher": _MATCHER,
-                       "hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
-        _save_json(settings, data)
-        return (f"hook copied + stale SessionStart entry rewritten ({dst})" if dead
-                else f"hook copied + SessionStart registered ({dst})")
-    return f"hook refreshed ({dst})"
+    if rem_src.exists():
+        shutil.copyfile(rem_src, rem_dst)
+
+    written = []
+    for event, matcher, marker, c in (
+            [("SessionStart", _MATCHER, src.name, cmd)]
+            + ([(e, m, rem_src.name, f'"{sys.executable}" "{rem_dst}"')
+                for e, m in _REMINDER_EVENTS] if rem_src.exists() else [])):
+        r = _upsert(hooks, event, matcher, marker, c)
+        if isinstance(r, str):
+            return f"SKIPPED: {settings} {r}"
+        if r:
+            written.append(event)
+    if not written:
+        return f"hooks refreshed ({dst_dir})"
+    _save_json(settings, data)
+    return f"hooks copied + {'/'.join(written)} registered ({dst_dir})"
 
 
 def deploy_opencode(root: Path, dry_run: bool) -> str:
