@@ -28,6 +28,7 @@ import os
 import re as _re
 import sqlite3 as _sqlite3
 import time as _time
+from pathlib import Path
 from typing import Any, Sequence
 
 from neuron._env import sanitize_credential
@@ -128,6 +129,51 @@ def _is_write_sql(sql: str) -> bool:
     if not head:
         return False
     return head.split(None, 1)[0].lower() in _WRITE_PREFIXES
+
+
+def connect_read_only(path: str):
+    """Open a graph file with sqlite3 for READING while a libSQL worker may hold it.
+
+    A plain ``sqlite3.connect`` on a live WAL database is not a passive reader:
+    on ``close()`` it believes it is the last connection, checkpoints, and
+    DELETES the ``-wal`` file. The worker keeps writing to a file that no longer
+    exists and every commit from then on is lost — reproduced 2026-09-12:
+    three turns "saved" and gone after a clean restart. ``mode=ro`` never
+    checkpoints, so the WAL stays where the worker left it. Diagnostics,
+    consoles, scripts: this is the only way to open a graph you did not lock.
+    """
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    return _sqlite3.connect(uri, uri=True)
+
+
+class _ReadOnlyConn:
+    """sqlite3 connection that names the reason a write is refused.
+
+    ``mode=ro`` already fails writes, but with "attempt to write a readonly
+    database" — true and useless. The real reason is another process: say so,
+    and say what to do.
+    """
+    def __init__(self, conn, path: str):
+        self._conn, self._path = conn, path
+
+    def _refuse(self, sql: str) -> None:
+        if _is_write_sql(sql):
+            raise _sqlite3.OperationalError(
+                f"neuron: '{os.path.basename(self._path)}' is open in another process "
+                f"(exclusive lock); this process is read-only. One writer per graph: "
+                f"close the other client, or put Gray-Matter in front as the single "
+                f"writer. A second writer would delete the first one's WAL.")
+
+    def execute(self, sql, *a, **k):
+        self._refuse(sql)
+        return self._conn.execute(sql, *a, **k)
+
+    def executemany(self, sql, *a, **k):
+        self._refuse(sql)
+        return self._conn.executemany(sql, *a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
 
 
 def _with_retry(fn, *, attempts: int = 4, base_delay: float = 0.4,
@@ -472,16 +518,26 @@ def _open_local_engine(path: str):
     # lives, so the second opener is locked out by design, not by accident —
     # and the fallback is not free: sqlite3 cannot read a pending libSQL WAL,
     # so a degraded process can read stale state and write over it.
-    if "Locking" in repr(last) or "os error 33" in repr(last):
-        print(f"neuron: '{os.path.basename(path)}' is already open in another "
-              f"process (exclusive lock) — this one degrades to sqlite3 and "
-              f"loses native vector SQL. Use ONE writer per graph: close the "
-              f"other client, or put Gray-Matter in front as the single writer.",
-              file=_sys.stderr)
-    else:
-        print(f"neuron: local Turso open failed ({last!r}) after retries — degrading "
-              f"to sqlite3 for this connection (L2 guard).", file=_sys.stderr)
     DEGRADED_PATHS.add(path)
+    if "Locking" in repr(last) or "os error 33" in repr(last):
+        # Another process holds the graph. The old answer was a WRITABLE
+        # sqlite3 on the same file — "losing vector SQL beats losing the
+        # write". Measured 2026-09-12: it loses the OTHER process's writes,
+        # because sqlite3 deletes the live WAL on close. Read-only here, and a
+        # write in this process fails with the reason instead of silently
+        # eating the first writer's turns.
+        print(f"neuron: '{os.path.basename(path)}' is already open in another "
+              f"process (exclusive lock) — this one is READ-ONLY. Use ONE writer "
+              f"per graph: close the other client, or put Gray-Matter in front "
+              f"as the single writer.", file=_sys.stderr)
+        # A lock on a file that is not there (sidecar race): nothing to read,
+        # nothing we may write — an empty read-only store says exactly that.
+        ro = connect_read_only(path) if os.path.exists(path) else _sqlite3.connect(":memory:")
+        return _ReadOnlyConn(ro, path)
+    # Any other failure (the L2 NotFound race, a broken sidecar): nobody else
+    # holds the file, so a writable sqlite3 on it is the single opener.
+    print(f"neuron: local Turso open failed ({last!r}) after retries — degrading "
+          f"to sqlite3 for this connection (L2 guard).", file=_sys.stderr)
     return _sqlite3.connect(path)
 
 

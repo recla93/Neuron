@@ -56,6 +56,16 @@ except Exception:
     ENGINE = "sqlite3 (fallback - neuron package not importable here)"
 
 
+def _read_only(path: str):
+    """A console only reads — and a plain open on a live WAL graph deletes the
+    worker's WAL on close (see neuron.db.connect_read_only)."""
+    ro = getattr(_db, "connect_read_only", None)
+    if ro is not None:
+        return ro(path)
+    from pathlib import Path
+    return _db.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+
+
 def _fmt(n: int) -> str:
     return f"{n:,}"
 
@@ -81,7 +91,7 @@ def _check_db(path: str, label: str) -> dict:
         info["errors"].append("empty file")
         return info
     try:
-        conn = sqlite3.connect(path)
+        conn = _read_only(path)   # never a plain writable open on a live graph
         info["nodes"] = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         info["links"] = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
         info["vectors"] = conn.execute("SELECT COUNT(*) FROM node_vectors").fetchone()[0]
