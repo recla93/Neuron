@@ -1,5 +1,37 @@
 ﻿# Changelog — Neuron
 
+## 6.4.8 (2026-09-12)
+- **Un `sqlite3.connect` esterno cancellava il WAL del worker, e i turni con
+  lui.** Riprodotto con controllo: store A, lettura esterna + close, store B e
+  C, riavvio pulito: sul disco c'e' solo A. Alla close sqlite3 fa checkpoint e
+  cancella il `-wal`; il worker libSQL continua a scrivere su un file che non
+  esiste piu' e ogni `store_turn` risponde "saved". Il secondo apertore di
+  produzione era il fallback "L2 guard": un processo senza il lock apriva un
+  sqlite3 scrivibile sullo stesso file. Ora chi non ha il lock e' read-only e
+  una scrittura fallisce dicendo perche'; `connect_read_only(path)` e' l'unico
+  modo di aprire un grafo che non si e' lockato (console compresa).
+- **Backup giornaliero a rotazione.** Alla prima apertura del giorno di ogni
+  contesto, una copia consistente in `graphs/_backups/` (backup API su
+  connessione read-only: WAL incluso nella copia, WAL vivo intatto); ne
+  restano `NEURON_BACKUP_KEEP` (5), 0 spegne. Piu' `<grafo>.pre-consolidate.db`
+  prima di ogni drop.
+- **`consolidate` non archivia piu' mezzo grafo.** Con `drop_orphans` (era
+  default TRUE, "safe to run periodically") una chiamata ha archiviato 255
+  nodi su 296: su disco quasi tutti stanno a salienza 0 e il graveyard tiene
+  solo keyword/salienza/dominio. Ora `drop_orphans` e' False di default, un
+  drop sopra max(10, 20% dei nodi) viene rifiutato e riportato
+  (`refused_drop`), `confirm_mass_drop=true` per volerlo davvero.
+- **Il loop della fiducia si chiude da solo.** Un nodo servito da `pre_turn`
+  e riportato come keyword (o estremo di link) dallo `store_turn` successivo
+  e' stato usato: trust += `NEURON_IMPLICIT_CONFIRM` (0.25, 0 spegne), senza
+  chiedere un `confirm` che il modello non chiama. Solo trust, one-shot,
+  rispetta il cooldown senza stamparlo (un `confirm` esplicito nello stesso
+  turno non viene raffreddato). `_reinforce` e' il punto unico per entrambi.
+- **Grazia nascosta sugli episodi.** Il cap annunciato resta 400; fra 401 e
+  600 l'episodio si salva intero e non si dichiara nulla (dichiararlo farebbe
+  di 600 il nuovo cap). Oltre 600 si taglia a confine di parola e `truncated`
+  conta dal cap annunciato.
+
 ## 6.4.7 (2026-09-10)
 - **Il tetto degli episodi passa da 200 a 400 caratteri.** 200 tagliava il
   PERCHE' del fatto, che e' la meta' per cui un episodio esiste: su un grafo
