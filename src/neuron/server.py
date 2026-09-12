@@ -852,13 +852,19 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="consolidate",
-            description="Consolidate the graph: merge near-duplicate concepts (cosine) and archive low-salience orphans to a recoverable _graveyard. Keeps the memory clean; safe to run periodically.",
+            description=("Consolidate the graph: merge near-duplicate concepts (cosine). "
+                         "drop_orphans=true ALSO archives low-salience nodes with no active link — "
+                         "on a real graph that is most of it, and the graveyard keeps only "
+                         "keyword/salience/domain (no topics, episodes, links). Off by default; "
+                         "a drop above 20% of the graph is refused unless confirm_mass_drop=true, "
+                         "and a file backup (_backups/<graph>.pre-consolidate.db) is taken before any drop."),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
                     "merge": {"type": "boolean", "description": "Merge near-duplicate nodes (default true).", "default": True},
-                    "drop_orphans": {"type": "boolean", "description": "Archive low-salience orphan nodes (default true).", "default": True},
+                    "drop_orphans": {"type": "boolean", "description": "Archive low-salience orphan nodes (default FALSE — see above).", "default": False},
+                    "confirm_mass_drop": {"type": "boolean", "description": "Allow a drop above 20% of the nodes (default false).", "default": False},
                     "sim_threshold": {"type": "number", "description": "Cosine threshold for merging (default 0.85).", "default": 0.85},
                 },
             },
@@ -1841,17 +1847,30 @@ async def _tool_prune(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 async def _tool_consolidate(arguments: dict, ctx: str, g) -> list[TextContent]:
     do_merge = arguments.get("merge", True)
+    drop = bool(arguments.get("drop_orphans", False))
+    backup = None
+    if drop:
+        # Anything that archives nodes gets a file copy first: the graveyard
+        # is not a backup (2026-09-12, 255 nodes carved back out of free pages).
+        try:
+            backup = _db.snapshot(_g._db_path(ctx or _g.active), tag="pre-consolidate")
+        except Exception:  # noqa: BLE001 — best-effort; the 20% guard still holds
+            backup = None
     report = g.consolidate(
         sim_threshold=float(arguments.get("sim_threshold", CONSOLIDATE_SIM_THRESHOLD)) if do_merge else 2.0,
-        drop_orphans=arguments.get("drop_orphans", True),
+        drop_orphans=drop,
+        max_drop_fraction=None if arguments.get("confirm_mass_drop") else 0.2,
     )
     _g.save(ctx or None)
     merged = [r for r in report if "kept" in r]
     dropped = [r for r in report if "dropped" in r]
+    refused = next((r for r in report if "refused_drop" in r), None)
     return [TextContent(type="text", text=json.dumps({
         "merged": merged, "dropped": [r["dropped"] for r in dropped],
+        **({"refused": refused} if refused else {}),
+        **({"backup": backup} if backup else {}),
         "nodes": len(g.nodes), "links": len(g.links),
-    }))]
+    }, ensure_ascii=False))]
 
 
 async def _tool_dedup(arguments: dict, ctx: str, g) -> list[TextContent]:

@@ -140,6 +140,10 @@ class GraphRegistry:
             # by the context column), not in a local file — so load regardless of
             # local file existence. Locally, gate on the file as before.
             if _db.REMOTE_TURSO or (os.path.exists(db) and os.path.getsize(db) > 0):
+                try:                      # daily rolling backup, before we touch it
+                    _db.snapshot(db)
+                except Exception as e:    # noqa: BLE001 — a backup must never block a load
+                    log.warning("backup of %s skipped: %s", db, e)
                 g.load_sqlite(db, context=ctx)
             if len(g.nodes) == 0 and self._seed_is_loadable():
                 # A missing, empty, placeholder, or corrupt seed must not crash

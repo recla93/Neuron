@@ -420,6 +420,63 @@ def _split_sql(script: str) -> list[str]:
     return [s.strip() for s in _re.sub(r"--[^\n]*", "", script).split(";") if s.strip()]
 
 
+# Rolling backups of the local graph files. One snapshot per day, taken at the
+# first open of the day (the state the previous day left behind), the newest
+# BACKUP_KEEP kept; plus a tagged one before anything that archives nodes.
+# 2026-09-12: a `consolidate` with drop_orphans archived 255 of 296 nodes, and
+# the "recoverable" graveyard held keyword/salience/domain only — topics,
+# episodes and links had to be carved out of freed SQLite pages. A copy from
+# that morning would have been a `cp`.
+BACKUP_KEEP = int(os.environ.get("NEURON_BACKUP_KEEP", "5") or 0)
+
+
+def snapshot(path: str, tag: "str | None" = None, keep: int = BACKUP_KEEP) -> "str | None":
+    """Consistent copy of a local graph file into ``<dir>/_backups/``.
+
+    ``tag=None``: the daily one, ``<name>.<YYYY-MM-DD>.db`` — skipped if today's
+    already exists, and the oldest are pruned down to ``keep``. A tag gives
+    ``<name>.<tag>.db``, overwritten every time and never pruned (the
+    pre-consolidate copy). Returns the backup path, or None when nothing was
+    written (disabled, no file yet, remote tier, or already taken today).
+
+    Copies through the sqlite3 backup API over a READ-ONLY connection: the
+    result is one self-contained file with the WAL frames folded in, and the
+    live WAL is left exactly where the worker put it (see connect_read_only).
+    """
+    if keep <= 0 or REMOTE_TURSO or not path or path == ":memory:":
+        return None
+    if not os.path.exists(path) or os.path.getsize(path) < SQLITE_MIN_VALID_SIZE:
+        return None
+    src_dir, name = os.path.split(path)
+    base = name[:-3] if name.endswith(".db") else name
+    bdir = os.path.join(src_dir, "_backups")
+    stamp = tag or _time.strftime("%Y-%m-%d")
+    dst = os.path.join(bdir, f"{base}.{stamp}.db")
+    if tag is None and os.path.exists(dst):
+        return None
+    os.makedirs(bdir, exist_ok=True)
+    src = connect_read_only(path)
+    try:
+        out = _sqlite3.connect(dst + ".tmp")
+        try:
+            src.backup(out)
+            out.execute("PRAGMA journal_mode=DELETE")   # one self-contained file
+        finally:
+            out.close()
+    finally:
+        src.close()
+    os.replace(dst + ".tmp", dst)
+    if tag is None:
+        daily = sorted(f for f in os.listdir(bdir)
+                       if _re.fullmatch(_re.escape(base) + r"\.\d{4}-\d{2}-\d{2}\.db", f))
+        for old in daily[:-keep] if keep else daily:
+            try:
+                os.remove(os.path.join(bdir, old))
+            except OSError:
+                pass
+    return dst
+
+
 def _ensure_parent_dir(path: str) -> None:
     """Make sure the file's parent directory exists before we open it.
 

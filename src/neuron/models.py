@@ -1064,7 +1064,8 @@ class Graph:
                     turn: "int | None" = None,
                     drop_orphans: bool = False,
                     orphan_salience: int = ORPHAN_SALIENCE,
-                    orphan_inactive: int = ORPHAN_INACTIVE_TURNS) -> list[dict]:
+                    orphan_inactive: int = ORPHAN_INACTIVE_TURNS,
+                    max_drop_fraction: "float | None" = 0.2) -> list[dict]:
         """Merge near-duplicate nodes (cosine > sim_threshold) into a survivor.
 
         Survivor = shorter keyword (tie -> higher salience). Salience is summed,
@@ -1110,7 +1111,8 @@ class Graph:
                 self._merge_into(*found, turn, report)
                 merged_any = True
         if drop_orphans:
-            self._drop_orphans(orphan_salience, orphan_inactive, turn, report)
+            self._drop_orphans(orphan_salience, orphan_inactive, turn, report,
+                               max_fraction=max_drop_fraction)
         if report:
             # merge rewrites node/link identity in bulk -> reconcile on next save
             self.mark_full_rewrite()
@@ -1147,11 +1149,19 @@ class Graph:
         report.append({"kept": s, "absorbed": a, "cos": round(sim, 3)})
 
     def _drop_orphans(self, orphan_salience: int, inactive_turns: int,
-                      turn: int, report: list[dict]) -> None:
+                      turn: int, report: list[dict],
+                      max_fraction: "float | None" = None) -> None:
         """Archive low-salience nodes with no *active* link (E1.3). A node is an
         orphan if salience < orphan_salience AND it has no incident link, or all
         its incident links have been inactive for >= inactive_turns. Archived to
-        _graveyard (recoverable); its dangling links are dropped too."""
+        _graveyard; its dangling links are dropped too.
+
+        The graveyard keeps keyword, salience and domain — NOT topic, episodes
+        or links — so a drop is only as recoverable as a backup. And on a real
+        graph most nodes sit at salience 0 with links long inactive: 2026-09-12
+        one call archived 255 of 296 nodes. ``max_fraction`` refuses a drop
+        above ``max(10, fraction * nodes)`` and says so in the report, instead
+        of doing it; the caller passes None to mean it."""
         incident: dict[str, list[int]] = {}
         for lk in self.links:
             incident.setdefault(lk.source, []).append(lk.inactive_turns)
@@ -1164,6 +1174,11 @@ class Graph:
             if not inc or min(inc) >= inactive_turns:
                 drop.add(nd.keyword)
         if not drop:
+            return
+        if max_fraction is not None and len(drop) > max(10, max_fraction * len(self.nodes)):
+            report.append({"refused_drop": len(drop), "of": len(self.nodes),
+                           "reason": f"would archive {len(drop)}/{len(self.nodes)} nodes; "
+                                     "pass confirm_mass_drop=true to mean it (a backup is taken first)"})
             return
         for kw in drop:
             nd = self._node_map.get(kw)
