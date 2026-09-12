@@ -76,6 +76,12 @@ EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 400)   # one compact se
 # graph 7 of 9 episodes sat at exactly 200, i.e. truncated. Raising it cannot
 # run the cost up: what governs an injection is `max_tokens` (pre_turn: 200
 # tokens = 800 chars), and the cap only decides how that budget is spent.
+# Hidden grace zone: an episode past the announced cap is kept WHOLE up to
+# 1.5x, and cut only beyond that (on a word boundary). The announced cap is
+# what the writer aims at; the grace is what stops a 430-char fact from losing
+# its "why" over 30 chars. Deliberately not an env var and not in the schema: a
+# model that knows 600 is safe writes 600 every time, and the cap is 600 again.
+_EPISODE_HARD_CHARS = EPISODE_MAX_CHARS + EPISODE_MAX_CHARS // 2
 # Embedding dimension. Default 384 (the multilingual MiniLM-L12-v2 default below,
 # and the common 384-dim models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
@@ -509,11 +515,17 @@ class Graph:
         if self._node_map.get(keyword) is None:
             return {}
         raw  = (text or "").strip()
-        text = raw[:EPISODE_MAX_CHARS]
+        text = raw
+        if len(raw) > _EPISODE_HARD_CHARS:
+            text = raw[:_EPISODE_HARD_CHARS].rsplit(" ", 1)[0]
         if not text:
             return {}
         report: dict = {"stored": True}
-        if len(raw) > EPISODE_MAX_CHARS:
+        if len(raw) > _EPISODE_HARD_CHARS:
+            # Measured from the ANNOUNCED cap, not the hard one: the number
+            # answers "how far past the limit did you go", which is what the
+            # writer needs to stay under it next time. Counting from the hard
+            # cap would hand out the grace zone, and with it the new cap.
             report["truncated"] = len(raw) - EPISODE_MAX_CHARS
         turn = self.turn_count if turn is None else turn
         eps = self.episodes.setdefault(keyword, [])

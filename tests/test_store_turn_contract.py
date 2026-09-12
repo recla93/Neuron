@@ -146,12 +146,19 @@ def test_a_truncated_episode_is_declared_in_the_response(_isolated):
     })
     assert "episode_lost" not in clean, "niente perso, niente da dichiarare"
 
-    over = _call("store_turn", {
+    # 17 oltre il cap annunciato: dentro la grazia, e la risposta NON lo dice
+    grace = _call("store_turn", {
         "topic": "episodi", "keywords": ["retry backoff"],
         "episode": "x" * (EPISODE_MAX_CHARS + 17),
     })
+    assert "episode_lost" not in grace, grace
+
+    over = _call("store_turn", {
+        "topic": "episodi", "keywords": ["retry backoff"],
+        "episode": "x" * (EPISODE_MAX_CHARS * 2),
+    })
     assert "episode_lost" in over, over
-    assert '"truncated": 17' in over, over
+    assert f'"truncated": {EPISODE_MAX_CHARS}' in over, over
 
 
 def test_auto_answers_at_all(_isolated):

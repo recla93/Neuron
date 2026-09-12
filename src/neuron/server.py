@@ -582,7 +582,7 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": (f"ONE compact fact sentence for this turn — max "
                                         f"{EPISODE_MAX_CHARS} CHARACTERS (~{EPISODE_MAX_CHARS // 6} "
-                                        "words): past that the sentence is CUT mid-word, not "
+                                        "words): past that the sentence is CUT, not "
                                         "summarized, so write within the cap rather than relying on "
                                         "graceful truncation. E.g. 'chose https over wss because "
                                         "Turso rejects the ws handshake'. Attached to the first "

@@ -47,9 +47,19 @@ class TestEpisodes(unittest.TestCase):
         # sotto i limiti: nessuna perdita da dichiarare
         clean = g.add_episode("a", "corto", turn=1)
         self.assertEqual(clean, {"stored": True})
-        # troncamento: il report conta i caratteri persi
-        long = g.add_episode("a", "x" * (EPISODE_MAX_CHARS + 17), turn=2)
-        self.assertEqual(long["truncated"], 17)
+        # oltre il cap annunciato ma dentro la grazia (1.5x): intero, e il
+        # report non lo dice — un limite morbido dichiarato e' il nuovo limite
+        grace = g.add_episode("a", "x" * (EPISODE_MAX_CHARS + 17), turn=2)
+        self.assertEqual(grace, {"stored": True})
+        self.assertEqual(len(g.recent_episodes("a")[0]), EPISODE_MAX_CHARS + 17)
+        # oltre la grazia: taglio a confine di parola, e il report conta i
+        # caratteri oltre il cap ANNUNCIATO, non oltre quello nascosto
+        words = ("parola " * EPISODE_MAX_CHARS).strip()
+        long = g.add_episode("a", words, turn=2)
+        self.assertEqual(long["truncated"], len(words) - EPISODE_MAX_CHARS)
+        stored = g.recent_episodes("a")[0]
+        self.assertLessEqual(len(stored), EPISODE_MAX_CHARS * 3 // 2)
+        self.assertTrue(stored.endswith("parola"), stored[-20:])
         # sfratto: il report nomina i turni buttati dal cap
         for t in range(3, EPISODES_PER_NODE + 4):
             rep = g.add_episode("a", f"fact {t}", turn=t)
