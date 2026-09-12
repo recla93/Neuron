@@ -311,6 +311,11 @@ class Graph:
     # same node would be inflated every single turn. Same pattern as
     # HEBBIAN_COOLDOWN; NEURON_CONFIRM_COOLDOWN=0 disables it.
     _confirm_at: dict = field(default_factory=dict)
+    # Keywords the last get_context/pre_turn actually surfaced. Read once by the
+    # next store_turn: a surfaced node that comes back as a keyword was USED,
+    # which is the feedback `confirm` asks for and the model never sends.
+    # In-memory only, like `_confirm_at`: a restart costs one missed signal.
+    _served_last: set = field(default_factory=set)
     # Save mode for the next write:
     #   _needs_full_write  — upsert EVERY in-memory row (not just the dirty delta),
     #     additively (no deletes). Needed when the store may be missing rows we

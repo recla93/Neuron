@@ -273,3 +273,41 @@ def test_confirm_has_a_cooldown(_isolated):
     # refutes bypass the cooldown: downgrading must always remain possible
     dis = _call("dismiss", {"keywords": ["ada"], "penalty": 1})
     assert '"dismissed"' in dis.lower(), dis
+
+
+def test_a_surfaced_node_stored_again_gains_trust_without_confirm(_isolated):
+    """Il loop della fiducia si chiude da solo (2026-09-12).
+
+    introspect sul grafo reale: i nodi più salienti a trust 0.0, i più fidati a
+    salience 0. Trust si muoveva solo su `confirm`, che il modello non chiama.
+    Un nodo che pre_turn ha servito e che lo store_turn successivo riporta come
+    keyword è stato USATO: quel rientro vale un quarto di confirm, senza
+    chiedere niente al modello. Il segnale è one-shot: un secondo store_turn
+    senza pre_turn in mezzo non confermerà più nulla."""
+    from neuron.server import _g, IMPLICIT_CONFIRM
+    assert IMPLICIT_CONFIRM > 0, "il test presume il default attivo"
+
+    _call("store_turn", {"topic": "kelvinator", "keywords": ["kelvinator", "ostrakon"]})
+    g = _g.get()
+    assert g.get_node("kelvinator").trust == 0.0
+
+    _call("pre_turn", {"topic": "kelvinator"})
+    assert "kelvinator" in g._served_last, g._served_last
+
+    # lo riporta come keyword: usato -> trust, senza confirm
+    _call("store_turn", {"topic": "kelvinator", "keywords": ["kelvinator", "pleiadi"]})
+    assert g.get_node("kelvinator").trust == IMPLICIT_CONFIRM
+    assert g.get_node("ostrakon").trust == 0.0, "non riportato: nessuna evidenza"
+    assert g._served_last == set(), "one-shot: il servito si consuma"
+
+    # senza un pre_turn in mezzo, menzionarlo ancora non conferma
+    _call("store_turn", {"topic": "kelvinator", "keywords": ["kelvinator", "ostrakon"]})
+    assert g.get_node("kelvinator").trust == IMPLICIT_CONFIRM
+
+    # l'esplicito nello stesso turno dell'implicito NON viene raffreddato:
+    # il segnale debole non deve costare quello forte
+    _call("pre_turn", {"topic": "kelvinator"})
+    _call("store_turn", {"topic": "kelvinator", "keywords": ["kelvinator"]})
+    out = _call("confirm", {"keywords": ["kelvinator"]})
+    assert '"confirmed": ["kelvinator"]' in out, out
+    assert g.get_node("kelvinator").trust == 2 * IMPLICIT_CONFIRM + 1.0

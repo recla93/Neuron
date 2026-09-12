@@ -191,6 +191,12 @@ def _clamp_float(raw, default: float, lo: float, hi: float) -> float:
 # ---------------------------------------------------------------------------
 
 TOPIC_SHIFT_THRESHOLD = _config.env_float("NEURON_TOPIC_SHIFT_THRESHOLD", 0.3)
+# Implicit confirm (2026-09-12): trust added to a surfaced node that the model
+# brings back as a keyword of the very next store_turn. introspect showed the
+# two halves of the loop never meeting — the most salient nodes at trust 0.0,
+# the most trusted at salience 0 — because trust moves only on `confirm`, and
+# the model does not call it. A quarter of an explicit confirm; 0 disables.
+IMPLICIT_CONFIRM = _config.env_float("NEURON_IMPLICIT_CONFIRM", 0.25)
 
 # The stimulus-engine functions live in neuron.stimulus (T57): topic shift,
 # auto-linking, context window with semantic flashes, piggyback stimulus.
@@ -1529,6 +1535,17 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     g.last_sentiment = sentiment
     g.last_topic = topic
     g.last_keywords = keywords
+    # Implicit confirm: a node the last pre_turn surfaced, and the model now
+    # stores as a keyword or link endpoint, was used. Trust only — the mention
+    # itself already pays the salience above. Absence is not a refute: a node
+    # not coming back is no evidence it was wrong. One-shot: the set is cleared
+    # so a stale pre_turn cannot keep confirming turns it never informed.
+    if IMPLICIT_CONFIRM > 0 and g._served_last:
+        mentioned = {g._norm(k) for k in keywords} | {
+            g._norm(e) for ld in new_links_data for e in (ld["source"], ld["target"])}
+        for kw in g._served_last & mentioned:
+            _reinforce(g, kw, IMPLICIT_CONFIRM, boost=0, stamp=False)
+    g._served_last = set()
     g.reinforce_coactivation(keywords)   # Hebbian: co-active links wire together (E2.1)
     g.increment_inactivity(set(keywords))
     # L1: newly stored keywords enter session cache (score proportional to salience)
@@ -1603,6 +1620,7 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
 
     related_links_sorted, top_nodes, used_fallback, inherited_ctx, g, pattern_hits = \
         _resolve_context(search_kws, depth, g, ctx, mode, focus)
+    g._served_last = {kw for kw, _sc in top_nodes}
 
 
     if fmt == "compact":
@@ -2109,6 +2127,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         search_kws_pt.update(extra_kws_pt)
     lks, nodes_pt, fallback_pt, inh_pt, _, pats_pt = \
         _resolve_context(search_kws_pt, 1, g_pt, "", mode_pt, focus_pt)
+    g_pt._served_last = {kw for kw, _sc in nodes_pt}
     parts_pt: list[str] = []
     if lks:
         parts_pt.append("links:" + "|".join(
@@ -2283,28 +2302,12 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     # Anti-bounce: with the hint in pre_turn, confirming costs zero effort and
     # a reflexive model would repeat it every turn, inflating salience and
     # trust until the signal dilutes. Same idea as HEBBIAN_COOLDOWN.
-    cooldown = _config.env_int("NEURON_CONFIRM_COOLDOWN", 2) if confidence >= 0 else 0
     confirmed: list[str] = []
     skipped:   list[str] = []
     cooled:    list[str] = []
     for kw in keywords:
-        nd = g.get_node(kw)
-        if nd:
-            last = g._confirm_at.get(nd.keyword)
-            if cooldown and last is not None and g.turn_count - last < cooldown:
-                cooled.append(kw)      # reinforcement deferred, node still hot
-                continue
-            g._confirm_at[nd.keyword] = g.turn_count
-            if confidence >= 0:      # un refute non deve anche premiare la salience
-                nd.salience += boost
-            nd.trust = max(0.0, nd.trust + confidence)
-            g.mark_node_dirty(nd.keyword)
-            confirmed.append(kw)
-            # L1: confirmed keywords enter session cache
-            if confidence >= 0:
-                g.cache_add(kw, score=min(1.0, confidence * 0.8 + 0.2))
-        else:
-            skipped.append(kw)
+        {"confirmed": confirmed, "cooled": cooled, "skipped": skipped}[
+            _reinforce(g, kw, confidence, boost)].append(kw)
     if confirmed:
         _g.save(ctx or None)
     return [TextContent(type="text", text=json.dumps({
@@ -2314,6 +2317,36 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
         "skipped": skipped,
         **({"cooled": cooled} if cooled else {}),
     }, ensure_ascii=False))]
+
+
+def _reinforce(g, kw: str, confidence: float, boost: int, stamp: bool = True) -> str:
+    """One confirm on one node: trust += confidence (floored at 0), salience +=
+    boost unless it is a refute. Returns "confirmed" | "cooled" | "skipped".
+
+    Anti-bounce: with the hint in pre_turn, confirming costs zero effort and a
+    reflexive model would repeat it every turn, inflating salience and trust
+    until the signal dilutes. Same idea as HEBBIAN_COOLDOWN. Shared by the
+    explicit `confirm` tool and the implicit confirm in store_turn, so both
+    obey the same cooldown. Only an explicit confirm STAMPS the clock
+    (`stamp`): if the weak implicit signal did, it would cool the strong
+    explicit one arriving in the same turn, and the loop would lose its best
+    evidence to its worst."""
+    nd = g.get_node(kw)
+    if not nd:
+        return "skipped"
+    cooldown = _config.env_int("NEURON_CONFIRM_COOLDOWN", 2) if confidence >= 0 else 0
+    last = g._confirm_at.get(nd.keyword)
+    if cooldown and last is not None and g.turn_count - last < cooldown:
+        return "cooled"           # reinforcement deferred, node still hot
+    if stamp:
+        g._confirm_at[nd.keyword] = g.turn_count
+    if confidence >= 0:           # un refute non deve anche premiare la salience
+        nd.salience += boost
+    nd.trust = max(0.0, nd.trust + confidence)
+    g.mark_node_dirty(nd.keyword)
+    if confidence >= 0:           # L1: confirmed keywords enter session cache
+        g.cache_add(nd.keyword, score=min(1.0, confidence * 0.8 + 0.2))
+    return "confirmed"
 
 
 def _confirm_hint_enabled() -> bool:
