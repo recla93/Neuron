@@ -131,6 +131,7 @@ Link weights:
 neuron_auto(text="<full user message + assistant response>")
 ```
 This runs heuristic NLP extraction server-side. Less precise but always works.
+Not announced by default (tool diet): callable by name, or set `NEURON_TOOLS=all`.
 
 ### Step 2 — Screen for duplicates (optional, recommended for long sessions)
 ```

@@ -76,6 +76,18 @@ HELP_TEXT = (
     "Heuristic tools (imprecisi, preferisci store_turn):\n"
     "  auto            extract + save in one shot, 0-token\n"
     "  extract         NLP-only keyword extraction (no save)\n"
+    "\n"
+    "Only the loop tools are announced; upkeep/danger/heuristic ones stay\n"
+    "callable by name (CLI, Gray-Matter) — NEURON_TOOLS=all announces everything.\n"
+    "\n"
+    "store_turn, the limits the schema does not repeat:\n"
+    "  domain    a non-'general' domain on TWO consecutive turns switches the\n"
+    "            active context: later turns land in that other graph.\n"
+    "  episode   cut at NEURON_EPISODE_MAX_CHARS (400), not summarized; each node\n"
+    "            keeps NEURON_EPISODES_PER_NODE (5), the oldest is evicted;\n"
+    "            crossing either is reported back in 'episode_lost'.\n"
+    "  references  a project-relative path is disambiguated across projects by\n"
+    "            project_id (.neuron/project.json); 'by' is provenance only.\n"
 )
 
 

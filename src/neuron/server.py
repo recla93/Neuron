@@ -544,8 +544,26 @@ async def read_resource(uri) -> list[ReadResourceContents]:
 # MCP tools
 # ---------------------------------------------------------------------------
 
+# Tool diet (2026-09-13). The published schemas cost 8.6k tokens per session
+# across the trio (Neuron alone 5.1k) before the model says a word, and in
+# clients without deferred loading they ride every request. Half of Neuron's
+# tools are upkeep or one-shot admin the loop never needs; they stay callable
+# (dispatch is by name, the CLI and Gray-Matter reach them) but are not
+# announced unless NEURON_TOOLS=all.
+_ADMIN_TOOLS = frozenset({"prune", "consolidate", "dedup", "flash", "reset",
+                          "extract", "auto", "export", "merge", "introspect",
+                          "vector_search", "summary"})
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
+    tools = _all_tools()
+    if os.environ.get("NEURON_TOOLS", "core").lower() == "all":
+        return tools
+    return [t for t in tools if t.name not in _ADMIN_TOOLS]
+
+
+def _all_tools() -> list[Tool]:
     return [
         Tool(
             name="status",
@@ -566,34 +584,25 @@ async def list_tools() -> list[Tool]:
                 "Curate for a clean graph: topic = 3-5 words; keywords = 3-5 CONCEPT "
                 "nouns / entities / tech (never verbs or filler like 'use', 'make'); "
                 "links = typed edges between keywords (never link a keyword to itself). "
-                "This is the preferred way to save — cleaner than auto(). Skip on trivial "
-                "turns (greetings, acknowledgements, yes/no)."
+                "Skip on trivial turns (greetings, acknowledgements, yes/no). "
+                "Field limits and pitfalls: `help`."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "topic": {"type": "string", "description": "Topic of the turn (3-5 words)"},
                     "keywords": {"type": "array", "items": {"type": "string"}, "description": "Abstract keywords (3-5)"},
-                    "domain": {"type": "string", "description": "Optional, defaults to 'general'. Free-form topic label: common values are AI, backend, frontend, gaming, architecture, general, but ANY label works (e.g. biology, finance, music, devops). NOT just a label — sending the same non-'general' domain on two consecutive turns SWITCHES the active context, and later turns are stored in that other graph. Use it when the subject really has changed; keep 'general' to stay put. A session that changes domain mid-way ends up split across two graphs, neither of which holds the whole session.", "default": "general"},
+                    "domain": {"type": "string", "description": "Free-form label (AI, backend, biology...). CAUTION: the same non-'general' domain on two consecutive turns SWITCHES the active context; keep 'general' to stay put.", "default": "general"},
                     "intent": {"type": "string", "enum": ["question", "task", "exploration", "clarification", "feedback"], "description": "Optional, defaults to 'exploration'.", "default": "exploration"},
                     "sentiment": {"type": "string", "enum": ["neutral", "positive", "critical", "urgent"], "description": "Optional, defaults to 'neutral'.", "default": "neutral"},
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                     "episode": {
                         "type": "string",
-                        "description": (f"ONE compact fact sentence for this turn — max "
-                                        f"{EPISODE_MAX_CHARS} CHARACTERS (~{EPISODE_MAX_CHARS // 6} "
-                                        "words): past that the sentence is CUT, not "
-                                        "summarized, so write within the cap rather than relying on "
-                                        "graceful truncation. E.g. 'chose https over wss because "
-                                        "Turso rejects the ws handshake'. Attached to the first "
-                                        "keyword; pre_turn will surface it later as a fact, not "
-                                        f"just a theme. Second limit: each node keeps only its "
-                                        f"{EPISODES_PER_NODE} most recent episodes — past that the "
-                                        "OLDEST is evicted, so a heavily used node loses its early "
-                                        "history. Both caps are raisable by env var "
-                                        "(NEURON_EPISODE_MAX_CHARS / NEURON_EPISODES_PER_NODE) and "
-                                        "both are reported back in 'episode_lost' when you cross "
-                                        "them."),
+                        "description": (f"ONE fact sentence for this turn, max {EPISODE_MAX_CHARS} "
+                                        "chars (cut past that, not summarized). E.g. 'chose https "
+                                        "over wss because Turso rejects the ws handshake'. Attached "
+                                        "to the first keyword; pre_turn surfaces it as a fact. "
+                                        f"A node keeps its {EPISODES_PER_NODE} most recent."),
                     },
                     "entities": {
                         "type": "array", "items": {"type": "string"},
@@ -609,10 +618,10 @@ async def list_tools() -> list[Tool]:
                             "type": "object",
                             "properties": {
                                 "type": {"type": "string", "enum": ["file", "url", "commit"]},
-                                "path": {"type": "string", "description": "For files: project-relative POSIX path if known; an absolute path is auto-canonicalized server-side."},
+                                "path": {"type": "string", "description": "Project-relative POSIX path (absolute is canonicalized)."},
                                 "description": {"type": "string"},
-                                "project_id": {"type": "string", "description": "Optional: UUID from .neuron/project.json — disambiguates the same relative path across projects in a shared DB."},
-                                "by": {"type": "string", "description": "Optional: who added this ref (provenance, not access control)."},
+                                "project_id": {"type": "string", "description": "Optional: UUID from .neuron/project.json."},
+                                "by": {"type": "string", "description": "Optional: provenance."},
                             },
                         },
                         "description": "References to files (project-relative), URLs or commits",
@@ -680,7 +689,7 @@ async def list_tools() -> list[Tool]:
                     "mode": {
                         "type": "string",
                         "enum": ["semantic", "focus"],
-                        "description": "Retrieval mode: semantic (default), focus (boosts the active task). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
+                        "description": "semantic (default) or focus (boosts the active task).",
                         "default": "semantic",
                     },
                     "focus": {
@@ -1018,7 +1027,7 @@ async def list_tools() -> list[Tool]:
                     "mode": {
                         "type": "string",
                         "enum": ["semantic", "focus"],
-                        "description": "Retrieval mode: semantic (default), focus (boosts the active task). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
+                        "description": "semantic (default) or focus (boosts the active task).",
                         "default": "semantic",
                     },
                     "focus": {
@@ -2514,7 +2523,7 @@ def _maybe_register_gray_matter() -> None:
         except Exception:
             pass  # GM vecchio senza unmanaged_tools → comportamento storico
         try:
-            if not autoregister("neuron", list(_HANDLERS.keys())):
+            if not autoregister("neuron", [t.name for t in asyncio.run(list_tools())]):
                 return
         except Exception:
             return
