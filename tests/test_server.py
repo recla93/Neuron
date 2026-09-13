@@ -252,7 +252,7 @@ def test_resolve_context_normalizes_search_kws():
     srv._g = _make_registry_with({"default": g}, "default")
 
     try:
-        links, nodes, fallback, inherited, _, _pats = srv._resolve_context(
+        links, nodes, fallback, inherited, _ = srv._resolve_context(
             {"Kotlin Flow"},   # uppercase -- should still match
             depth=1, g=g, ctx="",
         )
@@ -275,7 +275,7 @@ def test_resolve_context_inheritance():
     srv._g = _make_registry_with({"default": default_g, "backend": child_g}, "backend")
 
     try:
-        links, nodes, fallback, inherited, _, _pats = srv._resolve_context(
+        links, nodes, fallback, inherited, _ = srv._resolve_context(
             {"kotlin flow"},
             depth=1, g=child_g, ctx="",
         )
@@ -401,7 +401,7 @@ def _pre_turn_with_ranking(monkeypatch, ranked, warm, topic):
                         sentiment="neutral", salience=4))
         g.cache_add(kw)
     monkeypatch.setattr(srv, "_resolve_context",
-                        lambda *a, **k: ([], list(ranked), False, "", None, []))
+                        lambda *a, **k: ([], list(ranked), False, "", None))
     old_g = srv._g
     srv._g = _make_registry_with({"default": g}, "default")
     try:
@@ -457,7 +457,7 @@ def _pre_turn_via_vectors(monkeypatch, ranked, best_sim, topic, cross=None):
         g.add_node(Node(keyword=kw, turn=1, topic="t", domain="general",
                         sentiment="neutral", salience=4))
     monkeypatch.setattr(srv, "_resolve_context",
-                        lambda *a, **k: ([], list(ranked), True, None, None, []))
+                        lambda *a, **k: ([], list(ranked), True, None, None))
     monkeypatch.setattr(srv, "_search_embeddings", lambda *a, **k: [("x", best_sim)])
     monkeypatch.setattr(srv, "cross_context_matches", lambda *a, **k: list(cross or []))
     old_g = srv._g
@@ -587,7 +587,7 @@ def test_a_note_about_method_cannot_pass_for_context(monkeypatch):
 
     # zero link, zero nodi, ma la strada vettoriale dice di essere stata usata
     monkeypatch.setattr(srv, "_resolve_context",
-                        lambda *a, **kw: ([], [], True, None, None, []))
+                        lambda *a, **kw: ([], [], True, None, None))
     old_g = srv._g
     srv._g = _make_registry_with({"default": Graph(turn_count=0)}, "default")
     try:

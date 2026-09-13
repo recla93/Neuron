@@ -29,7 +29,7 @@ from fastembed import TextEmbedding
 
 from neuron import __version__, db as _db
 from neuron import curation as _cur   # T54 gate (stdlib-only module)
-from neuron import modes as _modes    # modalità operative del retrieval (focus/pattern)
+from neuron import modes as _modes    # modalità operative del retrieval (focus) + log turni
 from neuron import project as _project   # G1/G4: project_id + path canonicalization (stdlib-only)
 # T57: extraction moved verbatim to its own module; every public name is
 # re-imported here so existing imports/tests via neuron.server keep working.
@@ -679,8 +679,8 @@ async def list_tools() -> list[Tool]:
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                     "mode": {
                         "type": "string",
-                        "enum": ["semantic", "focus", "pattern"],
-                        "description": "Retrieval mode: semantic (default), focus (boosts the active task), pattern (next step from recurring patterns). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
+                        "enum": ["semantic", "focus"],
+                        "description": "Retrieval mode: semantic (default), focus (boosts the active task). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
                         "default": "semantic",
                     },
                     "focus": {
@@ -1017,8 +1017,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["semantic", "focus", "pattern"],
-                        "description": "Retrieval mode: semantic (default), focus (boosts the active task), pattern (next step from recurring patterns). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
+                        "enum": ["semantic", "focus"],
+                        "description": "Retrieval mode: semantic (default), focus (boosts the active task). For unexpected candidates use gray_matter_brainstorm instead: it needs the whole graph plus the chunks, which a mode does not have.",
                         "default": "semantic",
                     },
                     "focus": {
@@ -1266,16 +1266,11 @@ def _resolve_context(
         except Exception:
             pass  # MMR is best-effort, fall back to original ranking
 
-    # Modalità pattern: suggerisce il prossimo passo da sequenze ricorrenti di
-    # keyword nei turni. Il materiale è lo storico dei turni (turns.jsonl in
-    # graphs_dir, appendato da store_turn) — il grafo non preserva i turni.
-    pattern_hits: list = []
-    if mode == "pattern":
-        from neuron import paths as _np
-        patterns = _modes.patterns_from_log(_np.graphs_dir() / "turns.jsonl")
-        pattern_hits = _modes.pattern_suggest(sorted(search_kws), patterns)
-
-    return related_links_sorted, top_nodes, used_fallback, inherited_ctx, g, pattern_hits
+    # Niente modalita' "pattern" (tolta 2026-09-13): misurata su 155 turni reali,
+    # 0 previsioni giuste — 400 keyword su 515 viste una volta sola, troppo
+    # sparso per una catena di Markov. Il log turns.jsonl resta (store_turn lo
+    # appende): e' il materiale per rimisurare a 500 turni, coppie t -> t+1.
+    return related_links_sorted, top_nodes, used_fallback, inherited_ctx, g
 
 
 _LOOP_HINT = (
@@ -1618,7 +1613,7 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
     mode       = arguments.get("mode", "semantic")
     focus      = arguments.get("focus") or None
 
-    related_links_sorted, top_nodes, used_fallback, inherited_ctx, g, pattern_hits = \
+    related_links_sorted, top_nodes, used_fallback, inherited_ctx, g = \
         _resolve_context(search_kws, depth, g, ctx, mode, focus)
     g._served_last = {kw for kw, _sc in top_nodes}
 
@@ -1649,15 +1644,11 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
         # fallback=True con zero nodi e zero link, e la riga diceva
         # "(vector fallback)" al posto di "no context". E' lo stesso errore che
         # il commento sulla cache descrive piu' sotto, un livello piu' in su.
-        # `patterns:` resta contenuto: dice qualcosa del grafo, non del metodo.
         notes: list[str] = []
         if used_fallback:
             notes.append("(vector fallback)")
         if inherited_ctx:
             notes.append(f"(from:{inherited_ctx})")
-        if pattern_hits:
-            parts.append("patterns:" + ",".join(f"{h['next']}(x{h['count']})"
-                                                for h in pattern_hits[:3]))
         out = " | ".join(parts) if parts else "no context"
         if notes:
             out += " | " + " | ".join(notes)
@@ -1697,10 +1688,6 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
             dom = nd.domain if nd else "?"
             sal = nd.salience if nd else 0
             lines.append(f"  {nd_kw} [{dom}, sal={sal}, score={score:.0f}]")
-
-    if pattern_hits:
-        lines.append("\nPatterns (next step?): " + " | ".join(
-            f"{h['next']} (x{h['count']})" for h in pattern_hits[:3]))
 
     out = "\n".join(lines)
     return [TextContent(type="text", text=out[:char_budget])]
@@ -2125,7 +2112,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     search_kws_pt: set[str] = {topic_pt} if topic_pt else set()
     if isinstance(extra_kws_pt, list):
         search_kws_pt.update(extra_kws_pt)
-    lks, nodes_pt, fallback_pt, inh_pt, _, pats_pt = \
+    lks, nodes_pt, fallback_pt, inh_pt, _ = \
         _resolve_context(search_kws_pt, 1, g_pt, "", mode_pt, focus_pt)
     g_pt._served_last = {kw for kw, _sc in nodes_pt}
     parts_pt: list[str] = []
@@ -2228,9 +2215,6 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         notes_pt.append("(vector fallback)")
     if inh_pt:
         notes_pt.append(f"(from:{inh_pt})")
-    if pats_pt:
-        parts_pt.append("patterns:" + ",".join(f"{h['next']}(x{h['count']})"
-                                               for h in pats_pt[:3]))
     ctx_text_pt = " | ".join(parts_pt) if parts_pt else "no context"
     if notes_pt:
         ctx_text_pt += " | " + " | ".join(notes_pt)
