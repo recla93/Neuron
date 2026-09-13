@@ -1,5 +1,21 @@
 ﻿# Changelog — Neuron
 
+## 6.5.0 (2026-09-13)
+- **Dieta dei tool: annunciati solo quelli del loop.** Gli schemi pubblicati
+  costavano 5.1k token per sessione (8.6k sul trio) prima che il modello
+  dicesse una parola, e nei client senza caricamento differito viaggiano a ogni
+  richiesta. `prune`, `consolidate`, `dedup`, `flash`, `reset`, `extract`,
+  `auto`, `export`, `merge`, `introspect`, `vector_search`, `summary` restano
+  serviti per nome (CLI, Gray-Matter) ma non compaiono in `list_tools`;
+  `NEURON_TOOLS=all` li riannuncia. Lo schema di `store_turn` (994 token)
+  perde il manuale su domain/episode/references, che passa in `help`.
+  Neuron da solo: 5080 -> 3199 token, 25 -> 13 tool.
+- **Via la modalita' `pattern`.** Misurata su 155 turni reali: 0 previsioni
+  giuste — 400 keyword su 515 viste una volta sola, troppo sparso per una
+  catena di Markov. Tolti enum, ramo in `_resolve_context` (torna 5 valori) e
+  righe `patterns:` in `get_context`/`pre_turn`. `turns.jsonl` continua a
+  crescere: e' il materiale per rimisurare a 500 turni, coppie t -> t+1.
+
 ## 6.4.8 (2026-09-12)
 - **Un `sqlite3.connect` esterno cancellava il WAL del worker, e i turni con
   lui.** Riprodotto con controllo: store A, lettura esterna + close, store B e

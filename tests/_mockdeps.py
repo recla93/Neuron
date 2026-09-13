@@ -65,7 +65,7 @@ def install_mock_deps() -> None:
     low.NotificationOptions   = type("NotificationOptions", (), {})
     mdl.InitializationOptions = type("IO", (), {})
     std.stdio_server          = _fake_stdio
-    typ.Tool                  = type("Tool", (), {"__init__": lambda s, **kw: None})
+    typ.Tool                  = type("Tool", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
     typ.TextContent           = type("TC", (), {"__init__": lambda s, **kw: s.__dict__.update(kw)})
     typ.ServerCapabilities    = type("SC", (), {})
     typ.ToolsCapability       = type("TsCap", (), {})
