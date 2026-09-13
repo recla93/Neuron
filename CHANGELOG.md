@@ -1,5 +1,9 @@
 ﻿# Changelog — Neuron
 
+## 6.5.1 (2026-09-13)
+- Wheel vendored di Gray Matter aggiornata alla 1.5.1 e pin `GM_VERSION`
+  allineato negli installer. Nessuna modifica al codice di Neuron.
+
 ## 6.5.0 (2026-09-13)
 - **Dieta dei tool: annunciati solo quelli del loop.** Gli schemi pubblicati
   costavano 5.1k token per sessione (8.6k sul trio) prima che il modello
