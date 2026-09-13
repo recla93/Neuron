@@ -92,6 +92,15 @@ MAX_REFERENCES_PER_TURN = 20
 # Approximate chars per token for budget calculations
 CHARS_PER_TOKEN = 4
 
+
+def _fit(text: str, budget: int) -> str:
+    """Cut to the budget on a word boundary: `facts: pattern-mode: Tolt` reads
+    like a bug and costs the same as the whole word would have."""
+    if len(text) <= budget:
+        return text
+    cut = text[:budget]
+    return cut.rsplit(None, 1)[0] if " " in cut else cut
+
 # How many top-ranked nodes contribute facts/files to pre_turn. Declared, not a
 # literal: a recall that only ever returns rank 1 makes every extra concept a
 # competitor for the single slot. Override per call with pre_turn(fact_nodes=N).
@@ -1661,7 +1670,7 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
         out = " | ".join(parts) if parts else "no context"
         if notes:
             out += " | " + " | ".join(notes)
-        return [TextContent(type="text", text=out[:char_budget])]
+        return [TextContent(type="text", text=_fit(out, char_budget))]
 
     # Full format (default)
     _ctx_suffix = ""
@@ -1699,7 +1708,7 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
             lines.append(f"  {nd_kw} [{dom}, sal={sal}, score={score:.0f}]")
 
     out = "\n".join(lines)
-    return [TextContent(type="text", text=out[:char_budget])]
+    return [TextContent(type="text", text=_fit(out, char_budget))]
 
 
 async def _tool_find_candidates(arguments: dict, ctx: str, g) -> list[TextContent]:
@@ -2258,7 +2267,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # chiamante non li ha registrati ne' come avvisi ne' come diagnosi. Il
     # budget resta quello di sempre ma si applica al contesto, che e' la
     # parte che puo' crescere.
-    out_pt = "\n".join([status_line, *warns_pt, ctx_text_pt[:char_budget_pt]])
+    out_pt = "\n".join([status_line, *warns_pt, _fit(ctx_text_pt, char_budget_pt)])
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
     # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.

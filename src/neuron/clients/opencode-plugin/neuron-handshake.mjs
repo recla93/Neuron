@@ -87,7 +87,7 @@ function knowledgeBlock(key) {
     "answering from memory.\n" +
     "Search it with knowledge_query(query) when the question touches indexed " +
     "material; cite what you used.\n" +
-    "Once per session: skill(name='usage') for the retrieval workflow " +
+    "Once per session: knowledge_skill(name='usage') for the retrieval workflow " +
     "(chunking, filters, when NOT to search).\n" +
     `If no ${key}_* tools exist here, the knowledge base is not connected - ignore this silently.`
   );

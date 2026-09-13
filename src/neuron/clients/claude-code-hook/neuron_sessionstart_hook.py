@@ -221,7 +221,7 @@ def _knowledge_block(p: str) -> str:
         "answering from memory.\n"
         f"Search it with {p}knowledge_query(query) when the question touches "
         "indexed material; cite what you used.\n"
-        f"Once per session: {p}skill(name='usage') for the retrieval workflow "
+        f"Once per session: {p}knowledge_skill(name='usage') for the retrieval workflow "
         "(chunking, filters, when NOT to search).\n"
         "If a call fails because the tool is not loaded, load its schema and retry "
         f"once - some clients defer MCP tools. Only a tool list with no {p}* entry "

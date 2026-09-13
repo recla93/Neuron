@@ -38,3 +38,10 @@ def test_what_the_schema_dropped_is_in_help(srv):
     from neuron.funnel import HELP_TEXT
     for word in ("NEURON_TOOLS=all", "episode_lost", "switches the"):
         assert word in HELP_TEXT, word
+
+
+def test_the_output_budget_cuts_on_a_word_boundary(srv):
+    text = "facts: pattern-mode: Tolta la modalita pattern"
+    assert srv._fit(text, 26) == "facts: pattern-mode:"          # never "Tolt"
+    assert srv._fit(text, 200) == text                            # under budget: whole
+    assert srv._fit("x" * 50, 10) == "x" * 10                     # no space: plain cut
