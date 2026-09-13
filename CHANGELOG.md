@@ -1,5 +1,12 @@
 ﻿# Changelog — Neuron
 
+## 6.5.2 (2026-09-13)
+- **Il budget d'uscita taglia a confine di parola.** `get_context` e
+  `pre_turn` con `max_tokens` stretto finivano a meta' parola (`facts:
+  pattern-mode: Tolt`); il taglio a parola di ieri valeva solo per gli
+  episodi salvati. Wheel vendored di Gray Matter 1.5.2, hook di sessione
+  che nominano `knowledge_skill`.
+
 ## 6.5.1 (2026-09-13)
 - Wheel vendored di Gray Matter aggiornata alla 1.5.1 e pin `GM_VERSION`
   allineato negli installer. Nessuna modifica al codice di Neuron.
