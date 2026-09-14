@@ -1,6 +1,6 @@
-﻿# Changelog — Neuron
+# Changelog — Neuron
 
-## Unreleased
+## 6.5.3 (2026-09-14)
 - **Hook e playbook: quando chiamare `brainstorm`.** Dietro il gateway
   l'handshake dice: su un problema, bug, dilemma o decisione,
   `gray_matter_brainstorm(seed)` prima di rispondere. Il playbook ha il passo
