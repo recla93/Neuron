@@ -1,6 +1,13 @@
 ﻿# Changelog — Neuron
 
 ## Unreleased
+- **Hook e playbook: quando chiamare `brainstorm`.** Dietro il gateway
+  l'handshake dice: su un problema, bug, dilemma o decisione,
+  `gray_matter_brainstorm(seed)` prima di rispondere. Il playbook ha il passo
+  `[THINK]` fra PRE e RESPOND. Standalone niente: il tool e' di GM.
+- **README: tool con i nomi veri.** Erano documentati con il prefisso
+  `neuron_`, che il server non ha mai avuto; mancavano `around`, `recall`,
+  `dismiss`, `help`, `skill` e gli admin.
 - **`around(topic, n)`: il vicinato di un tema, con quello che ricorda.** Tool
   interno (non annunciato, come `vector_search`): i nodi in banda media di
   similarita' (0.30-0.75, la stessa costante di `forgotten(near)`, ora

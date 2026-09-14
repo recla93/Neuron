@@ -18,6 +18,9 @@ User message arrives
 [PRE]  neuron_pre_turn(topic, keywords)      ← single call: status + compact context
       │   Inject compact context into reasoning before responding
       ▼
+[THINK]  problem / bug / dilemma / decision?  → gray_matter_brainstorm(seed)  (gateway only)
+      │   What sits AROUND the problem, with its history — a past decision, a bug solved once
+      ▼
 [RESPOND]  Generate response
       │
       ▼

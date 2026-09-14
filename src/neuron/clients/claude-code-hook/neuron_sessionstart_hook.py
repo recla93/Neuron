@@ -185,11 +185,17 @@ def active_context() -> str:
     return name[:64] if name else ""
 
 
-def _memory_block(p: str, with_knowledge: bool) -> str:
+def _memory_block(p: str, with_knowledge: bool, gateway: bool = False) -> str:
     extra = (
         f"Knowledge base: {p}knowledge_query(query) when the question touches "
         "indexed material.\n"
     ) if with_knowledge else ""
+    # Solo dietro il gateway: `brainstorm` e' un tool di GM. E' una lettura che
+    # nessun loop chiama da solo, quindi il momento va detto qui.
+    extra += (
+        f"On a problem, bug, dilemma or decision: {p}gray_matter_brainstorm(seed) "
+        "BEFORE answering - the seed is the problem in one sentence.\n"
+    ) if gateway else ""
     ctx = active_context()
     where = (
         "Memory context: %s -- store_turn writes there. Not this session's "
@@ -247,7 +253,7 @@ def handshake(slug: str, installed=None) -> str:
 
     mem, know = "neuron" in have, "neurag" in have
     if mem:
-        return _memory_block(p, know)
+        return _memory_block(p, know, gateway=True)
     if know:
         return _knowledge_block(p)
     return ""          # gateway with no peers: nothing to push

@@ -215,15 +215,21 @@ that animates your memory growing turn by turn · and an Obsidian-style 🎨 app
 
 ## 🧰 MCP tools
 
+Tool names are bare (`pre_turn`, not `neuron_pre_turn`). MCP clients prefix them
+with the server name (`mcp__neuron__pre_turn`, or `mcp__gray-matter__pre_turn`
+behind the gateway). Admin tools are callable but not announced unless
+`NEURON_TOOLS=all`.
+
 <details>
 <summary><strong>The core loop</strong></summary>
 
 | Tool | Description |
 |---|---|
-| `neuron_pre_turn(topic, keywords)` | **PRE shortcut** — status + compact context in one call |
-| `neuron_store_turn(...)` | Save a turn: keywords, links, entities, tags, an episodic fact |
-| `neuron_confirm(keywords)` | Boost salience of nodes that influenced the response |
-| `neuron_get_context(topic, ...)` | Related nodes/links; `format=compact` for injection; inherits from parents |
+| `pre_turn(topic, keywords)` | **PRE shortcut** — status + compact context in one call, with the piggybacked stimulus |
+| `store_turn(...)` | Save a turn: keywords, links, entities, tags, an episodic fact |
+| `confirm(keywords)` | Boost salience of nodes that influenced the response; re-raises a dormant one |
+| `dismiss(keywords)` | Negative feedback: lower salience and trust of misleading associations |
+| `get_context(topic, ...)` | Related nodes/links; `format=compact` for injection; inherits from parents |
 
 </details>
 
@@ -232,14 +238,26 @@ that animates your memory growing turn by turn · and an Obsidian-style 🎨 app
 
 | Tool | Description |
 |---|---|
-| `neuron_status` / `neuron_summary` | Graph state · top nodes and recent links |
-| `neuron_vector_search(keywords)` | Semantic vector search (no link traversal) |
-| `neuron_find_candidates(keywords)` | Find similar existing keywords before storing (dedup) |
-| `neuron_merge(canonical, aliases)` | Absorb duplicate nodes into one |
-| `neuron_extract(text)` / `neuron_auto(text)` | Standalone extraction · extract-and-save in one call |
-| `neuron_switch_context` / `neuron_list_contexts` | Switch / list domain contexts (e.g. `java/spring`) |
-| `neuron_forgotten` / `neuron_prune` | Concepts idle for N turns · force-prune expired links |
-| `neuron_export` / `neuron_reset` | Export the graph as JSON · clear it |
+| `status` / `summary` | Graph state · top nodes and recent links |
+| `find_candidates(keywords)` | Find similar existing keywords before storing (dedup) |
+| `forgotten` / `recall` | Concepts idle for N turns · bring an archived node back into the active graph |
+| `around(topic, n?)` | The neighbourhood of a problem: mid-band nodes (0.30–0.75) with their facts and link rationales — raw material for `gray_matter_brainstorm` (admin) |
+| `switch_context` / `list_contexts` | Switch / list domain contexts (e.g. `java/spring`) |
+| `help` / `skill(name)` | One line per command · full text of a playbook on demand |
+
+</details>
+
+<details>
+<summary><strong>Admin (not announced by default)</strong></summary>
+
+| Tool | Description |
+|---|---|
+| `vector_search(keywords)` | Semantic vector search (no link traversal) |
+| `merge(canonical, aliases)` / `consolidate` / `dedup` | Absorb duplicates into one · merge near-duplicates by cosine · toggle keyword dedup |
+| `extract(text)` / `auto(text)` | Standalone extraction · extract-and-save in one call |
+| `prune` / `flash` | Force-prune expired links · toggle semantic flashbacks |
+| `introspect` | Self-model: strongest concepts, recent growth, weakest areas |
+| `export` / `reset` | Export the graph as JSON · clear it (requires `confirm=true`) |
 
 </details>
 
