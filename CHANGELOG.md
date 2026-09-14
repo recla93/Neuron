@@ -1,5 +1,10 @@
 # Changelog — Neuron
 
+## Unreleased
+- **`export` include gli episodi.** `keyword -> [{turn, text}]`: i fatti, non
+  solo i temi. Serve al `promote` di Gray Matter, che prima riceveva un grafo
+  senza le sue tracce.
+
 ## 6.5.3 (2026-09-14)
 - **Hook e playbook: quando chiamare `brainstorm`.** Dietro il gateway
   l'handshake dice: su un problema, bug, dilemma o decisione,

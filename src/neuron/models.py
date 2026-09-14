@@ -971,6 +971,7 @@ class Graph:
             "turn_count":   self.turn_count,
             "nodes":        [{k: v for k, v in nd.__dict__.items() if k != "vector"} for nd in self.nodes],
             "links":        [lk.__dict__ for lk in self.links],
+            "episodes":     self.episodes,   # keyword -> [{turn, text}]: the facts, not just the themes
             "pruned_count": self.pruned_count,
         }
 
