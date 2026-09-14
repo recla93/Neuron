@@ -195,6 +195,58 @@ def _permanent_vector_failure(exc: Exception, path: str | None = None) -> bool:
     return True
 
 
+HUB_MIN_EXCESS = 0.05   # below this the excess is measurement noise, not a hub
+
+
+def hub_excess(g) -> dict[str, float]:
+    """Per node, how much closer it sits to the whole graph than a normal node.
+
+    Measured 2026-09-14 on 368 nodes: a dozen short rare tokens (`vram`,
+    `lombok`, `gui`, `puntatore-contesto`) average 0.36-0.42 cosine to every
+    other node against a graph mean of 0.24, so they fell in the 0.30-0.75
+    band for 60-83% of all possible queries — in nearly every ranking, whatever
+    the topic. That is the embedder, not the memory: it parks unknown tech
+    words together. Centering by each node's excess (its mean to all others,
+    minus the graph's mean of those) leaves a normal node untouched and costs
+    a hub exactly what it is. Only the penalty side is ever applied (see
+    hub_penalty): a node far from everything is far from this query too.
+
+    Cached on the graph, keyed by how many nodes carry a vector: a new node
+    recomputes it, a re-embedded one does not (rare, and the drift is small).
+    Numpy is a fastembed dependency; without it there is no correction, not a
+    crash.
+    """
+    nodes = [nd for nd in g.nodes if nd.vector is not None and len(nd.vector)]
+    key = (len(nodes), len(g.nodes))
+    cached = getattr(g, "_hub_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    excess: dict[str, float] = {}
+    if len(nodes) >= 3:
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+        if np is not None:
+            # ponytail: all pairs on every recompute, ~10 ms at 400 nodes;
+            # sample the columns if a graph ever grows past a few thousand.
+            m = np.asarray([nd.vector for nd in nodes], dtype=np.float32)
+            m /= (np.linalg.norm(m, axis=1, keepdims=True) + 1e-9)
+            sims = m @ m.T
+            np.fill_diagonal(sims, 0.0)
+            mean = sims.sum(axis=1) / (len(nodes) - 1)
+            ex = mean - mean.mean()
+            excess = {nd.keyword: float(e) for nd, e in zip(nodes, ex)}
+    g._hub_cache = (key, excess)
+    return excess
+
+
+def hub_penalty(excess: dict[str, float], keyword: str) -> float:
+    """What a keyword's similarity loses for being a hub: its excess, if it is one."""
+    e = excess.get(keyword, 0.0)
+    return e if e >= HUB_MIN_EXCESS else 0.0
+
+
 def _search_embeddings(
     query_keywords: list[str],
     top_n: int = 8,
@@ -211,6 +263,11 @@ def _search_embeddings(
     query_blob = pack_vector(query_vec)
 
     SIM_THRESHOLD = 0.3
+    # Hub centering (hub_excess): applied on BOTH tiers, after the raw cosine.
+    # Only hubs can lose rank, so fetching top_n + (number of hubs) from SQL
+    # keeps the adjusted top_n exact.
+    excess = hub_excess(g)
+    n_hubs = sum(1 for e in excess.values() if e >= HUB_MIN_EXCESS)
 
     if s.TURSO_ENGINE and s._vector_sql_ok:
         seed_path = getattr(s._g, '_seed_path', None)
@@ -235,7 +292,7 @@ def _search_embeddings(
                     "  SELECT keyword, 1.0 - vector_distance_cos(embedding, ?) AS sim "
                     "  FROM node_vectors"
                     ") WHERE sim > ? ORDER BY sim DESC LIMIT ?",
-                    (query_blob, SIM_THRESHOLD, top_n),
+                    (query_blob, SIM_THRESHOLD, top_n + n_hubs),
                 ).fetchall()
                 if not is_seed:
                     conn.close()
@@ -251,7 +308,9 @@ def _search_embeddings(
                 # Any DB/engine error must fall through to the Python path.
                 log.debug("Turso vector search failed (using Python fallback): %s", e)
         if merged:
-            result = sorted(merged.items(), key=lambda kv: -kv[1])[:top_n]
+            adjusted = [(kw, round(v - hub_penalty(excess, kw), 4)) for kw, v in merged.items()]
+            result = sorted(((kw, v) for kw, v in adjusted if v > SIM_THRESHOLD),
+                            key=lambda kv: -kv[1])[:top_n]
             s._turn_search_cache[_cache_key] = (weakref.ref(g), result)
             return result
 
@@ -272,7 +331,7 @@ def _search_embeddings(
             continue
         dot = sum(qi * vi for qi, vi in zip(query_vec, v))
         denom = q_norm * ((sum(x * x for x in v) ** 0.5) or 1.0)
-        sim = dot / denom
+        sim = dot / denom - hub_penalty(excess, nd.keyword)
         # Same floor as the Turso tier (T78): the fallback used `sim > 0`, so
         # it returned weak matches the SQL tier would filter out — the two
         # tiers disagreed on what "related" means and could fill top_n with

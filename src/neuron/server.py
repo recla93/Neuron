@@ -289,6 +289,7 @@ from neuron.search import (  # noqa: E402
     _normalize_domain, _refine_domain, _search_embeddings, _seed_connection,
     _seed_usable, cross_context_matches,
 )
+from neuron import search as _search  # noqa: E402 — hub_excess / hub_penalty
 
 
 from neuron.registry import GraphRegistry
@@ -561,7 +562,11 @@ async def read_resource(uri) -> list[ReadResourceContents]:
 # announced unless NEURON_TOOLS=all.
 _ADMIN_TOOLS = frozenset({"prune", "consolidate", "dedup", "flash", "reset",
                           "extract", "auto", "export", "merge", "introspect",
-                          "vector_search", "summary"})
+                          "vector_search", "summary", "around"})
+
+# Mid-band similarity to a topic: above it the node is already what get_context
+# serves, below it is noise. Shared by forgotten(near) and around.
+MID_BAND = (0.30, 0.75)
 
 
 @app.list_tools()
@@ -812,6 +817,25 @@ def _all_tools() -> list[Tool]:
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                 },
                 "required": ["keywords"],
+            },
+        ),
+        Tool(
+            name="around",
+            description=(
+                "What surrounds a topic, with its history: mid-band nodes (0.30-0.75 "
+                "similarity — related but not obvious), dormant or not, each with its "
+                "recent facts and the reasons on its links. Nodes that carry a fact or a "
+                "link come first: a bare keyword is not a hint. Raw material for "
+                "gray_matter_brainstorm."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "The problem, dilemma or decision"},
+                    "n": {"type": "integer", "description": "How many nodes (default 8, max 20)", "default": 8},
+                    "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
+                },
+                "required": ["topic"],
             },
         ),
         Tool(
@@ -1830,13 +1854,14 @@ async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
         from neuron.search import _get_embedding
         from neuron.models import _cos
         qv = _get_embedding(near)
+        hub = _hubness(g)
         band = []
         for nd in forgotten:
             v = getattr(nd, "vector", None)
             if not v:
                 continue
-            sim = _cos(qv, v)
-            if 0.30 <= sim <= 0.75:
+            sim = _cos(qv, v) - _search.hub_penalty(hub, nd.keyword)
+            if MID_BAND[0] <= sim <= MID_BAND[1]:
                 band.append((sim, nd))
         if band:
             band.sort(key=lambda x: x[0], reverse=True)
@@ -1852,6 +1877,73 @@ async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
         stale = now - nd.turn
         lines.append(f"  {nd.keyword:20s} last_turn={nd.turn}  ({stale} turns ago)  salience={nd.salience}")
     lines.append(f"Total: {len(forgotten)} concepts")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+# Hub centering lives in search.hub_excess and is applied inside
+# _search_embeddings for every ranking; around and forgotten compute their own
+# cosine and apply it by hand. The alias is what the tests patch.
+_hubness = _search.hub_excess
+
+
+async def _tool_around(arguments: dict, ctx: str, g) -> list[TextContent]:
+    """The neighbourhood of a topic, with what it remembers.
+
+    pre_turn serves the facts of the CLOSEST nodes; forgotten(near) ranks the
+    mid band but only dormant nodes and without their facts; get_context cuts
+    rationales at 40 chars. This is the missing question — "what sits around
+    this problem, and what happened there" — for a dilemma or a decision: a
+    node in the mid band that carries a fact ("chose X because Y") or a typed
+    link with its reason is the hint; a bare keyword is not, so it goes last.
+    """
+    topic = (arguments.get("topic") or "").strip()
+    n = min(max(int(arguments.get("n", 8) or 8), 1), 20)
+    if not topic:
+        return [TextContent(type="text", text="around: serve un 'topic'.")]
+    if not g.nodes:
+        return [TextContent(type="text", text="No nodes in graph.")]
+    from neuron.models import _cos
+    qv = _get_embedding(topic)
+    lo, hi = MID_BAND
+    hub = _hubness(g)
+    band, anchor = [], ("", -1.0)
+    for nd in g.nodes:
+        v = getattr(nd, "vector", None)
+        if qv and v:
+            raw = _cos(qv, v)
+            if raw > anchor[1]:
+                anchor = (nd.keyword, raw)
+            sim = raw - _search.hub_penalty(hub, nd.keyword)
+            if lo <= sim <= hi:
+                band.append((sim, nd))
+    # The anchor is the closest node of all, band or not: it tells the reader
+    # what the memory takes this topic to BE. Similarity values do not — a
+    # sentence tops out near 0.58 whether the graph knows it (a daemon question:
+    # `daemon`) or not (a recipe: `seed-cachato`); the name is the signal.
+    head = (f"Around '{topic}' (anchor {anchor[0]}={anchor[1]:.2f}"
+            + (" — no node above the band" if anchor[1] < hi else "")
+            + f"; mid-band {lo}-{hi}: {len(band)} nodes, now={g.turn_count}):")
+    if not band:
+        return [TextContent(type="text", text=head + " nothing in the band.")]
+    now = g.turn_count
+    rows = []
+    for sim, nd in band:
+        facts = g.recent_episodes(nd.keyword, 2)
+        links = [lk for lk in g.links if nd.keyword in (lk.source, lk.target)][:3]
+        rows.append((bool(facts or links), sim, nd, facts, links))
+    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    lines = [head]
+    for _has, sim, nd, facts, links in rows[:n]:
+        idle = now - nd.turn
+        state = f"dormant {idle}t" if idle >= 5 else "active"
+        pen = _search.hub_penalty(hub, nd.keyword)
+        hubtag = f" (hub -{pen:.2f})" if pen else ""
+        lines.append(f"  {nd.keyword}  sim={sim:.2f}{hubtag}  salience={nd.salience}  {state}")
+        for f in facts:
+            lines.append(f"    fact: {f}")
+        for lk in links:
+            why = f"  #{lk.rationale}" if lk.rationale else ""
+            lines.append(f"    link: {lk.source}-[{lk.link_type}]->{lk.target}{why}")
     return [TextContent(type="text", text="\n".join(lines))]
 
 
@@ -2473,6 +2565,7 @@ _HANDLERS = {
     "get_context": _tool_get_context,
     "find_candidates": _tool_find_candidates,
     "vector_search": _tool_vector_search,
+    "around": _tool_around,
     "summary": _tool_summary,
     "introspect": _tool_introspect,
     "forgotten": _tool_forgotten,

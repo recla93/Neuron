@@ -1,5 +1,37 @@
 ﻿# Changelog — Neuron
 
+## Unreleased
+- **`around(topic, n)`: il vicinato di un tema, con quello che ricorda.** Tool
+  interno (non annunciato, come `vector_search`): i nodi in banda media di
+  similarita' (0.30-0.75, la stessa costante di `forgotten(near)`, ora
+  `MID_BAND`), dormienti o no, ognuno con i suoi episodi recenti e i link con
+  la rationale intera; prima chi porta un fatto o un link, un keyword nudo per
+  ultimo; i dormienti marcati coi turni fermi. E' la domanda che mancava per un
+  dilemma — `pre_turn` serve i fatti dei nodi in TESTA, `forgotten` la banda
+  media ma solo dormienti e senza fatti, `get_context` tronca le rationale a
+  40 — ed e' il materiale di `gray_matter_brainstorm`. L'intestazione mostra
+  l'**ancora**, il nodo piu' vicino in assoluto anche se sopra la banda: il
+  valore non distingue un tema noto da uno ignoto (una frase arriva a 0.58 in
+  entrambi i casi), il nome si' — `daemon-persistente` per una domanda sul
+  daemon, `seed-cachato` per una ricetta.
+- **Ogni ranking vettoriale e' centrato per promiscuita'.** Misurato su 368
+  nodi: una dozzina di token tecnici corti (`vram`, `lombok`, `gui`,
+  `puntatore-contesto`) stanno a 0.36-0.42 di coseno medio da tutti gli altri
+  contro 0.24 del grafo, quindi cadevano nella banda 0.30-0.75 per il 60-83%
+  delle query possibili e `vector_search("lombok")` rispondeva `vram=0.88`. E'
+  il modello, che parcheggia le parole ignote insieme. `search.hub_excess(g)`
+  misura l'eccesso di ogni nodo (media verso tutti, meno la media del grafo;
+  numpy, tutte le coppie, ~10 ms, cache sul grafo finche' non arriva un nodo)
+  e `_search_embeddings` lo sottrae su entrambi i tier — sul tier SQL il
+  `LIMIT` cresce del numero di hub, cosi' il top-n corretto resta esatto.
+  Solo penalita', e solo sopra 0.05: un nodo isolato non viene spinto su, il
+  rumore di misura non riordina nulla. `around` e `forgotten(near)` applicano
+  la stessa penalita' al coseno che calcolano da soli; `around` la mostra
+  (`sim=0.38 (hub -0.12)`). Non tocca dedup e merge, che leggono il coseno
+  grezzo per decidere se due concetti sono uno. Sul vivo: `vram` sparisce
+  dalla domanda sul daemon, `backup` resta identico, il fuori tema scende da
+  69 a 30 nodi in banda. Limite onesto: due hub restano vicini fra loro.
+
 ## 6.5.2 (2026-09-13)
 - **Il budget d'uscita taglia a confine di parola.** `get_context` e
   `pre_turn` con `max_tokens` stretto finivano a meta' parola (`facts:
