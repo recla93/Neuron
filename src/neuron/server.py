@@ -1442,6 +1442,29 @@ def _current_user() -> str:
     return os.environ.get("NEURON_USER", "").strip()
 
 
+def _semantic_twin(g, kw: str):
+    """The existing multi-word node a multi-word ``kw`` is merged into, or None.
+
+    One rule for every caller: store_turn and auto merge with it, the link
+    vetting resolves with it. A link endpoint written as the name the model
+    used is the node that name was merged into — the model never sees the
+    merge happen, so it keeps the name it chose. Single-word nodes are skipped:
+    too many false positives."""
+    if not dedup_enabled or len(kw.split()) < 2:
+        return None
+    try:
+        from neuron.models import _cos
+        from neuron.search import _get_embedding as _emb
+        new_vec = _emb(kw)
+        for nd in g.nodes:
+            if (len(nd.keyword.split()) > 1
+                    and _cos(new_vec, _emb(nd.keyword)) > SEMANTIC_DEDUP_THRESHOLD):
+                return nd
+    except Exception:
+        pass  # embedding failure → no twin, the caller creates a new node
+    return None
+
+
 async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     topic = arguments["topic"]
     keywords = arguments["keywords"]
@@ -1487,7 +1510,13 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # links whose endpoints survived neither curation nor the graph —
     # otherwise a dropped verb-keyword would leave a dangling link behind.
     _final_keys = {_cur._dup_key(k): k for k in keywords}
-    _canon = lambda e: _final_keys.get(_cur._dup_key(e)) or _existing_map.get(_cur._dup_key(e))
+
+    def _canon(e):
+        hit = _final_keys.get(_cur._dup_key(e)) or _existing_map.get(_cur._dup_key(e))
+        if hit:
+            return hit
+        twin = _semantic_twin(g, e)   # a name merged in an earlier turn
+        return twin.keyword if twin else None
     _vetted_links = []
     for ld in new_links_data:
         # `links` arriva da JSON generato da un modello: la forma sbagliata è
@@ -1507,9 +1536,13 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             ld = dict(ld, source=cs, target=ct)
             _vetted_links.append(ld)
         else:
+            # Say WHICH: "must be stored concepts (never a self-link)" for both
+            # cases sent the diagnosis of a lost keyword the wrong way.
+            unknown = [e for e, c in ((ld.get("source", "?"), cs), (ld.get("target", "?"), ct)) if not c]
+            why = (f"not a stored concept: {', '.join(map(repr, unknown))}" if unknown
+                   else "a self-link")
             _cur_notes.append(
-                f"dropped link {ld.get('source','?')}→{ld.get('target','?')}: "
-                "endpoints must be stored concepts (never a self-link)")
+                f"dropped link {ld.get('source','?')}→{ld.get('target','?')}: {why}")
     new_links_data = _vetted_links
 
     err = validate_turn_input(keywords, topic, new_links_data,
@@ -1522,6 +1555,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # Portable across machines and distinct-yet-mergeable in a shared DB.
     references = _project.canonicalize_references(references, by=_current_user())
 
+    _alias: dict = {}   # keyword → the node the semantic dedup merged it into
     for kw in keywords:
         existing = g.get_node(kw)
         if dedup_enabled and existing:
@@ -1534,36 +1568,32 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 existing.references = _project.merge_refs(existing.references, references)
             g.mark_node_dirty(existing.keyword)   # in-place change: track it
         else:
-            # Semantic dedup: check if a similar multi-word keyword already exists
-            _merged = False
-            if dedup_enabled and len(kw.split()) > 1:
-                try:
-                    from neuron.search import _get_embedding as _emb
-                    new_vec = _emb(kw)
-                    for nd in g.nodes:
-                        if len(nd.keyword.split()) <= 1:
-                            continue  # skip single-word nodes (too many false positives)
-                        old_vec = _emb(nd.keyword)
-                        sim = sum(a * b for a, b in zip(new_vec, old_vec))
-                        if sim > SEMANTIC_DEDUP_THRESHOLD:
-                            # Merge: boost existing, skip creating new node
-                            nd.salience += 1
-                            nd.turn = turn
-                            nd.topic = topic
-                            nd.domain = domain
-                            nd.sentiment = sentiment
-                            if references:
-                                nd.references = _project.merge_refs(nd.references, references)
-                            g.mark_node_dirty(nd.keyword)
-                            _merged = True
-                            break
-                except Exception:
-                    pass  # embedding failure → fall through to create new node
-            if not _merged:
+            nd = _semantic_twin(g, kw)
+            if nd:
+                # Merge: boost existing, skip creating new node
+                nd.salience += 1
+                nd.turn = turn
+                nd.topic = topic
+                nd.domain = domain
+                nd.sentiment = sentiment
+                if references:
+                    nd.references = _project.merge_refs(nd.references, references)
+                g.mark_node_dirty(nd.keyword)
+                _alias[kw] = nd.keyword
+                _cur_notes.append(f"merged '{kw}' into existing '{nd.keyword}' (semantic dedup)")
+            else:
                 g.add_node(Node(keyword=kw, turn=turn, topic=topic,
                                 domain=domain, sentiment=sentiment,
                                 entities=entities, tags=tags,
                                 references=references))
+    # A merged keyword IS its node for the rest of the turn: episode, links and
+    # co-occurrence all follow it there. With the original name the episode was
+    # lost (no such node) and the link written with a dangling endpoint.
+    if _alias:
+        keywords = list(dict.fromkeys(_alias.get(k, k) for k in keywords))
+        new_links_data = [dict(ld, source=_alias.get(ld["source"], ld["source"]),
+                               target=_alias.get(ld["target"], ld["target"]))
+                          for ld in new_links_data]
 
     # T56: one compact fact sentence for this turn — nodes carry decisions, not
     # just themes. On EVERY keyword: on the first only, a query landing on any
@@ -2134,6 +2164,7 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
                         g.form_drift_link(kw, ckw, alt_dom, turn)
 
     salience_boost = INTENT_SALIENCE.get(extraction.intent, 1)
+    _alias: dict = {}   # keyword → the node the semantic dedup merged it into
     for kw in extraction.keywords:
         existing = g.get_node(kw)
         if dedup_enabled and existing:
@@ -2145,28 +2176,16 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
             g.mark_node_dirty(existing.keyword)   # in-place change: track it
         else:
             # Semantic dedup (FASE 5.5): check similar multi-word keywords
-            _merged = False
-            if dedup_enabled and len(kw.split()) > 1:
-                try:
-                    from neuron.search import _get_embedding as _emb
-                    new_vec = _emb(kw)
-                    for nd in g.nodes:
-                        if len(nd.keyword.split()) <= 1:
-                            continue
-                        old_vec = _emb(nd.keyword)
-                        sim = sum(a * b for a, b in zip(new_vec, old_vec))
-                        if sim > SEMANTIC_DEDUP_THRESHOLD:
-                            nd.salience += salience_boost
-                            nd.turn = turn
-                            nd.topic = extraction.topic
-                            nd.domain = extraction.domain
-                            nd.sentiment = extraction.sentiment
-                            g.mark_node_dirty(nd.keyword)
-                            _merged = True
-                            break
-                except Exception:
-                    pass
-            if not _merged:
+            nd = _semantic_twin(g, kw)
+            if nd:
+                nd.salience += salience_boost
+                nd.turn = turn
+                nd.topic = extraction.topic
+                nd.domain = extraction.domain
+                nd.sentiment = extraction.sentiment
+                g.mark_node_dirty(nd.keyword)
+                _alias[kw] = nd.keyword
+            else:
                 g.add_node(Node(
                     keyword=kw, turn=turn, topic=extraction.topic,
                     domain=extraction.domain, sentiment=extraction.sentiment,
@@ -2181,6 +2200,13 @@ async def _tool_auto(arguments: dict, ctx: str, g) -> list[TextContent]:
                     alt_nd = alt_g.get_node(kw)
                     if alt_nd:
                         g.form_drift_link(kw, kw, alt_name, turn)
+
+    # Same as store_turn: a merged keyword is its node for the rest of the turn.
+    if _alias:
+        extraction.keywords = list(dict.fromkeys(_alias.get(k, k) for k in extraction.keywords))
+        for lk in new_links:
+            lk.source = _alias.get(lk.source, lk.source)
+            lk.target = _alias.get(lk.target, lk.target)
 
     for lk in new_links:
         src = g.get_node(lk.source)
