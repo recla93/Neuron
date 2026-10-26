@@ -2,7 +2,6 @@
 
 > Instructions for an AI agent. Neuron can run standalone, but the recommended
 > model is behind the Gray Matter gateway (bundled with every install).
-> Versione italiana: `INSTALL-AI.it.md`.
 
 ## Recommended path (via Gray Matter)
 

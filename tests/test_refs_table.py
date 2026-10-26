@@ -19,7 +19,7 @@ def _node(kw, refs=None):
                 references=refs)
 
 
-def _ref(path, pid="P1", by="claudio"):
+def _ref(path, pid="P1", by="dev"):
     return {"path": path, "project_id": pid, "by": by}
 
 

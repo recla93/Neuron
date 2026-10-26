@@ -274,8 +274,8 @@ def _consolidate_cli(argv) -> int:
 #   inspect (guarda, sola lettura) · tuning (configura)
 #
 # Le descrizioni sono in INGLESE perché finiscono sotto gli occhi dell'utente
-# (`neuron --help` e le etichette del control center): l'output resta inglese,
-# l'italiano vive nei doc `.it.md`. I commenti restano in italiano.
+# (`neuron --help` e le etichette del control center): output e doc restano in inglese.
+# I commenti restano in italiano.
 COMMANDS: "dict[str, tuple]" = {
     "setup":       ("neuron.setup",   "main", "lifecycle",  "Lifecycle: install, update, repair", False),
     "register":    ("neuron.clients", "cli",  "lifecycle",  "Register the MCP server in your AI clients", True),

@@ -22,11 +22,11 @@ def test_canonical_ref_is_posix_relative_and_shared(tmp_path):
     pid = P.init_project(tmp_path)
     f = tmp_path / "Neuron" / "src" / "neuron" / "models.py"
     f.parent.mkdir(parents=True); f.write_text("")
-    ref = P.canonical_ref(f, by="claudio")
+    ref = P.canonical_ref(f, by="dev")
     assert ref["shared"] is True
     assert ref["path"] == "Neuron/src/neuron/models.py"      # relative, forward slashes
     assert ":" not in ref["path"] and not ref["path"].startswith("/")  # no absolute leak
-    assert ref["project_id"] == pid and ref["by"] == "claudio"
+    assert ref["project_id"] == pid and ref["by"] == "dev"
 
 
 def test_unmarked_file_is_local_not_shared(tmp_path):
@@ -46,9 +46,9 @@ def test_canonicalize_absolute_file_ref(tmp_path):
     f = tmp_path / "gray_matter" / "server.py"
     f.parent.mkdir(parents=True); f.write_text("")
     refs = P.canonicalize_references(
-        [{"type": "file", "path": str(f)}], by="claudio")
+        [{"type": "file", "path": str(f)}], by="dev")
     assert refs[0]["path"] == "gray_matter/server.py"     # made project-relative
-    assert refs[0]["shared"] is True and refs[0]["by"] == "claudio"
+    assert refs[0]["shared"] is True and refs[0]["by"] == "dev"
     assert refs[0]["project_id"]
 
 
@@ -77,6 +77,6 @@ def test_merge_refs_dedups_by_path():
 
 
 def test_render_file_refs_compact():
-    refs = [{"type": "file", "path": "a.py", "by": "claudio"},
+    refs = [{"type": "file", "path": "a.py", "by": "dev"},
             {"type": "url", "path": "https://x"}]
-    assert P.render_file_refs(refs) == ["a.py (claudio)"]   # url skipped
+    assert P.render_file_refs(refs) == ["a.py (dev)"]   # url skipped

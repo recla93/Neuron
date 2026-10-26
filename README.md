@@ -321,7 +321,7 @@ NEURON_SLUG=neuron5 python -m neuron               # side-by-side with another i
 
 Architecture, the DB layer, per-client config and cloud/bridge internals are documented in
 **[docs/DEVELOPER.md](docs/DEVELOPER.md)**; release & CI mechanics in
-[docs/RELEASE_PLAN.md](docs/RELEASE_PLAN.md). Requires **Python 3.10–3.14**.
+[docs/RELEASING.md](docs/RELEASING.md). Requires **Python 3.10–3.14**.
 
 ---
 
@@ -330,13 +330,11 @@ Architecture, the DB layer, per-client config and cloud/bridge internals are doc
 | Doc | What's in it |
 |---|---|
 | **[INSTALL.md](INSTALL.md)** | Every install path (Windows one-click → manual → source) + troubleshooting |
-| **[INSTALL-AI.md](INSTALL-AI.md)** | Automated install+register instructions for AI agents (EN · [IT](INSTALL-AI.it.md)) |
+| **[INSTALL-AI.md](INSTALL-AI.md)** | Automated install+register instructions for AI agents |
 | **[docs/DEVELOPER.md](docs/DEVELOPER.md)** | Architecture, memory dynamics, DB layer, per-client config |
 | **[docs/TEAM.md](docs/TEAM.md)** | Running a shared team brain on Turso Cloud |
 | **[docs/BRIDGE.md](docs/BRIDGE.md)** | Exposing Neuron over HTTP for ChatGPT / remote connectors |
-| **[docs/CORE_AUDIT.md](docs/CORE_AUDIT.md)** | Core audit: module boundaries, hot paths, what the graph costs |
 | **[CHANGELOG.md](CHANGELOG.md)** | The full v5 "Synapse" story, release by release |
-| **[DOCTOOLUPDATE.md](DOCTOOLUPDATE.md)** | Complete tool documentation with real code examples |
 
 ---
 
