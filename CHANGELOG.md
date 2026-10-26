@@ -1,5 +1,25 @@
 # Changelog — Neuron
 
+## 6.6.1 (2026-10-26)
+- **La dedup semantica fondeva concetti diversi.** Il modello di default
+  (`paraphrase-multilingual-MiniLM-L12-v2`) restituisce vettori con norma fra
+  2,4 e 6,3. `store_turn`, `auto`, la diversificazione MMR e il richiamo dal
+  graveyard li confrontavano con il prodotto scalare grezzo, contro soglie
+  pensate per il coseno: 14 coppie su 15 di keyword scorrelate superavano
+  0,90, e ogni keyword di piu' parole finiva dentro il primo nodo di piu'
+  parole del grafo. Ora `_embed_one` normalizza: 0 coppie su 15. I vettori
+  gia' salvati restano confrontabili, perche' il confronto col DB usa il
+  coseno. Correzione di Giovanni Emanuel Montoro (recla93/Neuron#5).
+- **Una keyword fusa diventa il suo nodo.** Quando la dedup fonde una keyword,
+  il resto del turno usava il nome originale, che non e' un nodo: l'episodio
+  andava perso, il link restava con un estremo pendente, e in un turno
+  successivo un link verso quel nome veniva scartato. Ora la keyword segue il
+  nodo in cui e' stata fusa, `store_turn` dice `merged 'x' into existing 'y'`,
+  e un link scartato dice quale estremo manca.
+- **Da sapere:** i nodi gia' fusi prima di questa versione non vengono
+  separati. Un grafo con un nodo di piu' parole dalla salienza anomala ne ha
+  probabilmente assorbiti altri.
+
 ## 6.6.0 (2026-10-25)
 - **Sicurezza, fase 1 dell'ADR-012.**
   - *F1:* il bridge HTTP chiede il Bearer su **qualunque** host. Il loopback
