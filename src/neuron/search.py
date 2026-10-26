@@ -62,6 +62,14 @@ def _embed_one(text: str) -> list[float]:
     # downstream truthiness checks (``if not v``), JSON export and struct
     # packing never see an ndarray ("truth value of an array is ambiguous").
     vec = [float(x) for x in list(_get_embedder().embed([text]))[0]]
+    # Vettori unitari: dedup semantica, stimulus e auto-link confrontano con il
+    # prodotto scalare e soglie in [-1, 1]. paraphrase-multilingual-MiniLM-L12-v2
+    # (default da ADR-001) esce NON normalizzato (norma ~3-4), quindi ogni
+    # coppia di keyword multi-parola superava 0.90 e veniva fusa nel primo nodo.
+    # vector_distance_cos() e _cos() sono invarianti alla scala: nessun effetto lì.
+    norm = sum(x * x for x in vec) ** 0.5
+    if norm > 0:
+        vec = [x / norm for x in vec]
     if not s._embed_dim_checked:
         s._embed_dim_checked = True
         if len(vec) != s.VECTOR_DIM:
