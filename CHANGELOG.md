@@ -1,6 +1,6 @@
 # Changelog — Neuron
 
-## Unreleased
+## 6.7.0 (2026-11-04)
 - **Ogni riga dice chi l'ha scritta e in quale spazio (ADR-013, fase 4a).**
   `nodes`, `links` ed `episodes` hanno le colonne `owner` e `space`. `owner`
   è `NEURON_USER`, altrimenti l'account del sistema. `space` è `NEURON_SPACE`,
