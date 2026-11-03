@@ -5,6 +5,7 @@ Separated from server.py to break the circular import with registry.py.
 
 from __future__ import annotations
 
+import getpass
 import json
 import logging
 import os
@@ -163,18 +164,46 @@ def unpack_vector(data: bytes) -> list[float]:
 
 
 # ---------------------------------------------------------------------------
+# Authorship (ADR-013 4a): who wrote a row, and in which space.
+# ---------------------------------------------------------------------------
+
+def owner_identity() -> str:
+    """Who is writing: NEURON_USER when set — the name a team already uses for
+    refs `by` — else the OS account."""
+    name = os.environ.get("NEURON_USER", "").strip()
+    if name:
+        return name
+    try:
+        return getpass.getuser()
+    except Exception:   # noqa: BLE001 — no USERNAME/LOGNAME and no pwd entry
+        return "unknown"
+
+
+def current_space() -> str:
+    """NEURON_SPACE when set. Otherwise a shared remote store belongs to a team
+    and a local file to its user (ADR-013 §3.2)."""
+    space = os.environ.get("NEURON_SPACE", "").strip()
+    if space:
+        return space
+    return "team:shared" if _db.REMOTE_TURSO else f"personale:{owner_identity()}"
+
+
+# ---------------------------------------------------------------------------
 # Upsert SQL (T12) — targeted writes keyed on natural keys, no global wipe.
 # ON CONFLICT DO UPDATE (not INSERT OR REPLACE) preserves the row id, keeping
 # load_sqlite's ``ORDER BY id`` stable across updates.
 # ---------------------------------------------------------------------------
 
+# `owner` and `space` (ADR-013 4a) are written on INSERT only: no ON CONFLICT
+# clause names them, so a row keeps the author who created it however many
+# people update it afterwards.
 # Rows are keyed by (context, ...) so that multiple contexts can share one
 # physical store (Turso Cloud, T11 option B) without colliding — a node "spring"
 # in context "java" is distinct from "spring" in "python". Locally each context
 # is still a separate file, so the context column is redundant-but-harmless there.
 _NODE_UPSERT = (
     "INSERT INTO nodes (context, keyword, turn, topic, domain, sentiment, salience, "
-    "entities, tags, refs, trust) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+    "entities, tags, refs, trust, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, keyword) DO UPDATE SET "
     "turn=excluded.turn, topic=excluded.topic, domain=excluded.domain, "
     "sentiment=excluded.sentiment, salience=excluded.salience, "
@@ -184,8 +213,8 @@ _NODE_UPSERT = (
 
 _LINK_UPSERT = (
     "INSERT INTO links (context, source, target, link_type, weight, rationale, "
-    "created_turn, last_active_turn, inactive_turns, co_activation_count, target_context) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+    "created_turn, last_active_turn, inactive_turns, co_activation_count, target_context, "
+    "owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, source, target, link_type) DO UPDATE SET "
     "weight=excluded.weight, rationale=excluded.rationale, "
     "created_turn=excluded.created_turn, last_active_turn=excluded.last_active_turn, "
@@ -193,6 +222,10 @@ _LINK_UPSERT = (
     "co_activation_count=excluded.co_activation_count, "
     "target_context=excluded.target_context"
 )
+
+_EPISODE_UPSERT = (
+    "INSERT INTO episodes(context, keyword, turn, text, owner, space) VALUES(?,?,?,?,?,?) "
+    "ON CONFLICT(context, keyword, turn) DO UPDATE SET text=excluded.text")
 
 _VEC_UPSERT = ("INSERT OR REPLACE INTO node_vectors (context, keyword, embedding, dim) "
                "VALUES (?,?,?,?)")
@@ -205,7 +238,7 @@ _VEC_UPSERT = ("INSERT OR REPLACE INTO node_vectors (context, keyword, embedding
 # per-node delta since this graph's last save.
 _NODE_UPSERT_ATOMIC = (
     "INSERT INTO nodes (context, keyword, turn, topic, domain, sentiment, salience, "
-    "entities, tags, refs, trust) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+    "entities, tags, refs, trust, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, keyword) DO UPDATE SET "
     "turn=excluded.turn, topic=excluded.topic, domain=excluded.domain, "
     "sentiment=excluded.sentiment, salience=MAX(0, salience + ?), "
@@ -223,8 +256,8 @@ _WEIGHT_RANK = ("CASE {c} WHEN 'strong' THEN 3 WHEN 'medium' THEN 2 "
                 "WHEN 'tangential' THEN 1 ELSE 0 END")
 _LINK_UPSERT_ATOMIC = (
     "INSERT INTO links (context, source, target, link_type, weight, rationale, "
-    "created_turn, last_active_turn, inactive_turns, co_activation_count, target_context) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+    "created_turn, last_active_turn, inactive_turns, co_activation_count, target_context, "
+    "owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(context, source, target, link_type) DO UPDATE SET "
     "weight=CASE WHEN " + _WEIGHT_RANK.format(c="excluded.weight") + " > "
     + _WEIGHT_RANK.format(c="weight") + " THEN excluded.weight ELSE weight END, "
@@ -1016,12 +1049,12 @@ class Graph:
     def _node_row(self, nd: Node, context: str) -> tuple:
         return (context, nd.keyword, nd.turn, nd.topic, nd.domain, nd.sentiment, nd.salience,
                 json.dumps(nd.entities or []), json.dumps(nd.tags or []),
-                json.dumps(nd.references or []), nd.trust)
+                json.dumps(nd.references or []), nd.trust, owner_identity(), current_space())
 
     def _link_row(self, lk: Link, context: str) -> tuple:
         return (context, lk.source, lk.target, lk.link_type, lk.weight, lk.rationale,
                 lk.created_turn, lk.last_active_turn, lk.inactive_turns,
-                lk.co_activation_count, lk.target_context)
+                lk.co_activation_count, lk.target_context, owner_identity(), current_space())
 
     def _write_refs(self, conn, node_set, context: str) -> None:
         """G2 — refs come righe proprie: INSERT OR IGNORE su chiave naturale
@@ -1094,6 +1127,20 @@ class Graph:
             conn.execute("INSERT OR IGNORE INTO node_vectors (context, keyword, embedding, dim) "
                          "SELECT ?, keyword, embedding, dim FROM node_vectors_legacy", (context,))
             conn.execute("DROP TABLE node_vectors_legacy")
+        # ADR-013 4a: who wrote each row, and in which space. A local file is
+        # one user's by construction, so its existing rows are stamped with
+        # that user. A shared remote store is not: inventing an author for
+        # rows written before this column existed would be false, so they stay
+        # '' (unknown). New rows always carry both (see the upserts).
+        for table in ("nodes", "links", "episodes"):
+            # Each column on its own: a run cut between the two ALTERs must
+            # not leave `space` missing for good, or every INSERT fails.
+            missing = [c for c in ("owner", "space") if c not in self._table_cols(conn, table)]
+            for col in missing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT DEFAULT ''")
+            if missing and not _db.REMOTE_TURSO:
+                conn.execute(f"UPDATE {table} SET owner=?, space=?",
+                             (owner_identity(), current_space()))
 
     @staticmethod
     def _create_unique(conn, name: str, table: str, cols: str, *, dedupe_group: str) -> None:
@@ -1684,10 +1731,8 @@ class Graph:
                     if e["turn"] == t:
                         ep_rows.append((context, kw, t, e["text"]))
         if ep_rows:
-            conn.executemany(
-                "INSERT INTO episodes(context, keyword, turn, text) VALUES(?,?,?,?) "
-                "ON CONFLICT(context, keyword, turn) DO UPDATE SET text=excluded.text",
-                ep_rows)
+            who = (owner_identity(), current_space())
+            conn.executemany(_EPISODE_UPSERT, [r + who for r in ep_rows])
 
     def _save_reconcile(self, conn, context: str, *, write_vectors: bool = True) -> None:
         """Structural reconcile (merge only): absolute upsert of every in-memory
@@ -1709,10 +1754,8 @@ class Graph:
         ep_rows = [(context, kw, e["turn"], e["text"])
                    for kw, eps in self.episodes.items() for e in eps]
         if ep_rows:
-            conn.executemany(
-                "INSERT INTO episodes(context, keyword, turn, text) VALUES(?,?,?,?) "
-                "ON CONFLICT(context, keyword, turn) DO UPDATE SET text=excluded.text",
-                ep_rows)
+            who = (owner_identity(), current_space())
+            conn.executemany(_EPISODE_UPSERT, [r + who for r in ep_rows])
 
         mem_kw      = {nd.keyword for nd in self.nodes}
         existing_kw = {row[0] for row in

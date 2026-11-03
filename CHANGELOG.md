@@ -1,5 +1,17 @@
 # Changelog — Neuron
 
+## Unreleased
+- **Ogni riga dice chi l'ha scritta e in quale spazio (ADR-013, fase 4a).**
+  `nodes`, `links` ed `episodes` hanno le colonne `owner` e `space`. `owner`
+  è `NEURON_USER`, altrimenti l'account del sistema. `space` è `NEURON_SPACE`,
+  altrimenti `team:shared` su uno store remoto condiviso e
+  `personale:<utente>` su un file locale. Si scrivono solo all'INSERT: chi
+  aggiorna una riga dopo non ne diventa l'autore.
+- **Migrazione.** Su un file locale le righe esistenti prendono l'utente
+  locale. Su uno store condiviso restano `''`: inventare un autore sarebbe
+  falso. Gira al primo salvataggio dopo l'aggiornamento. Provata su una copia
+  del grafo `ai` (495 nodi, 391 link, 196 episodi: conteggi identici).
+
 ## 6.6.1 (2026-10-26)
 - **La dedup semantica fondeva concetti diversi.** Il modello di default
   (`paraphrase-multilingual-MiniLM-L12-v2`) restituisce vettori con norma fra
