@@ -1,5 +1,35 @@
 # Changelog — Neuron
 
+## 6.8.0 (2026-11-04)
+- **Il richiamo trova i nodi per quello che sanno, non per il nome.** Quando
+  nessuna parola della domanda è un nodo, il fallback confrontava la frase con
+  il vettore del NOME di ogni nodo: "il python lanciato dal repo importa i
+  pacchetti sbagliati" contro `cwd-shadowing`. Ora la confronta con nome, topic
+  e fatti del nodo (`_search_recall`). Il vettore del nome resta per la dedup,
+  che confronta una keyword con una keyword. Niente schema nuovo: i testi
+  passano dalla cache degli embedding, e un nodo si ricalcola solo quando
+  cambiano i suoi fatti.
+- **Il cancello di rilevanza giudica il fallback sugli stessi vettori**, con una
+  soglia sua (`NEURON_MIN_RECALL_RELEVANCE`, 0,43): sui nomi una buona risposta
+  veniva nascosta, e con la soglia dei nomi (0,35) passava ogni domanda fuori
+  tema.
+- Misurato con `pre_turn` completo su una copia del grafo `ai` (500 nodi),
+  domande in italiano senza il nome del nodo:
+
+  | | prima | dopo |
+  |---|---|---|
+  | in tema, nodo giusto nella risposta (14 + 5 di verifica) | 5/19 | 8/19 |
+  | fuori tema, risposta soppressa (6 + 6 di verifica) | 4/12 | 10/12 |
+
+  La soglia è tarata sul primo gruppo; il gruppo di verifica non è servito a
+  sceglierla.
+- **Tetto dei concetti per grafo da 500 a 1000, e configurabile.** Il grafo
+  `ai` l'aveva raggiunto: da lì ogni concetto nuovo ne archiviava uno vecchio.
+  Nuovo comando `neuron config list|get|set` (stesso formato di gray-matter e
+  neurag), quindi il control center mostra il pannello delle impostazioni di
+  Neuron: `max_nodes` fra 100 e 5000, salvato nel `.env` utente, vale dal
+  prossimo avvio.
+
 ## 6.7.0 (2026-11-04)
 - **Ogni riga dice chi l'ha scritta e in quale spazio (ADR-013, fase 4a).**
   `nodes`, `links` ed `episodes` hanno le colonne `owner` e `space`. `owner`
