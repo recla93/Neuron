@@ -310,8 +310,8 @@ _vector_sql_ok = True
 # import X` and every `_srv.X` monkeypatch keep working unchanged (ADR-006).
 from neuron.search import (  # noqa: E402
     _drop_seed_connection, _embed_one, _get_embedder, _get_embedding,
-    _normalize_domain, _refine_domain, _search_embeddings, _seed_connection,
-    _seed_usable, cross_context_matches,
+    _normalize_domain, _refine_domain, _search_embeddings, _search_recall,
+    _seed_connection, _seed_usable, cross_context_matches,
 )
 from neuron import search as _search  # noqa: E402 — hub_excess / hub_penalty
 
@@ -1193,7 +1193,8 @@ def _resolve_context(
     if not related_links:
         existing = {nd.keyword for nd in g.nodes}
         if not search_kws & existing:
-            vec_results = _search_embeddings(list(search_kws), top_n=5, graph=g)
+            # By what the nodes know, not by their names (see _search_recall).
+            vec_results = _search_recall(" ".join(sorted(search_kws)), 5, g)
             if vec_results:   # sorted best first
                 vec_results = [(kw, s) for kw, s in vec_results
                                if s >= vec_results[0][1] - VEC_FALLBACK_DELTA]
@@ -2380,15 +2381,25 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     #
     # Stesso top_n di _resolve_context, cosi' la chiamata cade nel memo di turno.
     _best_sim = 0.0
+    _min_rel = _config.env_float("NEURON_MIN_RELEVANCE", 0.35)
     if search_kws_pt:
         try:
             _norm_kws = sorted({k.strip().lower() for k in search_kws_pt if k.strip()})
             _best_sim = max((sim for _, sim in _search_embeddings(
                 _norm_kws, top_n=max(len(g_pt.nodes), 1), graph=g_pt)), default=0.0)
+            if fallback_pt:
+                # The fallback found its nodes by what they know, so it is
+                # judged on the same vectors — on names a good answer was
+                # withheld. Their own threshold: a long text resembles any
+                # question a little, and 0.35 let every off-topic one through.
+                # Measured on the `ai` graph (2026-11-04): best match 0.415-0.570
+                # for 14 questions on topic, 0.286-0.424 for 6 off topic.
+                _best_sim = max((sim for _, sim in _search_recall(
+                    " ".join(_norm_kws), 1, g_pt)), default=0.0)
+                _min_rel = _config.env_float("NEURON_MIN_RECALL_RELEVANCE", 0.43)
         except Exception as _e:  # noqa: BLE001 — la rilevanza e' un extra, mai fatale
             log.debug("relevance score skipped: %s", _e)
     warns_pt: list[str] = []
-    _min_rel = _config.env_float("NEURON_MIN_RELEVANCE", 0.35)
     # La soglia morde SOLO quando la risposta poggia sui vettori (fallback o
     # eredita'). Una keyword centrata nel grafo e' attinente per costruzione,
     # anche con un coseno basso: sopprimerla toglierebbe il richiamo esatto.

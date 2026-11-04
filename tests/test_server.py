@@ -459,6 +459,8 @@ def _pre_turn_via_vectors(monkeypatch, ranked, best_sim, topic, cross=None):
     monkeypatch.setattr(srv, "_resolve_context",
                         lambda *a, **k: ([], list(ranked), True, None, None))
     monkeypatch.setattr(srv, "_search_embeddings", lambda *a, **k: [("x", best_sim)])
+    # A fallback answer is judged on the recall vectors (_search_recall).
+    monkeypatch.setattr(srv, "_search_recall", lambda *a, **k: [("x", best_sim)])
     monkeypatch.setattr(srv, "cross_context_matches", lambda *a, **k: list(cross or []))
     old_g = srv._g
     srv._g = _make_registry_with({"default": g}, "default")

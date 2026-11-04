@@ -76,14 +76,14 @@ def test_an_unknown_keyword_still_reaches_the_vector_search(monkeypatch):
     pytest.importorskip("mcp"); pytest.importorskip("fastembed")
     import neuron.server as srv
     seen = {}
-    monkeypatch.setattr(srv, "_search_embeddings",
-                        lambda kws, **k: seen.setdefault("kws", list(kws)) and [])
+    monkeypatch.setattr(srv, "_search_recall",
+                        lambda query, top_n, graph: seen.setdefault("query", query) and [])
     monkeypatch.setattr(srv._g, "resolve_chain", lambda _c: [None])
     _, _, used_fallback, *_ = srv._resolve_context({"Qualcosa-Che-Non-Esiste"}, 1,
                                                    _loaded_graph(), "")
 
     assert used_fallback is False        # the fallback ran and found nothing
-    assert seen["kws"] == ["qualcosa-che-non-esiste"]
+    assert seen["query"] == "qualcosa-che-non-esiste"
 
 
 def test_the_canon_map_prefers_a_node_over_a_link_endpoint():

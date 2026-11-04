@@ -339,6 +339,47 @@ def _search_embeddings(
     return result
 
 
+def _recall_text(g, nd) -> str:
+    """What a node KNOWS, as one text: its name, the topic it came from, its facts."""
+    facts = " ".join(e["text"] for e in g.episodes.get(nd.keyword, []))
+    return f"{nd.keyword}. {nd.topic or ''}. {facts}"
+
+
+def _search_recall(query: str, top_n: int, graph) -> list[tuple[str, float]]:
+    """Nodes ranked by what they know, not by their name.
+
+    `_search_embeddings` compares the query with the vector of the node's NAME:
+    a sentence like "il python lanciato dal repo importa i pacchetti sbagliati"
+    against the label `cwd-shadowing`. On the real `ai` graph, 14 questions in
+    plain language put the right node in the top 5 twice (MRR 0.05); against
+    name + topic + facts, seven times (MRR 0.29) — 2026-11-04. The name vector
+    stays as it is: dedup compares a keyword with a keyword, and a vector full
+    of facts would make two different concepts look alike again.
+
+    Not persisted: the texts are memoized in the shared embed cache, so a node
+    is embedded again only when its text changes (a new fact, a new topic).
+    The first call embeds the whole graph in one batch."""
+    s = _S()
+    emb = _get_embedder()
+    texts = {nd.keyword: _recall_text(graph, nd) for nd in graph.nodes}
+    missing = [t for t in set(texts.values()) if (id(emb), t) not in s._embed_cache]
+    if missing:
+        for t, v in zip(missing, emb.embed(missing)):
+            v = [float(x) for x in v]
+            norm = sum(x * x for x in v) ** 0.5 or 1.0
+            s._embed_cache[(id(emb), t)] = [x / norm for x in v]
+    q = _get_embedding(query)
+    # ponytail: O(N) Python dot products, ~20 ms at MAX_NODES=500; a vector
+    # column in the store if the cap is ever raised by an order of magnitude.
+    scores = []
+    for kw, t in texts.items():
+        v = s._embed_cache.get((id(emb), t))
+        if v:
+            scores.append((kw, round(sum(a * b for a, b in zip(q, v)), 4)))
+    scores.sort(key=lambda x: -x[1])
+    return scores[:top_n]
+
+
 # ---------------------------------------------------------------------------
 # Domain refinement
 # ---------------------------------------------------------------------------

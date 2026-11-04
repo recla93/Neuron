@@ -56,8 +56,8 @@ def test_a_weak_vector_match_does_not_drag_its_links_in(tmp_path, monkeypatch):
     for a, b in (("frontend", "nginx"), ("focus", "primeng")):
         g.add_link(Link(source=a, target=b, link_type="deepening", weight="medium",
                         rationale="", created_turn=1, last_active_turn=1))
-    monkeypatch.setattr(S, "_search_embeddings",
-                        lambda kws, top_n=8, graph=None: [("frontend", 0.59), ("focus", 0.33)])
+    monkeypatch.setattr(S, "_search_recall",
+                        lambda query, top_n, graph: [("frontend", 0.59), ("focus", 0.33)])
 
     out = call("pre_turn", {"topic": "dove gira il frontend in produzione"})
     assert "frontend" in out and "nginx" in out, out
