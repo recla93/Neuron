@@ -130,6 +130,63 @@ def set_user_env(**values: str) -> str:
     return path
 
 
+# Knob mostrati dal control center (`neuron config list --json`, stesso formato
+# di gray-matter e neurag): chiave -> (variabile d'ambiente, default, min, max, aiuto).
+# Si salvano nel .env utente, quindi valgono dal prossimo avvio del server.
+KNOBS = {
+    "max_nodes": (
+        "NEURON_MAX_NODES", 1000, 100, 5000,
+        "Concetti per grafo prima che il meno saliente vada in archivio "
+        "(recuperabile con recall). Più alto = si dimentica meno, ma ogni concetto "
+        "nuovo costa di più: circa 15 ms a 1000, 0,3 s e 100 MB a 5000. "
+        "Vale dal prossimo avvio del server."),
+}
+
+
+def knob_value(key: str) -> int:
+    """The knob's effective value: the env (the .env included), clamped to its range."""
+    env, default, lo, hi, _ = KNOBS[key]
+    return max(lo, min(hi, env_int(env, default)))
+
+
+def config_cli(argv) -> int:
+    """`neuron config list|get|set` — the knobs the control center renders."""
+    import argparse
+    import json
+    import sys
+    ap = argparse.ArgumentParser(prog="neuron config")
+    ap.add_argument("action", choices=["list", "get", "set"])
+    ap.add_argument("key", nargs="?", default="")
+    ap.add_argument("value", nargs="?", default=None)
+    ap.add_argument("--json", action="store_true", help="output for the control center")
+    a = ap.parse_args(argv)
+    if a.action == "list":
+        knobs = [{"key": k, "value": knob_value(k), "default": d, "type": "int",
+                  "help": h, "suggest": []} for k, (_e, d, _lo, _hi, h) in KNOBS.items()]
+        print(json.dumps({"knobs": knobs, "note": ""}) if a.json
+              else "\n".join(f"{x['key']} = {x['value']}" for x in knobs))
+        return 0
+    if a.key not in KNOBS:
+        print(f"chiave sconosciuta: {a.key!r} (note: {', '.join(KNOBS)})", file=sys.stderr)
+        return 1
+    if a.action == "get":
+        v = knob_value(a.key)
+        print(json.dumps({"key": a.key, "value": v}) if a.json else v)
+        return 0
+    env, _d, lo, hi, _h = KNOBS[a.key]
+    try:
+        v = int(str(a.value).strip())
+    except (TypeError, ValueError):
+        print(f"{a.key}: serve un numero intero", file=sys.stderr)
+        return 1
+    if not lo <= v <= hi:
+        print(f"{a.key}: fra {lo} e {hi}, non {v}", file=sys.stderr)
+        return 1
+    set_user_env(**{env: str(v)})
+    print(json.dumps({"ok": True, "key": a.key, "value": v}) if a.json else f"{a.key} = {v}")
+    return 0
+
+
 def graphs_dir() -> str:
     """Resolved graph store: ``NS_GRAPHS_DIR`` override, else the per-user
     default (e.g. to keep an existing ``./graphs``). Always normalized."""

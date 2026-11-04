@@ -294,6 +294,7 @@ COMMANDS: "dict[str, tuple]" = {
     "console":     ("neuron.console", "main", "inspect",    "Read-only graph diagnostics (--watch)", False),
     "init":        ("neuron.init",    "main", "tuning",     "Wire up the clients (without importing the server)", False),
     "connect":     ("neuron.connect", "main", "tuning",     "Connect and test a Turso Cloud DB, then save it", False),
+    "config":      ("neuron.config",  "config_cli", "tuning", "Get/set tunable knobs (concepts per graph)", False),
 }
 
 

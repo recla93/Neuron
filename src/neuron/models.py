@@ -90,7 +90,11 @@ VECTOR_DIM               = int(os.environ.get("NS_EMBED_DIM", "384"))
 # Nome del modello di embedding attivo (deve combaciare con i vettori nello
 # store: vettori di modelli diversi non sono confrontabili — vedi load_sqlite).
 EMBED_MODEL              = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
-MAX_NODES                = _env_int("NEURON_MAX_NODES", 500)   # evict lowest-salience nodes beyond this cap
+# Evict lowest-salience nodes beyond this cap. 500 was reached by the real `ai`
+# graph on 2026-11-04: from then on every new concept archived an old one.
+# Range and help text live in config.KNOBS (the control center sets it).
+from neuron.config import knob_value as _knob_value   # noqa: E402
+MAX_NODES                = _knob_value("max_nodes")
 # Consolidation (E1.2): merge near-duplicate nodes
 CONSOLIDATE_SIM_THRESHOLD = 0.85   # cosine similarity above which nodes merge
 ORPHAN_SALIENCE          = 2       # nodes below this salience are droppable
