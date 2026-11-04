@@ -1,5 +1,20 @@
 # Changelog — Neuron
 
+## 6.8.1 (2026-11-04)
+- **Un vettore per fatto, non uno per nodo.** Il modello legge 128 token e
+  taglia il resto: in un solo testo con nome, topic e cinque fatti, un nodo
+  veniva giudicato sui primi uno o due. Ora ogni fatto ha il suo vettore
+  (`nome. fatto`, più `nome. topic`) e il nodo vale il migliore. Sul set d'uso
+  (18 domande in tema, 12 fuori tema, `pre_turn` completo su una copia del
+  grafo `ai`, soglia 0,43): trovate 10/18 -> 14/18, soppresse 8/12 -> 8/12.
+  "risolutore di ticket per l'azienda" passa da 0,386 (soppressa) a 0,449.
+- **La prima domanda non aspetta più gli embedding.** La 6.8.0 calcolava tutti
+  i testi del grafo alla prima domanda dopo l'avvio: 47 s sul grafo `ai`. Ora
+  i vettori si salvano in `_recall_vectors.bin` accanto ai grafi (una cache:
+  si ricostruisce se manca) e un avvio li rilegge in 0,04 s. Quando mancano
+  più di 64 testi, il calcolo va in sottofondo e la domanda risponde con
+  quello che c'è.
+
 ## 6.8.0 (2026-11-04)
 - **Il richiamo trova i nodi per quello che sanno, non per il nome.** Quando
   nessuna parola della domanda è un nodo, il fallback confrontava la frase con
