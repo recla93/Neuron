@@ -16,10 +16,14 @@ commit. Until then this file only owns LOGIC, byte-equivalent to the original.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
+import threading
 import time as _time
 import weakref
+from array import array
 
 from neuron.extraction import DOMAIN_ALIASES
 
@@ -339,43 +343,139 @@ def _search_embeddings(
     return result
 
 
-def _recall_text(g, nd) -> str:
-    """What a node KNOWS, as one text: its name, the topic it came from, its facts."""
-    facts = " ".join(e["text"] for e in g.episodes.get(nd.keyword, []))
-    return f"{nd.keyword}. {nd.topic or ''}. {facts}"
+def _recall_texts(g, nd) -> list[str]:
+    """What a node KNOWS, one text per fact: `name. topic`, then `name. fact`
+    for each fact. Not all in one text: the model reads 128 tokens and cuts
+    the rest, so a node with five facts was judged on the first one or two."""
+    return ([f"{nd.keyword}. {nd.topic or ''}"]
+            + [f"{nd.keyword}. {e['text']}" for e in g.episodes.get(nd.keyword, [])])
+
+
+# (id(embedder), text) -> unit vector. Its own cache, not `_embed_cache`: one
+# vector per fact is ~6000 texts at MAX_NODES=1000, past that cache's 4096 cap,
+# and an evicted text would be embedded again on every query.
+_RECALL_VECS: dict = {}
+# Embedding the whole `ai` graph took 47 s (713 texts, 2026-11-04): paid once,
+# then kept in a file next to the graphs — a cache, rebuilt if it is lost.
+# More missing texts than this are embedded in the background, so the first
+# query after an install answers with what is there instead of blocking.
+_RECALL_FILE = "_recall_vectors.bin"
+_RECALL_INLINE_MAX = 64
+_recall_disk: "dict | None" = None          # sha1(text) -> vector, read once
+_recall_warming = False
+
+
+def _persistable(emb) -> bool:
+    """Only the real model's vectors go to disk, never a test's fake embedder."""
+    return type(emb).__module__.startswith("fastembed")
+
+
+def _recall_path() -> "str | None":
+    d = getattr(getattr(_S(), "_g", None), "_graphs_dir", None)
+    return os.path.join(d, _RECALL_FILE) if d else None
+
+
+def _recall_from_disk() -> dict:
+    global _recall_disk
+    if _recall_disk is None:
+        _recall_disk = {}
+        path = _recall_path()
+        try:
+            with open(path, "rb") as f:
+                head = json.loads(f.readline())
+                if head.get("model") == _S().NS_EMBED_MODEL:
+                    dim = int(head["dim"])
+                    while len(h := f.read(20)) == 20:
+                        vec = array("f")
+                        vec.frombytes(f.read(4 * dim))
+                        _recall_disk[h] = list(vec)
+        except (OSError, TypeError, ValueError, KeyError):
+            pass
+    return _recall_disk
+
+
+def _recall_to_disk(eid: int, texts: "set[str]") -> None:
+    path = _recall_path()
+    rows = [(t, _RECALL_VECS[(eid, t)]) for t in texts if (eid, t) in _RECALL_VECS]
+    if not path or not rows:
+        return
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write((json.dumps({"model": _S().NS_EMBED_MODEL, "dim": len(rows[0][1])}) + "\n").encode())
+            for t, v in rows:
+                f.write(hashlib.sha1(t.encode()).digest() + array("f", v).tobytes())
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("recall vectors not saved: %s", e)
+
+
+def _embed_recall(emb, eid: int, texts: list[str]) -> None:
+    for t, v in zip(texts, emb.embed(texts)):
+        v = [float(x) for x in v]
+        norm = sum(x * x for x in v) ** 0.5 or 1.0
+        _RECALL_VECS[(eid, t)] = [x / norm for x in v]
 
 
 def _search_recall(query: str, top_n: int, graph) -> list[tuple[str, float]]:
-    """Nodes ranked by what they know, not by their name.
+    """Nodes ranked by what they know, not by their name: each node scores its
+    best text (see _recall_texts).
 
     `_search_embeddings` compares the query with the vector of the node's NAME:
     a sentence like "il python lanciato dal repo importa i pacchetti sbagliati"
-    against the label `cwd-shadowing`. On the real `ai` graph, 14 questions in
-    plain language put the right node in the top 5 twice (MRR 0.05); against
-    name + topic + facts, seven times (MRR 0.29) — 2026-11-04. The name vector
-    stays as it is: dedup compares a keyword with a keyword, and a vector full
-    of facts would make two different concepts look alike again.
+    against the label `cwd-shadowing`. The name vector stays as it is for
+    dedup, which compares a keyword with a keyword: a vector full of facts
+    would make two different concepts look alike again.
 
-    Not persisted: the texts are memoized in the shared embed cache, so a node
-    is embedded again only when its text changes (a new fact, a new topic).
-    The first call embeds the whole graph in one batch."""
-    s = _S()
+    Measured with the full pre_turn on a copy of the real `ai` graph
+    (2026-11-04), 18 questions on topic and 12 off topic, threshold 0.43:
+    name only 3/14 on an earlier set; name+topic+facts in one text 10/18 found
+    and 8/12 suppressed; one text per fact 14/18 and 8/12.
+
+    A text is embedded only when it is new (a new fact, a new topic); the
+    vectors survive a restart in _RECALL_FILE (see the notes above it)."""
+    global _RECALL_VECS, _recall_warming
     emb = _get_embedder()
-    texts = {nd.keyword: _recall_text(graph, nd) for nd in graph.nodes}
-    missing = [t for t in set(texts.values()) if (id(emb), t) not in s._embed_cache]
-    if missing:
-        for t, v in zip(missing, emb.embed(missing)):
-            v = [float(x) for x in v]
-            norm = sum(x * x for x in v) ** 0.5 or 1.0
-            s._embed_cache[(id(emb), t)] = [x / norm for x in v]
+    eid = id(emb)
+    persist = _persistable(emb)
+    per = {nd.keyword: _recall_texts(graph, nd) for nd in graph.nodes}
+    texts = {t for ts in per.values() for t in ts}
+    missing = [t for t in texts if (eid, t) not in _RECALL_VECS]
+    if missing and persist:
+        disk = _recall_from_disk()
+        for t in missing:
+            v = disk.get(hashlib.sha1(t.encode()).digest())
+            if v is not None:
+                _RECALL_VECS[(eid, t)] = v
+        missing = [t for t in missing if (eid, t) not in _RECALL_VECS]
+    if missing and len(missing) <= _RECALL_INLINE_MAX:
+        _embed_recall(emb, eid, missing)
+        if persist:
+            _recall_to_disk(eid, texts)
+    elif missing and not _recall_warming:
+        _recall_warming = True
+
+        def _warm():
+            global _recall_warming
+            try:
+                _embed_recall(emb, eid, missing)
+                if persist:
+                    _recall_to_disk(eid, texts)
+            finally:
+                _recall_warming = False
+        threading.Thread(target=_warm, name="recall-warm", daemon=True).start()
+    if not _recall_warming and len(_RECALL_VECS) > 2 * len(texts) + 1000:
+        # old facts, other graphs: drop them, keep this graph's
+        _RECALL_VECS = {k: v for k, v in _RECALL_VECS.items() if k[1] in texts}
     q = _get_embedding(query)
-    # ponytail: O(N) Python dot products, ~20 ms at MAX_NODES=500; a vector
-    # column in the store if the cap is ever raised by an order of magnitude.
+    # ponytail: O(texts) Python dot products, ~30 ms for 713 texts at 500
+    # nodes; numpy or a vector column in the store if MAX_NODES nears 5000.
     scores = []
-    for kw, t in texts.items():
-        v = s._embed_cache.get((id(emb), t))
-        if v:
-            scores.append((kw, round(sum(a * b for a, b in zip(q, v)), 4)))
+    for kw, ts in per.items():
+        vecs = [_RECALL_VECS.get((eid, t)) for t in ts]
+        sims = [sum(a * b for a, b in zip(q, v)) for v in vecs if v is not None]
+        if sims:          # while warming, a node not embedded yet is skipped
+            scores.append((kw, round(max(sims), 4)))
     scores.sort(key=lambda x: -x[1])
     return scores[:top_n]
 

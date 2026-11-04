@@ -5,10 +5,12 @@ sbagliati") was compared with node NAMES (`cwd-shadowing`): on the real `ai`
 graph the right node reached the top 5 for 3 questions out of 14. Against name +
 topic + facts, 8 out of 14 (2026-11-04).
 """
+import threading
 import zlib
 
 import pytest
 
+from neuron import search
 from neuron import server as S
 from neuron.models import Graph, Node
 
@@ -28,6 +30,9 @@ def words(monkeypatch):
     monkeypatch.setattr(S, "_embedder", _WordEmbed())
     monkeypatch.setattr(S, "_embed_cache", {})
     monkeypatch.setattr(S, "_embed_dim_checked", True)
+    monkeypatch.setattr(search, "_RECALL_VECS", {})
+    monkeypatch.setattr(search, "_recall_disk", None)
+    monkeypatch.setattr(search, "_recall_warming", False)
 
 
 def _graph():
@@ -44,8 +49,62 @@ def test_a_node_is_found_by_its_facts_not_its_name(words):
     assert hits[0][0] == "alfa", hits
 
 
+def test_a_node_with_many_facts_is_judged_on_its_best_one(words):
+    """All facts in one text diluted the one that answers: a node with five
+    facts lost to a node with a single half-match. One text per fact, best wins."""
+    g = Graph()
+    for kw in ("alfa", "beta"):
+        g.add_node(Node(keyword=kw, turn=1, topic="t", domain="general", sentiment="neutral"))
+    for i, fact in enumerate(("uno due tre quattro cinque sei", "sette otto nove dieci undici",
+                              "rosso verde blu giallo viola", "nord sud est ovest centro",
+                              "pacchetti cartella sbagliata"), 1):
+        g.add_episode("alfa", fact, i)
+    g.add_episode("beta", "pacchetti cartella vuota", 1)
+    assert S._search_recall("pacchetti cartella sbagliata", 1, g)[0][0] == "alfa"
+
+
 def test_a_new_fact_changes_what_the_node_answers_to(words):
     g = _graph()
     assert S._search_recall("torta mele forno", 1, g)[0][0] == "beta"
     g.add_episode("alfa", "torta mele forno forno forno", 2)
     assert S._search_recall("torta mele forno", 1, g)[0][0] == "alfa"
+
+
+def test_a_big_backlog_is_embedded_in_the_background(words, monkeypatch):
+    """The whole `ai` graph took 47 s to embed: the first query after an
+    install must not wait for it. It answers with what is there."""
+    gate = threading.Event()
+
+    class _Slow(_WordEmbed):
+        def embed(self, texts):
+            gate.wait(5)
+            yield from super().embed(texts)
+
+    g = _graph()                       # names embedded before the slow model arrives
+    monkeypatch.setattr(S, "_embedder", _Slow())
+    monkeypatch.setattr(search, "_get_embedding", lambda t: next(_WordEmbed().embed([t])))
+    monkeypatch.setattr(search, "_RECALL_INLINE_MAX", 1)
+    assert S._search_recall("torta mele", 1, g) == []          # returned, did not block
+    gate.set()
+    for t in threading.enumerate():
+        if t.name == "recall-warm":
+            t.join(5)
+    assert S._search_recall("torta mele", 1, g)[0][0] == "beta"
+
+
+def test_vectors_survive_a_restart(words, monkeypatch, tmp_path):
+    monkeypatch.setattr(search, "_persistable", lambda emb: True)
+    monkeypatch.setattr(search, "_recall_path", lambda: str(tmp_path / "rv.bin"))
+    g = _graph()
+    S._search_recall("pacchetti importati", 1, g)
+    assert (tmp_path / "rv.bin").exists()
+
+    class _Refuse:
+        def embed(self, texts):
+            raise AssertionError(f"re-embedded after a restart: {list(texts)}")
+
+    monkeypatch.setattr(search, "_RECALL_VECS", {})          # a new process
+    monkeypatch.setattr(search, "_recall_disk", None)
+    monkeypatch.setattr(S, "_embedder", _Refuse())
+    monkeypatch.setattr(search, "_get_embedding", lambda t: next(_WordEmbed().embed([t])))
+    assert S._search_recall("pacchetti importati cartella", 1, g)[0][0] == "alfa"

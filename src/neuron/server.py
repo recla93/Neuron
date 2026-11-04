@@ -2392,8 +2392,10 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 # judged on the same vectors — on names a good answer was
                 # withheld. Their own threshold: a long text resembles any
                 # question a little, and 0.35 let every off-topic one through.
-                # Measured on the `ai` graph (2026-11-04): best match 0.415-0.570
-                # for 14 questions on topic, 0.286-0.424 for 6 off topic.
+                # Measured on the `ai` graph (2026-11-04), 18 questions on topic
+                # and 12 off: 0.43 finds 14/18 and suppresses 8/12; at 0.45 the
+                # weakest real hit (0.449) is lost. The 4 off topic left through
+                # score 0.53-0.61 on nodes that share their words (sleep, bash).
                 _best_sim = max((sim for _, sim in _search_recall(
                     " ".join(_norm_kws), 1, g_pt)), default=0.0)
                 _min_rel = _config.env_float("NEURON_MIN_RECALL_RELEVANCE", 0.43)
