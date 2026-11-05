@@ -1,5 +1,12 @@
 # Changelog — Neuron
 
+## Unreleased
+- **`neuron setup` trova la config dell'app desktop fuori dal pacchetto**
+  (`%LOCALAPPDATA%\Claude-Data\claude_<id>`), quella che l'app MSIX legge
+  davvero quando sposta lì i suoi dati.
+- **Licenza in formato SPDX**, senza il classifier di licenza: pip 26.3 mostrava
+  gli avvisi di setuptools a chi installa. Contenuto del pacchetto invariato.
+
 ## 6.8.1 (2026-11-04)
 - **Un vettore per fatto, non uno per nodo.** Il modello legge 128 token e
   taglia il resto: in un solo testo con nome, topic e cinque fatti, un nodo
