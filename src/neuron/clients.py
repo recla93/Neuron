@@ -168,6 +168,9 @@ def claude_desktop_candidates() -> list[str]:
             os.path.join(p, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json")
             for p in sorted(_glob.glob(os.path.join(localapp, "Packages", "Claude_*")))
         )
+        # A newer MSIX keeps its user data outside the package, and reads THIS file.
+        cands.extend(sorted(_glob.glob(os.path.join(
+            localapp, "Claude-Data", "claude_*", "claude_desktop_config.json"))))
     if sys.platform == "darwin":
         cands.append(_home("Library", "Application Support", "Claude",
                            "claude_desktop_config.json"))

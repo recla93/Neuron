@@ -111,6 +111,20 @@ class TestClaudeDesktopCandidates(unittest.TestCase):
             self.assertEqual(len(hits), 1)
             self.assertIn("Claude_pzs8sxrjxfjjc", hits[0])
 
+    def test_user_data_outside_the_package_is_probed(self):
+        """La config che l'app legge davvero quando sposta i dati fuori dal pacchetto."""
+        with tempfile.TemporaryDirectory() as td:
+            localapp = os.path.join(td, "Local")
+            ext = os.path.join(localapp, "Claude-Data", "claude_pzs8sxrjxfjjc")
+            os.makedirs(ext)
+            with open(os.path.join(ext, "claude_desktop_config.json"), "w") as fh:
+                fh.write("{}")
+            with mock.patch.dict(os.environ, {"APPDATA": os.path.join(td, "Roaming"),
+                                              "LOCALAPPDATA": localapp}):
+                hits = [p for p in C.claude_desktop_candidates() if os.path.exists(p)]
+            self.assertEqual(len(hits), 1)
+            self.assertIn("Claude-Data", hits[0])
+
     def test_pick_most_recent_when_both_exist(self):
         with tempfile.TemporaryDirectory() as td:
             a, b = os.path.join(td, "a.json"), os.path.join(td, "b.json")
