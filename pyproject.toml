@@ -3,11 +3,13 @@ name = "neuron"
 version = "6.8.1"
 description = "Neuron - persistent semantic memory for AI (semantic graph + vector search with Turso)"
 requires-python = ">=3.10"
-license = { text = "PolyForm Noncommercial License 1.0.0" }
+# SPDX, non la tabella: pip >= 26.3 mostra ogni deprecazione di setuptools a chi
+# installa, e la tabella smette di funzionare dal 2027-02-18.
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: Other/Proprietary License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -55,7 +57,7 @@ neuron-mcp = "neuron.server:cli"
 neuron = "neuron.__main__:cli"
 
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]   # 77: prima versione con license SPDX
 build-backend = "setuptools.build_meta"
 
 # --- Packaging: src-layout discovery + version + bundled seed DB ------------
