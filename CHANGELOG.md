@@ -1,6 +1,6 @@
 # Changelog — Neuron
 
-## Unreleased
+## 6.9.0 (2026-11-06)
 - **Niente più seed.** `base_knowledge.db`, il manuale di Neuron in 29 nodi,
   non si spedisce più, e con lui le note del `self-vault` e gli script che lo
   costruivano (`import_vault`, `populate_vectors`, `seed_repair_links`). Dalla
