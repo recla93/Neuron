@@ -1,8 +1,3 @@
-# Neuron ships WITHOUT a seed by default (see README "Seed knowledge"). IF you
-# deliberately drop a real base_knowledge.db into src/neuron/data/, this line
-# includes it in the sdist (the wheel picks it up via package-data in
-# pyproject.toml). With no .db present it matches nothing — which is intended.
-recursive-include src/neuron/data *.db
 recursive-include src/neuron/data *.png
 include assets/neuron-logo.png
 

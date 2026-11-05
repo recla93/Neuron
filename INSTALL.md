@@ -156,8 +156,8 @@ python -c "import neuron; print(neuron.__version__)"
 python -m neuron        # starts the MCP server on stdio (Ctrl-C to stop)
 ```
 
-The seed knowledge DB (`neuron/data/base_knowledge.db`) ships **inside** the
-wheel, so there is nothing extra to copy.
+There is nothing extra to copy: a new graph starts empty and fills with what you
+store.
 
 ---
 
@@ -259,24 +259,6 @@ The venv install didn't complete. Re-run inside the activated venv:
 ```bash
 pip install --find-links vendor mcp fastembed "pyturso==0.8.3"
 ```
-
-### The seed knowledge DB is missing / `base_knowledge.db not found`
-The wheel bundles it at `neuron/data/base_knowledge.db`. A fresh checkout ships
-only a placeholder there; Neuron runs fine without a real seed (it just starts
-with no pre-loaded knowledge and learns from your conversations).
-
-To build a real seed from an Obsidian vault, use the import tool — it takes the
-vault root from `NEURON_VAULT` (or `--vault`) and writes a local DB:
-
-```bash
-export NEURON_VAULT=/path/to/your/vault      # Windows: set NEURON_VAULT=C:\path\to\vault
-python scripts/import_vault.py               # -> ./knowledge/base_knowledge.db
-```
-
-If `fastembed` is installed, 384-dim vectors are generated inline so semantic
-search works immediately. The output DB is **local** — copy it to
-`src/neuron/data/base_knowledge.db` only when you deliberately want it shipped as
-the public seed.
 
 ### The client doesn't see Neuron after install
 Restart the client (Claude Desktop/Cursor/etc.) — MCP servers are read at

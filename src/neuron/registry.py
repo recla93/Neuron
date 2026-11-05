@@ -18,6 +18,43 @@ from neuron.models import Graph
 
 log = logging.getLogger("neuron.registry")
 
+# The seed DB (base_knowledge.db, Neuron's own manual) is no longer shipped
+# (6.9.0). Graphs warm-started from it before 6.6 may still carry its nodes, and
+# the load-time cleanup needs to recognise them: these are its 29 nodes as last
+# shipped, normalized keyword -> topic. A node goes only if it still matches
+# exactly (see Graph.drop_seed_nodes).
+_SHIPPED_SEED_TOPICS = {
+    'auto': 'auto — fallback POST: estrai + salva in un colpo solo',
+    'confirm': 'confirm — feedback sul contesto ricevuto',
+    'consolidate': 'consolidate — pulizia del grafo: merge duplicati + archivia orfani',
+    'contesti': 'Contesti — organizzazione gerarchica della memoria',
+    'dedup': 'dedup — attiva/disattiva deduplicazione automatica',
+    'dismiss': 'dismiss — feedback negativo sul contesto ricevuto',
+    'export': 'export — esporta il grafo come JSON',
+    'extract': 'extract — estrazione semantica da testo (euristico, 0 token)',
+    'find_candidates': 'find_candidates — screening duplicati prima di salvare',
+    'flash': 'flash — attiva/disattiva i flashback semantici',
+    'forgotten': 'forgotten — trova concetti in decadimento',
+    'get_context': 'get_context — recupero esplicito di nodi e link collegati',
+    'help': 'help — indice rapido dei comandi Neuron',
+    'introspect': 'introspect — il modello che Neuron ha di sé',
+    'list_contexts': 'list_contexts — elenca tutti i contesti esistenti',
+    'merge': 'merge — fusione manuale di nodi duplicati',
+    'neuron': 'Neuron — semantic memory MCP server',
+    'pre_turn': 'pre_turn — LOOP STEP 1: carica contesto prima di rispondere',
+    'prune': 'prune — potatura link tangenziali inattivi',
+    'recall': 'recall — riporta in vita un nodo archiviato',
+    'reset': 'reset — azzera il grafo',
+    'salienza': 'Salienza — peso dinamico dei nodi',
+    'skill': 'skill — carica il playbook completo di Neuron',
+    'spreading_activation': "Spreading activation — propagazione dell'attivazione nel grafo",
+    'status': 'status — stato corrente del grafo',
+    'store_turn': 'store_turn — LOOP STEP 2: persiste ciò che è nuovo',
+    'summary': 'summary — riassunto testuale del grafo',
+    'switch_context': 'switch_context — cambia il contesto attivo',
+    'vector_search': 'vector_search — ricerca semantica tra keyword',
+}
+
 
 @dataclass
 class CrossLink:
@@ -68,61 +105,6 @@ class GraphRegistry:
             pass
         self._cross_db = os.path.join(graphs_dir, "_cross_links.json")
         self._load_cross_links()
-        # seed path: prefer the DB bundled inside the installed package
-        # (src/neuron/data/base_knowledge.db, shipped in the wheel). Fall back
-        # to the legacy repo-relative location (knowledge/base_knowledge.db,
-        # one level above graphs/) for source checkouts / dev runs.
-        self._seed_path = self._resolve_seed_path(graphs_dir)
-        self._seed_topics: dict[str, str] | None = None
-
-    @staticmethod
-    def _resolve_seed_path(graphs_dir: str) -> str:
-        """Locate the seed knowledge DB, packaged location first.
-
-        1. ``neuron/data/base_knowledge.db`` via ``importlib.resources`` — this
-           is what ships in the installed wheel.
-        2. ``<repo>/knowledge/base_knowledge.db`` (legacy, repo-relative) — used
-           when running from a source checkout where the package data isn't
-           populated. Returned even if absent so existing "missing seed"
-           handling downstream is unchanged.
-        """
-        try:
-            from importlib.resources import files
-            packaged = files("neuron").joinpath("data", "base_knowledge.db")
-            if packaged.is_file():
-                return str(packaged)
-        except (ImportError, ModuleNotFoundError, FileNotFoundError, AttributeError):
-            pass
-        parent = os.path.dirname(os.path.normpath(graphs_dir))
-        return os.path.join(parent, "knowledge", "base_knowledge.db")
-
-    def _seed_is_loadable(self) -> bool:
-        """True only if the seed path looks like a real SQLite/Turso database.
-
-        Guards against a missing file or the shipped placeholder (a tiny text
-        stub used before the real base_knowledge.db is generated). A valid
-        SQLite file is >= 512 bytes and starts with the "SQLite format 3\\000"
-        magic header.
-        """
-        p = self._seed_path
-        try:
-            if not os.path.isfile(p) or os.path.getsize(p) < _db.SQLITE_MIN_VALID_SIZE:
-                return False
-            with open(p, "rb") as f:
-                return f.read(16) == b"SQLite format 3\x00"
-        except OSError:
-            return False
-
-    def _seed_node_topics(self) -> dict[str, str]:
-        """normalized keyword → topic of every seed node, read once per process."""
-        if self._seed_topics is None:
-            conn = _db.connect_read_only(self._seed_path)
-            try:
-                rows = conn.execute("SELECT keyword, topic FROM nodes").fetchall()
-            finally:
-                conn.close()
-            self._seed_topics = {Graph._norm(k): t for k, t in rows}
-        return self._seed_topics
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -160,9 +142,9 @@ class GraphRegistry:
             # every search in place of the user's concepts. Graphs that got them
             # back then are cleaned here, once, and saved at once: the vector
             # SQL tier reads the file, not this object.
-            if g.nodes and self._seed_is_loadable():
+            if g.nodes:
                 try:
-                    gone = g.drop_seed_nodes(self._seed_node_topics())
+                    gone = g.drop_seed_nodes(_SHIPPED_SEED_TOPICS)
                     if gone:
                         g.save_sqlite(db, context=ctx)
                         log.info("context %r: removed %d seed nodes: %s",
@@ -271,7 +253,7 @@ class GraphRegistry:
 
         This used to skip contexts warm-started from the seed, under the heading
         "never writes to seed" — but it writes to `self._db_path(ctx)`, the
-        context's own file, and never to `self._seed_path`. The guard protected
+        context's own file, and never to the seed file. The guard protected
         nothing and excluded exactly the contexts most likely to be lost: `get()`
         then warm-started EVERY newly created context from the seed.
 

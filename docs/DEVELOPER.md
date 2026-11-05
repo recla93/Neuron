@@ -686,13 +686,10 @@ Two workflows:
    first — a stale `build/` staging dir or a cached `egg-info/SOURCES.txt` can
    bundle old files (CI builds from a fresh checkout, so the tagged Release is
    unaffected). Sanity-check the artifacts: the wheel should contain only the
-   `neuron` package, and the sdist should not ship `CLAUDE.md` or any `.db` seed.
-4. (Optional) Ship a seed: build one with `python scripts/import_vault.py` (set
-   `NEURON_VAULT` or pass `--vault`), then copy the resulting DB into
-   `src/neuron/data/base_knowledge.db` — only a real, populated SQLite file.
-5. Tag and push: `git tag vX.Y.Z && git push --tags`. `release.yml` builds the
+   `neuron` package, and the sdist should not ship `CLAUDE.md` or any `.db` file.
+4. Tag and push: `git tag vX.Y.Z && git push --tags`. `release.yml` builds the
    prebuilt PyTurso wheels and publishes the GitHub Release.
-6. To bump `pyturso`, change the pin in `pyproject.toml` **and** the version in
+5. To bump `pyturso`, change the pin in `pyproject.toml` **and** the version in
    `release.yml`'s `build-pyturso-win` job together.
 
 ### Deploy / sync to the active install

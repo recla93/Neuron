@@ -130,27 +130,21 @@ class TestSearchSeedFree:
             def fetchall(self): return self._rows
             def close(self): pass
 
-        dbrows = {"seed": [("A", 0.9)], "active": [("B", 0.8)]}
+        dbrows = {"active": [("B", 0.8)]}
 
         def _connect(db):
             opens[db] = opens.get(db, 0) + 1
             return _FakeConn(dbrows[db])
 
         _install_fake_embedder()
-        _srv._seed_conn_cache.clear()
         monkeypatch.setattr(_srv, "TURSO_ENGINE", True)
-        monkeypatch.setattr(_srv, "_seed_usable", lambda p: True)
         monkeypatch.setattr(_srv, "_active_db_path", lambda: "active")
-        monkeypatch.setattr(_srv._g, "_seed_path", "seed", raising=False)
         monkeypatch.setattr(_srv.os.path, "exists", lambda p: True)
         monkeypatch.setattr(_srv._db, "connect_local", _connect)
-        try:
-            res = dict(_srv._search_embeddings(["x"], top_n=8, graph=Graph()))
-            _srv._search_embeddings(["x"], top_n=8, graph=Graph())
-        finally:
-            _srv._seed_conn_cache.clear()
+        res = dict(_srv._search_embeddings(["x"], top_n=8, graph=Graph()))
+        _srv._search_embeddings(["x"], top_n=8, graph=Graph())
         assert res == {"B": 0.8}, f"risultati non solo dal grafo attivo: {res}"
-        assert "seed" not in opens, "il seed non va interrogato"
+        assert set(opens) == {"active"}, f"aperto altro oltre al grafo attivo: {opens}"
         assert opens.get("active") == 2    # reopened each call
 
 

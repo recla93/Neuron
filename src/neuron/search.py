@@ -2,8 +2,8 @@
 
 IMPORTANT — state stays in server, logic lives here. The test-suite (and the
 runtime toggles) monkeypatch attributes ON THE SERVER MODULE: ``_srv._embedder``,
-``_srv._embed_cache``, ``_srv.TURSO_ENGINE``, ``_srv._seed_usable``,
-``_srv._active_db_path``, ``_srv._db.connect_local``, ``_srv._g._seed_path`` ...
+``_srv._embed_cache``, ``_srv.TURSO_ENGINE``, ``_srv._sqlite_usable``,
+``_srv._active_db_path``, ``_srv._db.connect_local`` ...
 To keep every one of those patches working with ZERO test migration, the
 functions below resolve all mutable/patchable state through the server module
 namespace AT CALL TIME (``_S()``, a lazy import — no circular import: server
@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import threading
-import time as _time
 import weakref
 from array import array
 
@@ -104,17 +103,16 @@ def _get_embedding(text: str) -> list[float]:
 
 
 # ---------------------------------------------------------------------------
-# Seed DB access (state: _seed_conn_cache on server)
+# File checks
 # ---------------------------------------------------------------------------
 
 
-def _seed_usable(path: "str | None") -> bool:
-    """True only if `path` is a real SQLite/Turso DB — not missing, and not the
-    tiny placeholder stub shipped before base_knowledge.db is generated.
+def _sqlite_usable(path: "str | None") -> bool:
+    """True only if `path` is a real SQLite/Turso DB: not missing, not a stub.
 
-    A valid SQLite file is >= 512 bytes and starts with the magic header.
-    Mirrors GraphRegistry._seed_is_loadable."""
-    import os
+    A valid SQLite file is >= 512 bytes and starts with the magic header. Used on
+    the other contexts' graph files (cross_context_matches). It was named
+    `_seed_usable` while the seed DB (base_knowledge.db) shipped; gone in 6.9.0."""
     try:
         if not path or not os.path.isfile(path) or os.path.getsize(path) < SQLITE_MIN_VALID_SIZE:
             return False
@@ -122,52 +120,6 @@ def _seed_usable(path: "str | None") -> bool:
             return f.read(16) == b"SQLite format 3\x00"
     except OSError:
         return False
-
-
-# Un ripiego messo in cache non si aggiorna da solo.
-#
-# `_open_local_engine` si disingaggia (`DEGRADED_PATHS.discard`) solo quando
-# viene RICHIAMATO, e il suo commento dice «the sqlite3 fallback is never
-# cached, so every connect() already retries Turso» — vero per
-# `_local_conn_cache`, che accoglie solo handle Turso, FALSO qui, dove finiva
-# qualunque cosa uscisse da `connect_local`. Un lock transitorio sul seed
-# lasciava quindi il processo su sqlite3, e su `degraded` nella riga di stato,
-# per sempre: riprodotto con lock rilasciato, `_seed_connection` restituiva
-# ancora l'handle sqlite3 mentre `connect_local` sullo stesso path tornava
-# subito a turso-local.
-#
-# Non basta smettere di mettere in cache: la cache esiste perche' riaprire
-# costa ~300 ms quando un altro processo tiene il file, e li pagheremmo a ogni
-# query vettoriale. Quindi si riprova a cadenza — 300 ms ogni 30 s invece che
-# sempre.
-_SEED_RETRY_SEC = float(os.environ.get("NEURON_SEED_RETRY_SEC", "30"))
-_seed_retry_at: dict[str, float] = {}
-
-
-def _seed_connection(path: str):
-    s = _S()
-    conn = s._seed_conn_cache.get(path)
-    if conn is not None and path in s._db.DEGRADED_PATHS:
-        now = _time.monotonic()
-        if now - _seed_retry_at.get(path, 0.0) >= _SEED_RETRY_SEC:
-            _seed_retry_at[path] = now
-            _drop_seed_connection(path)
-            conn = None
-    if conn is None:
-        conn = s._db.connect_local(path)
-        s._seed_conn_cache[path] = conn
-    return conn
-
-
-def _drop_seed_connection(path: str) -> None:
-    """Evict (and close) a cached seed connection — call after any error on it so
-    a broken handle isn't reused."""
-    conn = _S()._seed_conn_cache.pop(path, None)
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -180,8 +132,7 @@ def _permanent_vector_failure(exc: Exception, path: str | None = None) -> bool:
 
     That's permanent for this process (plain sqlite3, or a pyturso build without
     it), so the SQL tier is latched off: retrying it every call costs the failed
-    query *plus* the seed reconnect that `_drop_seed_connection` forces on the
-    next one. Transient errors (locks, corrupt handle) are NOT latched — they
+    query *plus* the reconnect that follows it. Transient errors (locks, corrupt handle) are NOT latched — they
     keep the existing drop-and-retry behaviour.
 
     `path` distingue i due casi, che l'errore da solo non separa. Un FILE caduto
@@ -492,47 +443,32 @@ def _normalize_domain(domain: str) -> str:
 
 
 def _refine_domain(keywords: list[str]) -> tuple["str | None", list[str]]:
-    """Vector search via Turso vector_distance_cos against seed node_vectors.
+    """Guess a specific domain for `keywords` from the user's OWN loaded graphs.
 
     Returns (best_domain, alternative_domains): best is the highest-scoring
     specific domain (non-general) above threshold (0.35), or None; alternatives
-    are domains within the tie margin (0.05) for multi-domain tagging."""
+    are domains within the tie margin (0.05) for multi-domain tagging.
+
+    It used to vote first on the seed DB's node_vectors. The seed was Neuron's
+    own manual, and its only six non-general nodes were Neuron tools tagged
+    `backend`: a message that resembled Neuron's docs got that domain, and the
+    domain feeds `auto`'s context auto-switch. The seed is gone in 6.9.0."""
     s = _S()
     query_vec = s._get_embedding(" ".join(keywords))
-    query_blob = pack_vector(query_vec)
 
     rows: list[tuple[str, float]] = []
-
-    if s.TURSO_ENGINE and s._vector_sql_ok:
-        seed_path = getattr(s._g, '_seed_path', None)
-        if s._seed_usable(seed_path):
-            try:
-                conn = s._seed_connection(seed_path)   # cached: immutable seed DB
-                rows = conn.execute("""
-                    SELECT n.domain, 1.0 - vector_distance_cos(nv.embedding, ?) AS sim
-                    FROM node_vectors nv
-                    JOIN nodes n ON n.keyword = nv.keyword
-                    WHERE n.domain != 'general'
-                    ORDER BY sim DESC LIMIT 30
-                """, (query_blob,)).fetchall()
-            except Exception as e:
-                log.debug("seed vector search failed (using Python fallback): %s", e)
-                if not _permanent_vector_failure(e, seed_path):
-                    s._drop_seed_connection(seed_path)
-
-    # Fallback: Python loop over loaded graphs — TRUE cosine, same scale as Turso.
-    if not rows:
-        q_norm = (sum(x * x for x in query_vec) ** 0.5) or 1.0
-        for ctx_g in list(getattr(s._g, '_graphs', {}).values()):
-            for nd in (ctx_g.nodes or []):
-                v = nd.vector
-                # length check, not truthiness — numpy arrays raise on `not v`
-                if v is None or len(v) == 0:
-                    continue
-                dot = sum(qi * vi for qi, vi in zip(query_vec, v))
-                sim = dot / (q_norm * ((sum(x * x for x in v) ** 0.5) or 1.0))
-                if sim > 0.3:
-                    rows.append((nd.domain, sim))
+    # Python loop over loaded graphs — TRUE cosine.
+    q_norm = (sum(x * x for x in query_vec) ** 0.5) or 1.0
+    for ctx_g in list(getattr(s._g, '_graphs', {}).values()):
+        for nd in (ctx_g.nodes or []):
+            v = nd.vector
+            # length check, not truthiness — numpy arrays raise on `not v`
+            if v is None or len(v) == 0:
+                continue
+            dot = sum(qi * vi for qi, vi in zip(query_vec, v))
+            sim = dot / (q_norm * ((sum(x * x for x in v) ** 0.5) or 1.0))
+            if sim > 0.3:
+                rows.append((nd.domain, sim))
 
     if not rows:
         return (None, [])
@@ -631,7 +567,7 @@ def cross_context_matches(query_vec, active_ctx: str, graphs_dir: str,
     out: list[tuple] = []
     for db in sorted(glob.glob(os.path.join(graphs_dir, "graph_*.db"))):
         base = os.path.basename(db)
-        if base == active_file or not _seed_usable(db):
+        if base == active_file or not _sqlite_usable(db):
             continue
         ctx = base[len("graph_"):-len(".db")].replace("__", "/")
         try:

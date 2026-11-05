@@ -60,15 +60,15 @@ neuron = "neuron.__main__:cli"
 requires = ["setuptools>=77", "wheel"]   # 77: prima versione con license SPDX
 build-backend = "setuptools.build_meta"
 
-# --- Packaging: src-layout discovery + version + bundled seed DB ------------
+# --- Packaging: src-layout discovery + version + bundled assets ------------
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Ship the seed knowledge DB AND the skill files inside the wheel (both loaded
-# via importlib.resources). The skills are the source the MCP server serves as
+# Ship the skill files and the logo inside the wheel (loaded via
+# importlib.resources). No seed DB since 6.9.0. The skills are the source the MCP server serves as
 # `instructions` + resources, so they MUST travel in the package, not just at repo
 # root. `skills/*/*.md` covers the nested neuron-curated-memory/SKILL.md.
 # `clients/**/*` ships the per-client handshake assets (SessionStart hooks +
@@ -76,7 +76,7 @@ where = ["src"]
 # plain `pip install` — SSOT lives here, inside the package, not at repo root.
 [tool.setuptools.package-data]
 neuron = [
-    "data/*.db", "data/*.png", "skills/*.md", "skills/*/*.md",
+    "data/*.png", "skills/*.md", "skills/*/*.md",
     # Explicit per-depth globs (portable across setuptools versions; no `**`
     # recursion dependency) covering the whole clients/ tree, deepest file is
     # clients/cowork-plugin/neuron-guard/skills/neuron-usage/SKILL.md.

@@ -1,6 +1,15 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Niente più seed.** `base_knowledge.db`, il manuale di Neuron in 29 nodi,
+  non si spedisce più, e con lui le note del `self-vault` e gli script che lo
+  costruivano (`import_vault`, `populate_vectors`, `seed_repair_links`). Dalla
+  6.6 non entrava più nella memoria, ma faceva ancora un lavoro dannoso: il
+  dominio scelto da `auto` si votava sui suoi 6 nodi non-general, strumenti di
+  Neuron etichettati `backend`, e quel dominio pilota l'auto-switch di
+  contesto. Ora il dominio si cerca solo nei grafi dell'utente. La pulizia
+  delle vecchie copie del seed nei grafi resta: riconosce i 29 nodi da un
+  elenco congelato nel codice.
 - **`neuron setup` trova la config dell'app desktop fuori dal pacchetto**
   (`%LOCALAPPDATA%\Claude-Data\claude_<id>`), quella che l'app MSIX legge
   davvero quando sposta lì i suoi dati.

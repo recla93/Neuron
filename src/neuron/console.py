@@ -26,20 +26,7 @@ def _resolve_graphs_dir() -> str:
         return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "graphs"))
 
 
-def _resolve_seed_path() -> str:
-    # Packaged seed (works from a pipx/pip install); falls back to the repo copy.
-    try:
-        from importlib.resources import files
-        p = files("neuron").joinpath("data", "base_knowledge.db")
-        if p.is_file():
-            return str(p)
-    except Exception:
-        pass
-    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "knowledge", "base_knowledge.db"))
-
-
 GRAPHS_DIR = _resolve_graphs_dir()
-SEED_PATH = _resolve_seed_path()
 
 # Prefer Neuron's own DB layer, but this console only ever READS local graph
 # .db files (which are SQLite on disk), so fall back to stdlib sqlite3 if the
@@ -117,8 +104,6 @@ def _check_db(path: str, label: str) -> dict:
 
 def _scan_graphs() -> list[dict]:
     results = []
-    if os.path.exists(SEED_PATH):
-        results.append(_check_db(SEED_PATH, "seed (base_knowledge.db)"))
     if os.path.isdir(GRAPHS_DIR):
         for fname in sorted(os.listdir(GRAPHS_DIR)):
             if fname.startswith("graph_") and fname.endswith(".db"):

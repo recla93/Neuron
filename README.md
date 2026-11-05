@@ -282,8 +282,7 @@ neuron/
 │   ├── config.py        # Centralized paths & slug (SSOT, no circular imports)
 │   ├── console.py       # Dev Console: one-shot or watch mode graph snapshot
 │   └── skills/          # Packaged skill files (playbook, curated memory)
-├── tests/               # Test suite (unit tests, mocked — no network)
-└── knowledge/           # Seed knowledge DB (base_knowledge.db)
+└── tests/               # Test suite (unit tests, mocked — no network)
 ```
 
 **Key design decisions:**

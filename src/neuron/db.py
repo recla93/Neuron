@@ -411,8 +411,7 @@ def corrupt_store_hint(exc: BaseException, path: str = "") -> str:
     return (f"the graph store{where} is corrupt and could not be opened: {exc}. "
             f"Run `neuron doctor` for the details; if it cannot be repaired, "
             f"move the file aside and Neuron will start a new graph — the store "
-            f"is a memory, not a source of truth, and the seed knowledge is "
-            f"reinstalled with it.")
+            f"is a memory, not a source of truth.")
 
 
 def _split_sql(script: str) -> list[str]:

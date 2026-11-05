@@ -277,15 +277,9 @@ _embed_cache: "dict[tuple[int, str], list[float]]" = {}
 # ---------------------------------------------------------------------------
 # Hybrid vector search — LOGIC moved to neuron.search (T57, ADR-006).
 # The STATE stays here (the suite and runtime toggles patch it on this module:
-# _embedder, _embed_cache, _seed_conn_cache, _turn_search_cache, TURSO_ENGINE);
+# _embedder, _embed_cache, _turn_search_cache, TURSO_ENGINE);
 # the moved functions resolve it through this namespace at call time.
 # ---------------------------------------------------------------------------
-
-# Read-only connection cache for the immutable seed DB. base_knowledge.db is
-# never written at runtime, so reopening it on every search call is pure waste.
-# The ACTIVE graph DB is written on save, so it is deliberately NOT cached:
-# open-per-call avoids stale reads after a save within the same turn.
-_seed_conn_cache: "dict[str, Any]" = {}
 
 
 # A2 (Piano 05): memo of _search_embeddings results, valid for the duration of
@@ -302,16 +296,16 @@ _turn_search_cache: dict[tuple, tuple["weakref.ref", list[tuple[str, float]]]] =
 # Does the open engine actually provide vector_distance_cos? Flipped off on the
 # first "no such function" — a PERMANENT incapability (plain sqlite3, or the L2
 # guard degrading a locked pyturso handle), not a transient error. Without this
-# latch every search re-pays the failed query AND the seed reconnect it triggers
-# (measured: ~310 ms per call when another process holds base_knowledge.db).
+# latch every search re-pays the failed query AND the reconnect it triggers
+# (measured: ~310 ms per call when another process holds the file).
 _vector_sql_ok = True
 
 # The moved search/embedding functions, re-exported so `from neuron.server
 # import X` and every `_srv.X` monkeypatch keep working unchanged (ADR-006).
 from neuron.search import (  # noqa: E402
-    _drop_seed_connection, _embed_one, _get_embedder, _get_embedding,
+    _embed_one, _get_embedder, _get_embedding,
     _normalize_domain, _refine_domain, _search_embeddings, _search_recall,
-    _seed_connection, _seed_usable, cross_context_matches,
+    _sqlite_usable, cross_context_matches,
 )
 from neuron import search as _search  # noqa: E402 — hub_excess / hub_penalty
 
@@ -360,7 +354,7 @@ def _save_domain_signal() -> None:
         log.debug("could not persist domain signal: %s", e)
 
 def _bootstrap_domain_keywords() -> None:
-    """Populate DOMAIN_KEYWORDS with clean keywords from seed data.
+    """Populate DOMAIN_KEYWORDS with clean keywords from the default graph.
 
     Filters applied (each must pass):
     - domain is a known domain
@@ -528,7 +522,7 @@ def _build_signpost() -> str:
     falls back to the static signpost alone.
     """
     try:
-        g = _g.get()  # touches/loads the active context (seed-warm-starts if empty)
+        g = _g.get()  # touches/loads the active context (an empty one stays empty)
         nodes, links = len(g.nodes), len(g.links)
         if nodes:
             status_line = (

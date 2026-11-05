@@ -18,13 +18,6 @@ knowledge_grown/
 *.db-shm
 *.db-tshm
 
-# ...but the seed knowledge DB MUST be versioned and shipped in the package.
-# Allow it in both the legacy location and the packaged location.
-!knowledge/base_knowledge.db
-!src/neuron/data/
-!src/neuron/data/base_knowledge.db
-
-# Repair/backup snapshots of the seed are NOT shipped (re-ignore them).
 *.prerepair-*
 
 # IDE

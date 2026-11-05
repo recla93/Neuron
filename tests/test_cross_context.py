@@ -25,7 +25,7 @@ def test_skips_the_active_context(tmp_path, monkeypatch):
     for name in ("graph_ai.db", "graph_veicoli.db"):
         (tmp_path / name).write_bytes(b"SQLite format 3\x00" + b"\x00" * 600)
     seen = []
-    monkeypatch.setattr(ns, "_seed_usable", lambda p: True)
+    monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
     monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
 
     class _DB:
@@ -45,7 +45,7 @@ def test_a_broken_context_is_skipped_not_fatal(tmp_path, monkeypatch):
     richiamo e' un extra, non deve poter far fallire un pre_turn."""
     for name in ("graph_a.db", "graph_b.db"):
         (tmp_path / name).write_bytes(b"SQLite format 3\x00" + b"\x00" * 600)
-    monkeypatch.setattr(ns, "_seed_usable", lambda p: True)
+    monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
     monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
 
     class _DB:
@@ -68,7 +68,7 @@ def test_disabled_by_env(tmp_path, monkeypatch):
 def test_ranks_across_contexts_and_caps(tmp_path, monkeypatch):
     for name in ("graph_x.db", "graph_y.db"):
         (tmp_path / name).write_bytes(b"SQLite format 3\x00" + b"\x00" * 600)
-    monkeypatch.setattr(ns, "_seed_usable", lambda p: True)
+    monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
     monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
 
     class _DB:

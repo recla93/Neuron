@@ -7,7 +7,6 @@ fresh install: "menu a tendina che perde il focus" returned only those nodes,
 nothing about the PrimeNG note just stored.
 """
 
-import sqlite3
 import tempfile
 
 from neuron.models import Graph, Link, Node
@@ -26,21 +25,18 @@ def test_an_old_seed_copy_goes_and_the_users_work_stays():
     Only what is still exactly as shipped goes. A seed concept the user worked
     with stays — topic rewritten by store_turn, an episode, a link of theirs.
     """
+    # The seed DB is no longer shipped (6.9.0): the cleanup recognises its nodes
+    # from the frozen list, so this test builds an old warm start from it too.
+    from neuron.registry import _SHIPPED_SEED_TOPICS
     graphs_dir = tempfile.mkdtemp(prefix="seedclean_")
-    seed_path = GraphRegistry(graphs_dir=graphs_dir)._seed_path
-    c = sqlite3.connect(seed_path)
-    seed_nodes = c.execute("SELECT keyword, topic, domain FROM nodes").fetchall()
-    seed_links = c.execute(
-        "SELECT source, target, link_type, weight FROM links").fetchall()
-    c.close()
 
     g = Graph()
-    for kw, topic, domain in seed_nodes:
-        g.add_node(Node(keyword=kw, turn=0, topic=topic, domain=domain,
+    for kw, topic in _SHIPPED_SEED_TOPICS.items():
+        g.add_node(Node(keyword=kw, turn=0, topic=topic, domain="general",
                         sentiment="neutral", salience=1))
-    for s, t, lt, w in seed_links:
-        g.add_link(Link(source=s, target=t, link_type=lt, weight=w, rationale="",
-                        created_turn=0, last_active_turn=0))
+    for s, t in (("auto", "extract"), ("pre_turn", "store_turn"), ("flash", "forgotten")):
+        g.add_link(Link(source=s, target=t, link_type="deepening", weight="medium",
+                        rationale="", created_turn=0, last_active_turn=0))
     g.add_node(Node(keyword="pdf", turn=1, topic="estrazione testo",
                     domain="general", sentiment="neutral", salience=3))
     g.get_node("store_turn").topic = "salvare i turni a fine risposta"
