@@ -1501,6 +1501,18 @@ def _parse_facts(arguments: dict, notes: list) -> list[dict]:
             kind = "fact"
         cs = item.get("concepts") or []
         cs = [str(c).strip() for c in (cs if isinstance(cs, list) else [cs]) if str(c).strip()]
+        # A concept becomes a keyword of the turn, and one keyword the validator
+        # refuses fails the WHOLE turn: `identità` did, live on 2026-11-08. Fold
+        # the accents first; what still does not pass is dropped, with a note.
+        ok = []
+        for c in cs:
+            if len(c) <= KEYWORD_MAX_LENGTH and KEYWORD_PATTERN.match(c):
+                ok.append(c)
+            elif len(_fold_accents(c)) <= KEYWORD_MAX_LENGTH and KEYWORD_PATTERN.match(_fold_accents(c)):
+                ok.append(_fold_accents(c))
+            else:
+                notes.append(f"dropped concept {c!r}: use letters, digits, spaces, -_.:+")
+        cs = ok
         out.append({"kind": kind, "text": str(item["text"]).strip(), "concepts": cs[:5],
                     "supersedes": item.get("supersedes")})
     if len(raw) > MAX_FACTS_PER_TURN:

@@ -373,3 +373,17 @@ def test_more_concepts_than_the_keyword_cap_keep_the_turn(_isolated):
     out = _call("store_turn", {"facts": facts})
     assert "facts: 5 saved" in out, out
     assert "kept 8 of 10 concepts" in out, out
+
+
+def test_an_accented_or_odd_concept_does_not_cost_the_turn(_isolated):
+    """Live on 2026-11-08: `identità` failed the keyword validator, and with it
+    the whole turn, both facts lost. Accents are folded; what still fails is
+    dropped with a note."""
+    out = _call("store_turn", {"facts": [
+        {"kind": "decision", "text": "I fatti personali restano dell'utente.",
+         "concepts": ["identità", "jwt", "a/b<script>"]}]})
+    assert "facts: 1 saved" in out, out
+    assert "dropped concept" in out, out
+    g = S._g.get()
+    f = next(f for f in g.facts.values() if f["text"].startswith("I fatti personali"))
+    assert f["concepts"] == ["identita", "jwt"], f["concepts"]

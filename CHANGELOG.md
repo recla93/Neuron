@@ -16,6 +16,11 @@
   risposta nomina ogni fatto salvato con il suo id, e dice `facts: 0 saved`
   quando un turno non lascia niente da ricordare. `episode` resta: diventa un
   fatto di tipo `fact` su tutte le keyword.
+- **Un concetto con l'accento non fa perdere il turno.** I concetti diventano
+  keyword del turno, e una keyword rifiutata dal validatore rifiutava tutto:
+  `identità` ha fatto perdere due fatti nella prova dal vivo. Ora gli accenti
+  si tolgono (`identita`), e un concetto che ancora non passa si scarta con una
+  nota.
 - **Gli aggiornamenti superano, non cancellano.** `supersedes=<id>`: il fatto
   vecchio resta su disco con stato `superseded` ed esce dal richiamo.
   `pre_turn` mostra l'id accanto a ogni fatto (`#a3f91c02`), così il modello
