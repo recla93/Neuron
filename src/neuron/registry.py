@@ -208,6 +208,40 @@ class GraphRegistry:
             pass
         return self._active
 
+    def upgrade_all(self) -> list[str]:
+        """Bring every graph from an older version to the current schema NOW,
+        not on the day someone reopens that context: an unmigrated file has no
+        facts table, and cross-context recall skipped it silently. Loading a
+        context takes its daily backup and migrates it (episodes -> facts);
+        saving writes it. Only files that need it; idempotent; returns them."""
+        if _db.REMOTE_TURSO:
+            return []                    # the shared store migrates on its own load
+        done = []
+        for ctx in self._contexts_on_disk():
+            if ctx in self._graphs or not self._needs_upgrade(self._db_path(ctx)):
+                continue
+            try:
+                # force: the schema needs the write even when no row changed
+                self.get(ctx).save_sqlite(self._db_path(ctx), context=ctx, force=True)
+                done.append(ctx)
+            except Exception as e:      # noqa: BLE001 — one bad file never blocks the rest
+                log.warning("upgrade of context %s skipped: %s", ctx, e)
+        return done
+
+    @staticmethod
+    def _needs_upgrade(path: str) -> bool:
+        """True when the file predates ADR-015 D8 (no facts.confirmed). Read
+        with the store's own driver: stdlib sqlite3 does not see pyturso's WAL."""
+        try:
+            con = _db.connect_local(path)
+            try:
+                cols = {r[1] for r in con.execute("PRAGMA table_info(facts)")}
+            finally:
+                con.close()
+        except Exception:               # noqa: BLE001 — unreadable here: the normal load deals with it
+            return False
+        return "confirmed" not in cols
+
     def _contexts_on_disk(self) -> list[str]:
         """Context names that have a graph file, whether or not it is loaded."""
         out = []

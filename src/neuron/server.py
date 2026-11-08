@@ -2974,6 +2974,11 @@ def _maybe_register_gray_matter() -> None:
 async def main() -> None:
     from neuron import __version__
     _maybe_register_gray_matter()   # optional GM orchestration (opt-out: NEURON_NO_GM=1)
+    try:                            # graphs from older versions, once (see upgrade_all)
+        for ctx in _g.upgrade_all():
+            log.info("upgraded graph '%s' to the current schema", ctx)
+    except Exception as e:          # noqa: BLE001 — never block the server start
+        log.warning("graph upgrade skipped: %s", e)
     # A3 (Piano 05): pre-warm the embedding model in a worker thread so the
     # FIRST pre_turn of the session doesn't pay the ~3s model load. Best-effort:
     # any failure is swallowed (the lazy path in _get_embedder still applies).

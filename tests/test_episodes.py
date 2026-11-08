@@ -242,3 +242,19 @@ def test_a_superseding_fact_carries_the_uses_of_the_old_one():
     assert g.facts[new["id"]]["confirmed"] == 4          # 3 + superseding is a use
     assert not g.confirm_fact("nope") and g.confirm_fact(old["id"], -9)
     assert g.facts[old["id"]]["confirmed"] == 0          # a refute is floored at 0
+
+
+def test_upgrade_all_migrates_a_context_nobody_opened(tmp_path):
+    """An old graph file used to migrate only when its context was opened, and
+    cross-context recall skipped it meanwhile. upgrade_all does it at start."""
+    from neuron.registry import GraphRegistry
+    g = _graph("wal")
+    g.add_fact("fix", "pyturso 0.6.1 keeps the WAL locked", ["wal"], 1)
+    path = tmp_path / "graph_old.db"
+    g.save_sqlite(str(path))
+    with sqlite3.connect(path) as c:              # as a 6.9 store left it
+        c.execute("ALTER TABLE facts DROP COLUMN confirmed")
+    reg = GraphRegistry(graphs_dir=str(tmp_path))
+    assert reg._needs_upgrade(str(path))
+    assert reg.upgrade_all() == ["old"]
+    assert not reg._needs_upgrade(str(path)) and reg.upgrade_all() == []
