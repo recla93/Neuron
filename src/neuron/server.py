@@ -170,14 +170,14 @@ def validate_turn_input(keywords: list[str], topic: str, links: list[dict],
                         tags: list[str] | None = None,
                         references: list[dict] | None = None) -> str | None:
     if not keywords or len(keywords) > MAX_KEYWORDS_PER_TURN:
-        return "keywords: da 1 a 8"
+        return "keywords: 1 to 8"
     if not topic or len(topic) > TOPIC_MAX_LENGTH:
-        return f"topic: max {TOPIC_MAX_LENGTH} caratteri"
+        return f"topic: max {TOPIC_MAX_LENGTH} characters"
     for i, kw in enumerate(keywords):
         if not kw or len(kw) > KEYWORD_MAX_LENGTH:
-            return f"keywords[{i}]: max {KEYWORD_MAX_LENGTH} caratteri"
+            return f"keywords[{i}]: max {KEYWORD_MAX_LENGTH} characters"
         if not KEYWORD_PATTERN.match(kw):
-            return f"keywords[{i}]: caratteri non consentiti (usa lettere, numeri, spazi, -_.:+)"
+            return f"keywords[{i}]: characters not allowed (use letters, digits, spaces, -_.:+)"
     if entities and len(entities) > MAX_ENTITIES_PER_TURN:
         return "entities: max 15"
     if tags and len(tags) > MAX_TAGS_PER_TURN:
@@ -187,18 +187,18 @@ def validate_turn_input(keywords: list[str], topic: str, links: list[dict],
     for j, ld in enumerate(links):
         src, tgt = ld.get("source", ""), ld.get("target", "")
         if not src or len(src) > KEYWORD_MAX_LENGTH or not KEYWORD_PATTERN.match(src):
-            return f"links[{j}].source: non valida"
+            return f"links[{j}].source: invalid"
         if not tgt or len(tgt) > KEYWORD_MAX_LENGTH or not KEYWORD_PATTERN.match(tgt):
-            return f"links[{j}].target: non valida"
+            return f"links[{j}].target: invalid"
         rat = ld.get("rationale", "")
         if len(rat) > RATIONALE_MAX_LENGTH:
-            return f"links[{j}].rationale: max {RATIONALE_MAX_LENGTH} caratteri"
+            return f"links[{j}].rationale: max {RATIONALE_MAX_LENGTH} characters"
         ltype = ld.get("link_type", "deepening")
         if ltype not in VALID_LINK_TYPES:
-            return f"links[{j}].link_type: non valida ({ltype!r})"
+            return f"links[{j}].link_type: invalid ({ltype!r})"
         weight = ld.get("weight", "medium")
         if weight not in VALID_WEIGHTS:
-            return f"links[{j}].weight: non valida ({weight!r})"
+            return f"links[{j}].weight: invalid ({weight!r})"
     return None
 
 
@@ -704,10 +704,10 @@ def _all_tools() -> list[Tool]:
                         "description": "Links between current keywords and previous keywords",
                     },
                 },
-                # Niente di obbligatorio (ADR-015 D5): una chiamata con soli
-                # `facts` e la chiamata di sempre `store_turn(topic, keywords,
-                # links)` devono passare entrambe la validazione del client. Il
-                # server rifiuta solo un turno senza fatti né keyword utili.
+                # Nothing required (ADR-015 D5): a call with only `facts` and
+                # the usual `store_turn(topic, keywords, links)` must both pass
+                # the client's validation. The server rejects only a turn with
+                # neither facts nor usable keywords.
                 "required": [],
             },
         ),
@@ -2196,7 +2196,7 @@ async def _tool_around(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 
 async def _tool_prune(arguments: dict, ctx: str, g) -> list[TextContent]:
-    if arguments.get("dry_run"):     # F4 — anteprima senza mutazione né save
+    if arguments.get("dry_run"):     # F4 — preview, no mutation and no save
         would = g.expired_tangential()
         listing = [f"{lk.source} -> {lk.target} ({lk.link_type}, idle {lk.inactive_turns})"
                    for lk in would[:20]]
@@ -2512,41 +2512,39 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     _files.append(f)
         if _files:
             parts_pt.append("files: " + " | ".join(_files))
-    # Ponti verso ALTRI contesti (sola lettura, E3.5). I drift link nascono per
-    # omonimia esatta, e keyword scritte come il tool chiede — concettuali,
-    # specifiche — non si ripetono fra domini: misurate 191 in `ai` e 144 in
-    # `default`, zero in comune. Qui la somiglianza la decide il vettore, non la
-    # stringa. Nessun link viene scritto: se la soglia e' sbagliata si cambia
-    # NEURON_CROSS_SIM e il grafo non se ne accorge.
+    # Bridges to OTHER contexts (read-only, E3.5). Drift links are born from an
+    # exact name match, and keywords written as the tool asks (conceptual,
+    # specific) do not repeat across domains: 191 in `ai` and 144 in `default`,
+    # none shared. Here the vector decides similarity, not the string. No link
+    # is written: a wrong threshold is fixed with NEURON_CROSS_SIM and the
+    # graph never notices.
     _cross: list = []
     try:
-        if search_kws_pt:          # il flag lo controlla la funzione stessa
+        if search_kws_pt:          # the function checks the flag itself
             _cross = cross_context_matches(
                 _get_embedding(" ".join(sorted(search_kws_pt))),
                 _g.active, GRAPHS_DIR)
             if _cross:
-                parts_pt.append("altri contesti: " + " | ".join(
+                parts_pt.append("other contexts: " + " | ".join(
                     f"[{c}] {kw} ({sim:.2f})" for c, kw, sim in _cross))
-    except Exception as _e:  # noqa: BLE001 — extra di richiamo, mai fatale
+    except Exception as _e:  # noqa: BLE001 — a recall extra, never fatal
         log.debug("cross-context recall skipped: %s", _e)
 
-    # F1/F2 — il tool deve sapere quando NON sa.
+    # F1/F2 — the tool must know when it does NOT know.
     #
-    # I due numeri servivano gia' entrambi e non venivano mai confrontati:
-    # quanto la richiesta somiglia a QUESTO contesto, e quanto somiglia al
-    # migliore degli altri (cross_context_matches, qui sopra, ce l'aveva in mano
-    # e lo stampava soltanto). Senza quel confronto pre_turn serve il meno
-    # peggio del contesto sbagliato con la stessa faccia con cui servirebbe un
-    # risultato buono.
+    # Both numbers already existed and were never compared: how much the
+    # request resembles THIS context, and how much it resembles the best of the
+    # others (cross_context_matches, above, had it and only printed it).
+    # Without that comparison pre_turn served the least bad of the wrong
+    # context with the same confidence as a good result.
     #
-    # I due fallimenti non costano uguale. Una risposta vuota insegna «grafo
-    # ancora povero, riprovo»; una risposta irrilevante ma sicura insegna
-    # «questo tool e' rumore», e quella e' irreversibile nell'arco della
-    # sessione. Misurato il 2026-09-02: il chiamante ha mollato il loop dopo UNA
-    # pre_turn fuori bersaglio (ctx `ai`, domanda su Bash) e non l'ha piu'
-    # chiamato per venti turni.
+    # The two failures do not cost the same. An empty answer teaches "graph
+    # still thin, retry"; an irrelevant but confident one teaches "this tool is
+    # noise", and that lasts the whole session. Measured 2026-09-02: the caller
+    # dropped the loop after ONE off-target pre_turn (ctx `ai`, a question on
+    # Bash) and did not call it again for twenty turns.
     #
-    # Stesso top_n di _resolve_context, cosi' la chiamata cade nel memo di turno.
+    # Same top_n as _resolve_context, so the call hits the per-turn memo.
     _best_sim = 0.0
     _min_rel = _config.env_float("NEURON_MIN_RELEVANCE", 0.35)
     if search_kws_pt:
@@ -2566,29 +2564,29 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 _best_sim = max((sim for _, sim in _search_recall(
                     " ".join(_norm_kws), 1, g_pt)), default=0.0)
                 _min_rel = _config.env_float("NEURON_MIN_RECALL_RELEVANCE", 0.43)
-        except Exception as _e:  # noqa: BLE001 — la rilevanza e' un extra, mai fatale
+        except Exception as _e:  # noqa: BLE001 — relevance is an extra, never fatal
             log.debug("relevance score skipped: %s", _e)
     warns_pt: list[str] = []
-    # La soglia morde SOLO quando la risposta poggia sui vettori (fallback o
-    # eredita'). Una keyword centrata nel grafo e' attinente per costruzione,
-    # anche con un coseno basso: sopprimerla toglierebbe il richiamo esatto.
+    # The threshold bites ONLY when the answer rests on vectors (fallback or
+    # inheritance). A keyword that hits a node is on topic by construction,
+    # even with a low cosine: suppressing it would remove the exact recall.
     _suppress = bool(fallback_pt or inh_pt) and _best_sim < _min_rel
     if _suppress:
-        warns_pt.append(f"⚠ nessun contesto rilevante "
-                        f"(best={_best_sim:.2f}, soglia={_min_rel:.2f})")
-        # Restano i ponti verso altri contesti: dicono dove guardare, e sono
-        # l'unica cosa utile quando qui non c'e' niente.
-        parts_pt = [pp for pp in parts_pt if pp.startswith(("altri contesti:", "facts:"))]
+        warns_pt.append(f"⚠ no relevant context "
+                        f"(best={_best_sim:.2f}, threshold={_min_rel:.2f})")
+        # The bridges to other contexts stay: they say where to look, and they
+        # are the only useful thing when nothing is here.
+        parts_pt = [pp for pp in parts_pt if pp.startswith(("other contexts:", "facts:"))]
         lks, nodes_pt = [], []
     if _cross and _cross[0][2] > _best_sim + _config.env_float(
             "NEURON_ROUTE_MARGIN", 0.15):
         _c, _ckw, _csim = _cross[0]
-        warns_pt.append(f"⚠ topic distante dal contesto attivo '{ctx_label}' "
-                        f"({_best_sim:.2f}) — '{_c}' e' piu' vicino "
+        warns_pt.append(f"⚠ topic far from the active context '{ctx_label}' "
+                        f"({_best_sim:.2f}) — '{_c}' is closer "
                         f"({_ckw} {_csim:.2f}): switch_context('{_c}')?")
-    # Stessa regola del formato compatto di get_context: la nota sul metodo non
-    # puo' far sembrare che ci sia contenuto. (keep-in-sync: le due liste sono
-    # costruite in due posti, e questa e' gia' la seconda volta che si scrive.)
+    # Same rule as get_context's compact format: the note on the method must
+    # not make it look as if there were content. (keep-in-sync: the two lists
+    # are built in two places.)
     notes_pt: list[str] = []
     if fallback_pt:
         notes_pt.append("(vector fallback)")

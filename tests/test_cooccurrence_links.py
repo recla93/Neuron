@@ -31,7 +31,7 @@ def test_every_pair_once_and_an_existing_link_wins():
     assert added == 5, "6 coppie, meno quella gia' collegata (in un verso o nell'altro)"
     pairs = {frozenset((lk.source, lk.target)) for lk in g.links}
     assert len(pairs) == len(g.links) == 6, "una coppia, un link"
-    new = [lk for lk in g.links if lk.rationale == "stesso turno"]
+    new = [lk for lk in g.links if lk.rationale == "same turn"]
     assert all((lk.weight, lk.link_type) == ("medium", "deepening") for lk in new)
     assert g.link_cooccurring(["primeng", "focus"], turn=2) == 0
 

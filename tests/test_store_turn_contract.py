@@ -84,13 +84,13 @@ def test_the_schema_requires_only_what_the_guidance_sends():
     KeyError. Lo schema deve chiedere ciò che la guidance promette."""
     schema = _schema_of("store_turn")
     required = set(schema.get("required", []))
-    # ADR-015: la chiamata nuova manda solo `facts`, la vecchia topic+keywords:
-    # un campo obbligatorio respingerebbe l'una o l'altra lato client.
+    # ADR-015: the new call sends only `facts`, the old one topic+keywords:
+    # a required field would reject one or the other on the client side.
     assert required == set(), (
-        f"store_turn esige {sorted(required)}: una delle due forme non passa"
+        f"store_turn requires {sorted(required)}: one of the two forms fails"
     )
-    assert "facts" in schema["properties"], "il campo dei fatti non e' offerto"
-    # e i campi con default devono restare offerti, non spariti
+    assert "facts" in schema["properties"], "the facts field is not offered"
+    # and the fields with a default must stay offered, not vanish
     props = schema["properties"]
     for field in ("domain", "intent", "sentiment", "links"):
         assert field in props, f"'{field}' non è più proponibile al modello"
@@ -147,9 +147,9 @@ def test_a_truncated_episode_is_declared_in_the_response(_isolated):
         "topic": "episodi", "keywords": ["retry backoff"],
         "episode": "scelto https su wss",
     })
-    assert "fact_truncated" not in clean, "niente perso, niente da dichiarare"
+    assert "fact_truncated" not in clean, "nothing lost, nothing to declare"
 
-    # ADR-015: oltre la lunghezza consigliata il fatto resta intero
+    # ADR-015: past the suggested length the fact stays whole
     long = _call("store_turn", {
         "topic": "episodi", "keywords": ["retry backoff"],
         "episode": "x" * (EPISODE_MAX_CHARS * 2),

@@ -144,7 +144,7 @@ class TestSearchSeedFree:
         res = dict(_srv._search_embeddings(["x"], top_n=8, graph=Graph()))
         _srv._search_embeddings(["x"], top_n=8, graph=Graph())
         assert res == {"B": 0.8}, f"risultati non solo dal grafo attivo: {res}"
-        assert set(opens) == {"active"}, f"aperto altro oltre al grafo attivo: {opens}"
+        assert set(opens) == {"active"}, f"opened more than the active graph: {opens}"
         assert opens.get("active") == 2    # reopened each call
 
 

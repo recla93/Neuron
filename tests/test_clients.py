@@ -112,7 +112,7 @@ class TestClaudeDesktopCandidates(unittest.TestCase):
             self.assertIn("Claude_pzs8sxrjxfjjc", hits[0])
 
     def test_user_data_outside_the_package_is_probed(self):
-        """La config che l'app legge davvero quando sposta i dati fuori dal pacchetto."""
+        """The config the app really reads when it moves its data outside the package."""
         with tempfile.TemporaryDirectory() as td:
             localapp = os.path.join(td, "Local")
             ext = os.path.join(localapp, "Claude-Data", "claude_pzs8sxrjxfjjc")

@@ -130,9 +130,9 @@ def set_user_env(**values: str) -> str:
     return path
 
 
-# Knob mostrati dal control center (`neuron config list --json`, stesso formato
-# di gray-matter e neurag): chiave -> (variabile d'ambiente, default, min, max, aiuto).
-# Si salvano nel .env utente, quindi valgono dal prossimo avvio del server.
+# Knobs shown by the control center (`neuron config list --json`, same format
+# as gray-matter and neurag): key -> (env variable, default, min, max, help).
+# Saved in the user .env, so they apply from the next server start.
 KNOBS = {
     "max_nodes": (
         "NEURON_MAX_NODES", 1000, 100, 5000,

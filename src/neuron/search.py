@@ -136,14 +136,14 @@ def _permanent_vector_failure(exc: Exception, path: str | None = None) -> bool:
     query *plus* the reconnect that follows it. Transient errors (locks, corrupt handle) are NOT latched — they
     keep the existing drop-and-retry behaviour.
 
-    `path` distingue i due casi, che l'errore da solo non separa. Un FILE caduto
-    su sqlite3 per il degrado L2 (un altro processo teneva il lock) alza la
-    stessa `no such function` di un motore senza vettori, ma non dice niente sul
-    motore: pyturso sta benissimo, e' quell'handle a non avere la funzione.
-    Latchare il globale li' spegneva il tier SQL nativo anche sui grafi sani —
-    e con esso `cross_context_matches`, cioe' l'instradamento di contesto. Con
-    il path noto il salto resta file-scoped: si torna True (salta QUESTO file)
-    senza toccare `_vector_sql_ok`.
+    `path` tells the two cases apart, which the error alone does not. A FILE
+    that fell back to sqlite3 under the L2 downgrade (another process held the
+    lock) raises the same `no such function` as an engine without vectors, but
+    says nothing about the engine: pyturso is fine, that handle lacks the
+    function. Latching the global there switched the native SQL tier off on
+    healthy graphs too — and with it `cross_context_matches`, i.e. context
+    routing. With a known path the skip stays file-scoped: return True (skip
+    THIS file) without touching `_vector_sql_ok`.
     """
     if "no such function" not in str(exc).lower():
         return False
@@ -631,16 +631,16 @@ CROSS_TOP_N = int(os.environ.get("NEURON_CROSS_TOP_N", "2"))
 
 def cross_context_matches(query_vec, active_ctx: str, graphs_dir: str,
                           top_n: int = 0, threshold: float = 0.0) -> list[tuple]:
-    """Concetti simili che vivono in ALTRI contesti. Ritorna [(ctx, keyword, sim)].
+    """Similar concepts that live in OTHER contexts. Returns [(ctx, keyword, sim)].
 
-    Interroga i file `graph_*.db` per path, senza istanziare i Graph: servono le
-    righe di `node_vectors`, non la memoria di lavoro di ogni contesto. Il lock
-    esclusivo di pyturso non e' un problema qui — vale fra processi, e queste
-    aperture stanno tutte in quello corrente, esattamente come `resolve_chain`
-    tiene gia' aperti corrente e default insieme.
+    Queries the `graph_*.db` files by path, without instantiating the Graphs:
+    it needs the `node_vectors` rows, not each context's working memory.
+    pyturso's exclusive lock is no problem here — it holds across processes,
+    and these opens are all in the current one, exactly as `resolve_chain`
+    already keeps current and default open together.
 
-    Best-effort per costruzione: qualunque errore su un contesto lo salta. E'
-    un extra di richiamo, non deve poter far fallire un pre_turn.
+    Best-effort by construction: any error on a context skips it. It is a
+    recall extra and must never make a pre_turn fail.
     """
     import glob
     if not CROSS_ENABLED or not query_vec:

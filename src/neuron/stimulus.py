@@ -129,7 +129,7 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
 
     if turn > 1:
         overlap = _keyword_overlap(extraction.keywords, g.last_keywords)
-        parts.append(f"\nContinuità col turno precedente: {overlap:.0%}")
+        parts.append(f"\nOverlap with the previous turn: {overlap:.0%}")
 
     # --- Semantic flashes (E2.4) ---
     # The three heuristics (dormant pulse / cross-domain spark / creative leap)

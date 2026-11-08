@@ -481,7 +481,7 @@ def test_pre_turn_admits_it_when_the_best_match_is_still_bad(monkeypatch):
     pytest.importorskip("mcp")
     text = _pre_turn_via_vectors(monkeypatch, ranked=[("extraheader", 0.0)],
                                  best_sim=0.14, topic="bash shell scripting")
-    assert "nessun contesto rilevante" in text, text
+    assert "no relevant context" in text, text
     assert "best=0.14" in text, f"il punteggio dev'essere ispezionabile: {text!r}"
     assert "extraheader" not in text, f"servito il meno peggio: {text!r}"
     assert "confirm(" not in text, f"chiede di confermare un errore: {text!r}"
@@ -493,7 +493,7 @@ def test_pre_turn_still_serves_a_good_vector_hit(monkeypatch):
     pytest.importorskip("mcp")
     text = _pre_turn_via_vectors(monkeypatch, ranked=[("due-fasi-bash", 3.0)],
                                  best_sim=0.71, topic="bash shell scripting")
-    assert "nessun contesto rilevante" not in text, text
+    assert "no relevant context" not in text, text
     assert "due-fasi-bash" in text, text
 
 
@@ -506,7 +506,7 @@ def test_pre_turn_names_the_context_that_actually_holds_the_topic(monkeypatch):
     text = _pre_turn_via_vectors(monkeypatch, ranked=[("extraheader", 0.0)],
                                  best_sim=0.11, topic="bash shell scripting",
                                  cross=[("studio/bash", "due-fasi-bash", 0.71)])
-    assert "topic distante" in text, text
+    assert "topic far from" in text, text
     assert "switch_context('studio/bash')" in text, text
 
 

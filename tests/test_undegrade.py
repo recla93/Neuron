@@ -104,7 +104,7 @@ def test_a_degraded_file_does_not_switch_off_vector_sql_everywhere(monkeypatch):
     monkeypatch.setattr(srv, "_vector_sql_ok", True)
     exc = RuntimeError("no such function: vector_distance_cos")
 
-    assert search._permanent_vector_failure(exc, other) is True, "quel file va saltato"
+    assert search._permanent_vector_failure(exc, other) is True, "that file must be skipped"
     assert srv._vector_sql_ok is True, "un file degradato ha spento il tier globale"
 
     assert search._permanent_vector_failure(exc, graph) is True

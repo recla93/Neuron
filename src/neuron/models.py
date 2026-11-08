@@ -788,7 +788,7 @@ class Graph:
                 if frozenset((a, b)) in linked:
                     continue
                 self.add_link(Link(source=a, target=b, link_type="deepening",
-                                   weight="medium", rationale="stesso turno",
+                                   weight="medium", rationale="same turn",
                                    created_turn=turn, last_active_turn=turn))
                 linked.add(frozenset((a, b)))
                 added += 1
@@ -1677,10 +1677,10 @@ class Graph:
             if not write_vectors:
                 import sys as _sys
                 print(
-                    f"neuron: lo store '{path}' usa il modello di embedding "
-                    f"'{_stored_model}', quello attivo e' '{EMBED_MODEL}'. Vettori NON "
-                    f"scritti (spazi non confrontabili). Allinea NS_EMBED_MODEL per "
-                    f"tutti gli scrittori, o rigenera lo store (scripts/reembed.py).",
+                    f"neuron: store '{path}' uses embedding model "
+                    f"'{_stored_model}', the active one is '{EMBED_MODEL}'. Vectors NOT "
+                    f"written (spaces not comparable). Align NS_EMBED_MODEL across "
+                    f"all writers, or rebuild the store (scripts/reembed.py).",
                     file=_sys.stderr,
                 )
 
@@ -1747,9 +1747,9 @@ class Graph:
                 if _db.REMOTE_TURSO and not _allow_shared:
                     import sys as _sys
                     print(
-                        "neuron: reconcile/consolidamento su store cloud condiviso "
-                        "declassato a scrittura additiva (nessuna cancellazione di "
-                        "righe altrui). Per la manutenzione coordinata avvia con "
+                        "neuron: reconcile/consolidation on a shared cloud store "
+                        "downgraded to additive writes (no deletion of other "
+                        "writers' rows). For coordinated maintenance start with "
                         "NS_ALLOW_SHARED_RECONCILE=1.",
                         file=_sys.stderr,
                     )
