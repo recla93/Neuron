@@ -387,3 +387,28 @@ def test_an_accented_or_odd_concept_does_not_cost_the_turn(_isolated):
     g = S._g.get()
     f = next(f for f in g.facts.values() if f["text"].startswith("I fatti personali"))
     assert f["concepts"] == ["identita", "jwt"], f["concepts"]
+
+
+def test_a_note_about_a_dropped_fact_is_never_cut(_isolated):
+    """Only 3 curation notes are shown: keyword notes came first and, on a real
+    graph, pushed the dropped-fact note out (usage test, 2026-11-08)."""
+    out = _call("store_turn", {"facts": ["solo testo"],
+                               "keywords": ["usa", "fai", "prendi", "metti", "adr"]})
+    assert "dropped fact" in out, out
+
+
+def test_a_fact_needs_only_its_text():
+    """The MCP SDK validates the schema before the handler runs: a required
+    `concepts` made one incomplete fact reject the whole call through the
+    gateway (usage test, 2026-11-08)."""
+    item = _schema_of("store_turn")["properties"]["facts"]["items"]
+    assert item["required"] == ["text"], item["required"]
+
+
+def test_a_fact_without_kind_or_concepts_goes_under_the_turn(_isolated):
+    out = _call("store_turn", {"facts": [
+        {"text": "un fatto senza tipo ne' concetti"},
+        {"kind": "fix", "text": "un fix con il suo concetto", "concepts": ["pyturso"]}]})
+    assert "facts: 2 saved" in out, out
+    f = next(f for f in S._g.get().facts.values() if f["text"].startswith("un fatto senza"))
+    assert f["kind"] == "fact" and f["concepts"] == ["pyturso"], f

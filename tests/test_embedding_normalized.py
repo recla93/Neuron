@@ -34,7 +34,7 @@ def test_embed_one_returns_a_unit_vector(monkeypatch):
     from neuron import search
 
     class _LongEmbedder:
-        def embed(self, texts):
+        def embed(self, texts, **_kw):  # batch_size, as fastembed
             return [[3.0, 4.0] + [0.0] * (srv.VECTOR_DIM - 2) for _ in texts]
 
     monkeypatch.setattr(srv, "_embedder", _LongEmbedder())

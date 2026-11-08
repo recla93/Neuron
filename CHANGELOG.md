@@ -1,6 +1,34 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Dal gateway un fatto incompleto non fa più rifiutare tutta la chiamata.**
+  La libreria MCP valida lo schema prima del codice di Neuron: con `kind` e
+  `concepts` obbligatori, un fatto senza concetti rifiutava anche i fatti
+  buoni della stessa chiamata. Ora è obbligatorio solo `text`; il tipo manca →
+  `fact`, i concetti mancano → quelli del turno.
+- **Le desinenze italiane nominano il concetto.** «possiamo committare?» non
+  arrivava al concetto `commit` (il controllo accettava 3 lettere oltre la
+  radice). Ora una radice di 5+ lettere accetta qualunque desinenza, una più
+  corta fino a 4.
+- **La nota su un fatto scartato viene prima.** Si mostrano 3 note di curation:
+  sul grafo vero quelle sulle keyword la spingevano fuori.
+- **Il richiamo è pronto prima a freddo (ADR-016, fase 4).** Con la cache dei
+  vettori vuota il primo richiamo con dei fatti arrivava 44 s dopo l'avvio del
+  daemon, ora 16 s. I fatti si calcolano prima dei testi dei nodi, a blocchi da
+  16, e sono usabili mentre il resto finisce; `store_turn` calcola subito il
+  vettore dei fatti nuovi; al massimo 8 testi in linea invece di 64 (un testo
+  costa ~120 ms su una CPU da portatile: 64 bloccavano il richiamo ~8 s).
+- **`forgotten(facts=true)`: il flash è un fatto (ADR-016, fase 1).** Un fatto
+  dormiente (idea, decisione, fix, o un fatto migrato) vicino al topic sopra
+  `NEURON_FLASH_MIN_SCORE` (0,40), che il richiamo non mostra già, e
+  **collegato**: condivide un concetto con un fatto richiamato, o il messaggio
+  ne nomina uno. Senza il legame, sul grafo vero un fatto del progetto che non
+  c'entrava (0,49) batteva quello pertinente (0,40). Sul bench: zero flash sui
+  5 fuori tema, flash su 5 messaggi veri su 20, tutti collegati.
+- **`forgotten(near=…)` non ripiega più sui nodi più vecchi.** Senza niente
+  nella fascia rispondeva coi nodi dormienti più antichi, e GM li mostrava come
+  flash: «che tempo farà domani a Milano?» → `clipboard`. Ora dice che non c'è
+  niente.
 - **I fatti non si perdono più (ADR-015, fase 1).** Un fatto viveva dentro il
   suo nodo e moriva con lui in quattro modi: il tetto di 5 per nodo, lo
   sfratto oltre `MAX_NODES`, il merge del consolidamento (gli episodi

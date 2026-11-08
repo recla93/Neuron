@@ -17,7 +17,7 @@ FACT = "Il framework si avvia da una classe con @SpringBootApplication."
 
 class _SameVector:
     """Every text gets the same direction: any two multi-word keywords merge."""
-    def embed(self, texts):
+    def embed(self, texts, **_kw):  # batch_size, as fastembed
         return [[1.0] + [0.0] * (S.VECTOR_DIM - 1) for _ in texts]
 
 

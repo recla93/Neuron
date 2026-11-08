@@ -73,7 +73,7 @@ def test_dim_mismatch_raises_clear_error(monkeypatch):
     importlib.reload(srv)
 
     class _FakeEmbedder:
-        def embed(self, texts):
+        def embed(self, texts, **_kw):  # batch_size, as fastembed
             # wrong width on purpose (VECTOR_DIM is 384)
             return [[0.0] * 7 for _ in texts]
 

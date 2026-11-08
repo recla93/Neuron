@@ -132,6 +132,12 @@ FACT_DELTA = _config.env_float("NEURON_FACT_DELTA", 0.15)   # a fact is kept wit
 FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 3)
 FACT_MIN_SCORE   = _config.env_float("NEURON_FACT_MIN_SCORE", 0.40)
 FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
+# ADR-016 D2: a flash is a dormant idea/decision/fix above this floor AND linked
+# to the message (a concept shared with a recalled fact, or named). On
+# bench/recall.json v1, linked, 0.40: 6 of 20 real messages, 0 of 5 off-topic;
+# on the live graph the link removed both wrong flashes the floor let through.
+FLASH_KINDS = ("idea", "decision", "fix")
+FLASH_MIN_SCORE = _config.env_float("NEURON_FLASH_MIN_SCORE", 0.40)
 
 DATA_TAG = "recalled-memory"
 
@@ -642,7 +648,12 @@ def _all_tools() -> list[Tool]:
                                 "supersedes": {"type": "string",
                                                "description": "Optional: id of the fact this one replaces (e.g. a3f91c02)"},
                             },
-                            "required": ["kind", "text", "concepts"],
+                            # Only `text`: the MCP SDK validates against this
+                            # schema BEFORE the handler, so one fact without
+                            # `concepts` rejected the whole call, good facts
+                            # included (usage test, 2026-11-08). The handler
+                            # defaults kind to `fact`, concepts to the turn's.
+                            "required": ["text"],
                         },
                     },
                     "topic": {"type": "string", "description": "Optional: topic of the turn (3-5 words); defaults to the first fact"},
@@ -919,6 +930,12 @@ def _all_tools() -> list[Tool]:
                     },
                     "near": {
                         "type": "string", "description": "Topic to rank dormant concepts against (mid-band 0.30-0.75: relevant but not obvious). Omit for plain recency order.",
+                    },
+                    "facts": {
+                        "type": "boolean", "description": "Return dormant FACTS (idea/decision/fix) near `near` instead of concepts: what a flash shows.",
+                    },
+                    "exclude": {
+                        "type": "array", "items": {"type": "string"}, "description": "Fact ids not to return (already flashed this session).",
                     },
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                 },
@@ -1702,6 +1719,19 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             _fact_lost["truncated"] = rep["truncated"]
         if "supersedes_unknown" in rep:
             _fact_notes.append(f"supersedes '{rep['supersedes_unknown']}': no active fact with that id")
+    # ADR-015 §3.2: a fact gets its vector when it is written (~120 ms each),
+    # so the next recall finds it even while a cold cache warms in the
+    # background. Best-effort: without an embedder the fact is stored anyway.
+    if _fact_report:
+        try:
+            _emb = _search._get_embedder()
+            _new = [t for t in {_search._fact_text(f) for f in g.facts.values()
+                                if f["turn"] == turn and f["status"] == "active"}
+                    if (id(_emb), t) not in _search._RECALL_VECS]
+            if _new:
+                _search._embed_recall(_emb, id(_emb), _new)
+        except Exception as _e:  # noqa: BLE001
+            log.debug("fact vectors at write skipped: %s", _e)
 
     for ld in new_links_data:
         lk = Link(
@@ -1789,7 +1819,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         + (f"\n⇄ context switched → '{_g.active}'" if _ctx_switched else
            (f"\n(domain signal: {_pend_dom} {_pend_n}/{CONTEXT_SWITCH_THRESHOLD} — "
             f"context will switch if it persists)" if _pend_dom else ""))
-        + _cur.curation_note(_cur_notes + _fact_notes)   # T54: teach curation in-context
+        + _cur.curation_note(_fact_notes + _cur_notes)   # facts first: max 3 notes are shown
         + _stimulus_block(g, keywords)   # E2.5: piggyback the top stimulus
         # ADR-015 §3.3: no "→ next: pre_turn" tail any more. The session
         # instructions and the hooks start the next turn; this one paid ~12
@@ -1993,11 +2023,52 @@ async def _tool_summary(arguments: dict, ctx: str, g) -> list[TextContent]:
     return [TextContent(type="text", text="\n".join(lines))]
 
 
+def _dormant_facts(g, near: str, threshold: int, top_n: int, exclude: set) -> str:
+    """ADR-016 D2: the flash is a FACT, or nothing. An idea, decision or fix
+    not written in the last ``threshold`` turns, that this message does not
+    already recall, and that is near it above FLASH_MIN_SCORE (same score as
+    the recall). Never a fallback: with no such fact the answer says none."""
+    if not near:
+        return "forgotten(facts): needs `near`, the topic to look around."
+    rec = _fact_hits(near, g, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA)
+    recalled = {f["id"] for f, _s, _k in rec}
+    # A flash is a CONNECTION, not just a resemblance: in a graph about one
+    # project every project question is near every fact (live: an unrelated
+    # fact at 0.49, the related one at 0.40). So it must share a concept with
+    # what the recall shows, or be named by the message.
+    rec_concepts = {c for f, _s, _k in rec for c in f["concepts"]}
+    words = _search._words(near)
+    linked = lambda f: bool(set(f["concepts"]) & rec_concepts) or any(  # noqa: E731
+        _search._names(c, words) for c in f["concepts"])
+    # A migrated fact counts too: its kind is `fact` only because the old
+    # episodes had none, and many are decisions and fixes. Without them a
+    # migrated graph had no flash at all (live, 2026-11-08: 17 of 17 migrated).
+    rows = [(f, kw) for f, _s, kw in _fact_hits(near, g, 50, FLASH_MIN_SCORE, 1.0)
+            if (f["kind"] in FLASH_KINDS or f["source"] == "migration")
+            and f["id"] not in recalled and linked(f)
+            and f["id"] not in exclude and g.turn_count - (f["turn"] or 0) >= threshold]
+    if not rows:
+        return f"No dormant fact near '{near}'."
+    return "\n".join([f"Dormant facts near '{near}':"] + [
+        f"  [{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, kw in rows[:top_n]])
+
+
+def _fact_hits(query: str, g, k: int, floor: float, delta: float) -> list:
+    """search._search_facts with the recall bonus. A replaced embedding (tests)
+    is used for the query and the facts alike, never mixed with the model's."""
+    return _search._search_facts(
+        query, g, k, floor, FACT_NAMED_BONUS, delta,
+        embed=None if _get_embedding is _search._get_embedding else _get_embedding)
+
+
 async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
     threshold = max(arguments.get("threshold", 5), 1)
     top_n = min(arguments.get("top_n", 10), 30)
     near = (arguments.get("near") or "").strip()
     now = g.turn_count
+    if arguments.get("facts"):
+        return [TextContent(type="text", text=_dormant_facts(
+            g, near, threshold, top_n, set(arguments.get("exclude") or [])))]
     forgotten = [
         nd for nd in g.nodes
         if now - nd.turn >= threshold and nd.salience > 0
@@ -2026,6 +2097,11 @@ async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
             band.sort(key=lambda x: x[0], reverse=True)
             forgotten = [nd for _, nd in band]
             ranked_by_near = True
+    if near and not ranked_by_near:
+        # Nothing dormant is near the topic: say so. Falling back to the oldest
+        # node answered every question, and GM showed it as a flash
+        # ("che tempo fara' domani a Milano?" -> `clipboard`, 2026-11-08).
+        return [TextContent(type="text", text=f"No dormant concept near '{near}'.")]
     if not ranked_by_near:
         forgotten.sort(key=lambda nd: nd.turn)
 
@@ -2402,11 +2478,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _fact_q = " ".join([str(topic_pt)] + [str(k) for k in extra_kws_pt
                                           if isinstance(extra_kws_pt, list)]).strip()
     try:
-        _hits = _search._search_facts(_fact_q, g_pt, FACT_RECALL_K,
-                                      FACT_MIN_SCORE, FACT_NAMED_BONUS, FACT_DELTA,
-                                      # replaced embedding (tests): used for both sides
-                                      embed=None if _get_embedding is _search._get_embedding
-                                      else _get_embedding)
+        _hits = _fact_hits(_fact_q, g_pt, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA)
     except Exception as _e:  # noqa: BLE001 — no embedder: the graph still answers
         # Without vectors the old window: the newest facts of the top nodes.
         log.debug("fact recall by vector skipped: %s", _e)

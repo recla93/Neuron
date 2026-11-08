@@ -82,6 +82,14 @@ async def _query_args(S, mode: str, text: str) -> dict:
             "keywords": [str(k) for k in (ex.get("keywords") or [])][:5]}
 
 
+async def _flash(S, text: str, facts: list) -> str:
+    """What GM's flash would show (ADR-016 D2): the bench fact id, or ""."""
+    q = " ".join(text.split())[:300]
+    out = await _call(S, "forgotten", {"facts": True, "near": q, "top_n": 1})
+    hit = shown(out, facts)
+    return next(iter(hit)) if hit else ""
+
+
 async def run_mode(mode: str, data: dict) -> dict:
     from neuron import server as S
     from neuron.registry import GraphRegistry
@@ -102,7 +110,7 @@ async def run_mode(mode: str, data: dict) -> dict:
     kept = {e["text"] for eps in g.episodes.values() for e in eps}
     stored = sum(1 for f in facts if f["text"] in kept)
 
-    rows, found, expected, full, noise, chars = [], 0, 0, 0, 0, 0
+    rows, found, expected, full, noise, chars, flashes = [], 0, 0, 0, 0, 0, 0
     for m in data["messages"]:
         ans = await _call(S, "pre_turn", await _query_args(S, mode, m["text"]))
         got = shown(ans, facts)
@@ -112,19 +120,25 @@ async def run_mode(mode: str, data: dict) -> dict:
         full += exp <= got
         noise += len(got - exp)
         chars += len(ans)
+        fl = await _flash(S, m["text"], facts)
+        flashes += bool(fl)
         rows.append({"id": m["id"], "found": sorted(got & exp), "missed": sorted(exp - got),
-                     "noise": sorted(got - exp), "answer": ans})
-    off = 0
+                     "noise": sorted(got - exp), "flash": fl, "answer": ans})
+    off = off_flash = 0
     for o in data["off_topic"]:
         ans = await _call(S, "pre_turn", await _query_args(S, mode, o["text"]))
         got = shown(ans, facts)
         off += len(got)
-        rows.append({"id": o["id"], "found": [], "missed": [], "noise": sorted(got), "answer": ans})
+        fl = await _flash(S, o["text"], facts)
+        off_flash += bool(fl)
+        rows.append({"id": o["id"], "found": [], "missed": [], "noise": sorted(got),
+                     "flash": fl, "answer": ans})
     n = len(data["messages"])
     return {"mode": mode, "stored": stored, "facts": len(facts),
             "recall": round(found / expected, 3), "found": found, "expected": expected,
             "full": full, "messages": n, "noise": round(noise / n, 2),
-            "off_topic": off, "chars": round(chars / n), "rows": rows}
+            "off_topic": off, "chars": round(chars / n),
+            "flashes": flashes, "off_topic_flashes": off_flash, "rows": rows}
 
 
 def main() -> int:
@@ -144,10 +158,12 @@ def main() -> int:
         print(f"\n== {r['mode']}: stored {r['stored']}/{r['facts']}  "
               f"recall {r['recall']:.0%} ({r['found']}/{r['expected']})  "
               f"full {r['full']}/{r['messages']}  noise {r['noise']}/msg  "
-              f"off_topic {r['off_topic']}  chars {r['chars']}/msg")
+              f"off_topic {r['off_topic']}  chars {r['chars']}/msg  "
+              f"flash {r['flashes']}/{r['messages']} (off-topic {r['off_topic_flashes']})")
         for row in r["rows"]:
             print(f"  {row['id']:4} found {','.join(row['found']) or '-':12} "
-                  f"missed {','.join(row['missed']) or '-':12} noise {','.join(row['noise']) or '-'}")
+                  f"missed {','.join(row['missed']) or '-':12} noise {','.join(row['noise']) or '-':12} "
+                  f"flash {row['flash'] or '-'}")
             if a.verbose:
                 print("       " + row["answer"].replace("\n", "\n       "))
     return 0

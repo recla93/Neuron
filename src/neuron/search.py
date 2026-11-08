@@ -312,7 +312,11 @@ _RECALL_VECS: dict = {}
 # More missing texts than this are embedded in the background, so the first
 # query after an install answers with what is there instead of blocking.
 _RECALL_FILE = "_recall_vectors.bin"
-_RECALL_INLINE_MAX = 64
+# A recall text of up to 128 tokens costs ~120 ms on a 4-core laptop CPU
+# (measured 2026-11-08: 137 texts in 16.6 s; short sentences ~8 ms). 64 inline
+# texts blocked a recall for ~8 s, past the hook's 2.5 s timeout.
+_RECALL_INLINE_MAX = 8
+_RECALL_BATCH = 16      # vectors land batch by batch, so the facts embedded first are usable early
 _recall_disk: "dict | None" = None          # sha1(text) -> vector, read once
 _recall_warming = False
 
@@ -363,7 +367,7 @@ def _recall_to_disk(eid: int, texts: "set[str]") -> None:
 
 
 def _embed_recall(emb, eid: int, texts: list[str]) -> None:
-    for t, v in zip(texts, emb.embed(texts)):
+    for t, v in zip(texts, emb.embed(texts, batch_size=_RECALL_BATCH)):
         v = [float(x) for x in v]
         norm = sum(x * x for x in v) ** 0.5 or 1.0
         _RECALL_VECS[(eid, t)] = [x / norm for x in v]
@@ -390,10 +394,13 @@ def _ensure_recall_vecs(graph, per: "dict | None" = None) -> int:
     persist = _persistable(emb)
     if per is None:
         per = {nd.keyword: _recall_texts(graph, nd) for nd in graph.nodes}
-    texts = {t for ts in per.values() for t in ts}
-    texts |= {_fact_text(f) for f in getattr(graph, "facts", {}).values()
-              if f["status"] == "active"}
-    missing = [t for t in texts if (eid, t) not in _RECALL_VECS]
+    facts = {_fact_text(f) for f in getattr(graph, "facts", {}).values()
+             if f["status"] == "active"}
+    texts = {t for ts in per.values() for t in ts} | facts
+    # Facts first: the recall reads facts, and with a cold cache it waited for
+    # every node text too (44 s on a 137-text graph, 2026-11-08).
+    missing = sorted((t for t in texts if (eid, t) not in _RECALL_VECS),
+                     key=lambda t: (t not in facts, len(t)))
     if missing and persist:
         disk = _recall_from_disk()
         for t in missing:
@@ -429,10 +436,14 @@ def _words(text: str) -> set[str]:
 
 def _names(concept: str, words: set[str]) -> bool:
     """The message names ``concept`` when one of its words is a word of the
-    message, or the start of one: an Italian verb or plural ending (push ->
-    pusha, wheel -> wheels) is up to 3 letters past the stem."""
-    return any(w in words or (len(w) >= 3 and any(
-        t.startswith(w) and len(t) - len(w) <= 3 for t in words))
+    message, or the start of one: an Italian verb or a plural (wheel -> wheels,
+    push -> pushiamo, commit -> committare, committiamo). A stem of 5+ letters
+    takes any ending; a shorter one up to 4 letters, so `test` does not reach
+    every word that starts with it. (3 letters missed "committare": a usage
+    test on 2026-11-08 lost the habit about commits that way.)"""
+    return any(w in words or any(
+        t.startswith(w) and (len(w) >= 5 or (len(w) >= 3 and len(t) - len(w) <= 4))
+        for t in words)
         for w in _words(concept) if len(w) >= 2)
 
 

@@ -18,7 +18,7 @@ import types
 class FakeEmbed:
     """384-dim constant embedder (non-unit vector, norm ~1.96)."""
     def __init__(self, *a, **kw): pass
-    def embed(self, texts):
+    def embed(self, texts, **_kw):  # batch_size, as fastembed
         texts = list(texts) if not isinstance(texts, list) else texts
         for _ in texts:
             yield [0.1] * 384

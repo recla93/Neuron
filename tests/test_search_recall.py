@@ -17,7 +17,7 @@ from neuron.models import Graph, Node
 
 class _WordEmbed:
     """One dimension per word: two texts are close when they share words."""
-    def embed(self, texts):
+    def embed(self, texts, **_kw):  # batch_size, as fastembed
         for t in texts:
             v = [0.0] * 384
             for w in t.lower().replace(".", " ").split():
@@ -76,7 +76,7 @@ def test_a_big_backlog_is_embedded_in_the_background(words, monkeypatch):
     gate = threading.Event()
 
     class _Slow(_WordEmbed):
-        def embed(self, texts):
+        def embed(self, texts, **_kw):  # batch_size, as fastembed
             gate.wait(5)
             yield from super().embed(texts)
 
@@ -100,7 +100,7 @@ def test_vectors_survive_a_restart(words, monkeypatch, tmp_path):
     assert (tmp_path / "rv.bin").exists()
 
     class _Refuse:
-        def embed(self, texts):
+        def embed(self, texts, **_kw):  # batch_size, as fastembed
             raise AssertionError(f"re-embedded after a restart: {list(texts)}")
 
     monkeypatch.setattr(search, "_RECALL_VECS", {})          # a new process
@@ -108,3 +108,32 @@ def test_vectors_survive_a_restart(words, monkeypatch, tmp_path):
     monkeypatch.setattr(S, "_embedder", _Refuse())
     monkeypatch.setattr(search, "_get_embedding", lambda t: next(_WordEmbed().embed([t])))
     assert S._search_recall("pacchetti importati cartella", 1, g)[0][0] == "alfa"
+
+
+# --- ADR-016 D6: the recall is usable early on a cold cache --------------------
+
+def test_facts_are_embedded_before_node_texts(words, monkeypatch):
+    """With a cold cache the recall waited for every node text too: 44 s on a
+    137-text graph (2026-11-08). Facts come first, so they are usable early."""
+    order = []
+    real = search._embed_recall
+    monkeypatch.setattr(search, "_RECALL_INLINE_MAX", 1000)
+    monkeypatch.setattr(search, "_embed_recall",
+                        lambda emb, eid, texts: order.extend(texts) or real(emb, eid, texts))
+    g = _graph()
+    search._ensure_recall_vecs(g)
+    facts = {search._fact_text(f) for f in g.facts.values()}
+    assert set(order[:len(facts)]) == facts, order
+
+
+def test_a_stored_fact_has_its_vector_at_once(words, tmp_path, monkeypatch):
+    """ADR-015 §3.2: the vector is made at the write, so the next recall finds
+    the fact even while a cold cache warms in the background."""
+    import asyncio
+    from neuron.registry import GraphRegistry
+    monkeypatch.setattr(S, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
+    monkeypatch.setattr(S, "TURSO_ENGINE", False)
+    asyncio.run(S.call_tool("store_turn", {"facts": [
+        {"kind": "fix", "text": "pacchetti importati dalla cartella sbagliata", "concepts": ["python"]}]}))
+    f = next(iter(S._g.get().facts.values()))
+    assert (id(S._embedder), search._fact_text(f)) in search._RECALL_VECS

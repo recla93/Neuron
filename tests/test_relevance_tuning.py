@@ -116,3 +116,87 @@ def test_facts_lead_the_answer_and_carry_kind_and_id(tmp_path, monkeypatch):
     body = out.split("<recalled-memory", 1)[1]
     assert body.split(">", 1)[1].lstrip().startswith("facts: "), out
     assert f"[fix] Gli errori HTTP si gestiscono negli effect. (ngrx) #{rep['id']}" in out, out
+
+
+# --- ADR-016 D2: the flash is a dormant fact, or nothing ----------------------
+
+def _flash_graph(tmp_path, monkeypatch):
+    g, call = _setup(tmp_path, monkeypatch, {"aspect": [1.0, 0.0, 0.0],
+                                             "eventi": [1.0, 0.0, 0.0]})
+    _node(g, "stimoli")
+    g.add_fact("idea", "eventi in stile aspect per gli stimoli", ["stimoli"], 1)
+    g.add_fact("habit", "l'utente vuole il piano prima: aspect", ["stimoli"], 1)
+    g.turn_count = 20
+    return g, call
+
+
+def test_forgotten_facts_returns_a_dormant_idea_with_its_id(tmp_path, monkeypatch):
+    """Not recalled (the question is about something else), but near it. A
+    habit is the user's, never a flash."""
+    g, call = _flash_graph(tmp_path, monkeypatch)
+    monkeypatch.setattr(S, "FACT_MIN_SCORE", 2.0)       # nothing is recalled here
+    out = call("forgotten", {"facts": True, "near": "eventi e stimoli del daemon", "top_n": 5})
+    assert "[idea] eventi in stile aspect per gli stimoli (stimoli) #" in out, out
+    assert "habit" not in out and "piano" not in out, out
+    import re
+    fid = re.search(r"#([0-9a-f]{8})", out).group(1)
+    again = call("forgotten", {"facts": True, "near": "eventi e stimoli del daemon", "exclude": [fid]})
+    assert again.startswith("No dormant fact"), "an excluded fact (already flashed) does not come back"
+
+
+def test_forgotten_facts_skips_what_the_recall_already_shows(tmp_path, monkeypatch):
+    g, call = _flash_graph(tmp_path, monkeypatch)
+    out = call("forgotten", {"facts": True, "near": "eventi e stimoli del daemon"})
+    assert out.startswith("No dormant fact"), f"the recall shows it already: {out}"
+
+
+def test_forgotten_facts_needs_the_fact_to_be_dormant(tmp_path, monkeypatch):
+    g, call = _flash_graph(tmp_path, monkeypatch)
+    monkeypatch.setattr(S, "FACT_MIN_SCORE", 2.0)
+    g.turn_count = 3                                       # written 2 turns ago
+    out = call("forgotten", {"facts": True, "near": "eventi e stimoli del daemon", "threshold": 5})
+    assert out.startswith("No dormant fact"), out
+
+
+def test_forgotten_near_with_nothing_near_says_so(tmp_path, monkeypatch):
+    """The fallback to the oldest node answered every question: GM showed it as
+    a flash ("che tempo fara' domani a Milano?" -> `clipboard`)."""
+    g, call = _setup(tmp_path, monkeypatch, {"clipboard": [0.0, 1.0, 0.0]})
+    g.add_node(Node(keyword="clipboard", turn=1, topic="t", domain="general",
+                    sentiment="neutral", salience=3))
+    g.turn_count = 20
+    out = call("forgotten", {"near": "che tempo fara domani a Milano?"})
+    assert out.startswith("No dormant concept near"), out
+    assert "clipboard" not in out
+
+
+def test_a_migrated_fact_can_be_a_flash(tmp_path, monkeypatch):
+    """Live on 2026-11-08 a migrated graph had no flash at all: its facts are
+    kind `fact` only because the old episodes had no kind."""
+    g, call = _flash_graph(tmp_path, monkeypatch)
+    monkeypatch.setattr(S, "FACT_MIN_SCORE", 2.0)
+    g.add_fact("fact", "eventi del bus interno, decisi a luglio", ["stimoli"], 1, source="migration")
+    g.add_fact("fact", "eventi scritti dal modello, tipo fatto", ["stimoli"], 1)
+    out = call("forgotten", {"facts": True, "near": "eventi e stimoli del daemon", "top_n": 5})
+    assert "eventi del bus interno" in out, out
+    assert "scritti dal modello" not in out, "a model's `fact` is a detail, not a flash"
+
+
+def test_a_flash_must_be_linked_not_only_near(tmp_path, monkeypatch):
+    """Live on 2026-11-08 the bench fact flashed on a question about keyword
+    casing at 0.49: near, unrelated. A flash shares a concept with what the
+    recall shows, or the message names it."""
+    g, call = _flash_graph(tmp_path, monkeypatch)
+    monkeypatch.setattr(S, "FACT_MIN_SCORE", 2.0)
+    out = call("forgotten", {"facts": True, "near": "eventi del daemon"})   # names no concept
+    assert out.startswith("No dormant fact"), out
+
+
+def test_italian_verb_endings_name_the_concept():
+    """A usage test on 2026-11-08: "possiamo committare queste modifiche?" did
+    not reach the habit indexed under `commit`."""
+    from neuron.search import _names, _words
+    for msg, concept in (("possiamo committare?", "commit"), ("committiamo ora", "commit"),
+                         ("pushiamo la release", "push"), ("le wheels vecchie", "wheel")):
+        assert _names(concept, _words(msg)), (msg, concept)
+    assert not _names("test", _words("testimonianze del processo")), "a short stem must not reach every word"

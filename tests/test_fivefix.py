@@ -35,7 +35,7 @@ class _Fake384:
     embedding-dependent tests from any embedder another test file may have left in
     the shared `neuron.server` globals (e.g. test_embedding_config installs a
     7-dim / zero embedder to exercise the dimension guard)."""
-    def embed(self, texts):
+    def embed(self, texts, **_kw):  # batch_size, as fastembed
         for _ in list(texts):
             yield [0.1] * 384
 
