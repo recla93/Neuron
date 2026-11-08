@@ -2686,7 +2686,12 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if staged and any(f"#{i}" in staged for i in _shown):
         staged = None                 # D7: not a fact this session already saw
     staged_line = f"\n🧠 staged: {staged}" if staged else ""
-    stim_line = _stimulus_block(g_pt, search_kws_pt, _shown)
+    # Seeds = the concepts of the facts this recall showed, else its top node.
+    # The hook sends the whole message as the only keyword, which is no node:
+    # the stimulus never fired once in 24 recalls (live, 2026-11-08).
+    _seeds = (list(dict.fromkeys(c for h in _hits for c in h[0]["concepts"][:2]))
+              or [kw for kw, _ in nodes_pt[:1]])
+    stim_line = _stimulus_block(g_pt, _seeds or search_kws_pt, _shown)
     # A4: don't stack staged + live stimulus + a long guide line. When any
     # stimulus is present the short tail is enough; the long teaching
     # sentence is reserved for stimulus-free responses.

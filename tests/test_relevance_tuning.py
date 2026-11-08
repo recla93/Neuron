@@ -247,3 +247,19 @@ def test_a_fact_shown_in_the_session_does_not_come_back(tmp_path, monkeypatch):
     again = call("pre_turn", {"topic": "release", "keywords": ["release"],
                               "exclude": [habit["id"], f"#{fix['id']}"], "profile": True})
     assert f"#{habit['id']}" not in again and f"#{fix['id']}" not in again, again
+
+
+def test_the_stimulus_seeds_from_what_the_recall_found_not_the_whole_message(tmp_path, monkeypatch):
+    """The hook sends the whole message as the only keyword: no node is called
+    that, so the stimulus never fired (0 in 24 live recalls, 2026-11-08). It now
+    starts from the nodes and fact concepts the recall found."""
+    g, call = _setup(tmp_path, monkeypatch, {"stimoli": [1.0, 0.0, 0.0]})
+    from neuron.models import Link
+    for kw in ("stimoli", "flash"):
+        _node(g, kw)
+    g.add_link(Link(source="stimoli", target="flash", link_type="deepening", weight="strong",
+                    rationale="", created_turn=1, last_active_turn=1))
+    g.add_fact("fix", "gli stimoli partono dai nodi trovati", ["stimoli"], 1)
+    spark = g.add_fact("idea", "the flash shows a dormant fact", ["flash"], 1)
+    out = call("pre_turn", {"topic": "si attivano gli stimoli mentre parliamo?"})
+    assert f"#{spark['id']}" in out and "🧠" in out, out
