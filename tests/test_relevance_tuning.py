@@ -232,3 +232,18 @@ def test_profile_respects_its_cap_and_is_not_repeated_as_a_fact(tmp_path, monkey
     assert out.count(f"#{keep['id']}") == 1, out             # in the profile, not again in facts
     profile = out.split("profile: ", 1)[1].split(" | facts:", 1)[0]
     assert "x" * 50 not in profile, out          # past the cap; relevance may still bring it
+
+
+def test_a_fact_shown_in_the_session_does_not_come_back(tmp_path, monkeypatch):
+    """ADR-015 D7: live 2026-11-08 the habit on releases came in the profile and
+    again among the relevant facts of the next message."""
+    g, call = _setup(tmp_path, monkeypatch, {"release": [1.0, 0.0, 0.0]})
+    _node(g, "release")
+    habit = g.add_fact("habit", "No push if anything breaks in use.", ["release"], 1)
+    fix = g.add_fact("fix", "The release script now checks the tag.", ["release"], 2)
+
+    first = call("pre_turn", {"topic": "release", "keywords": ["release"]})
+    assert f"#{habit['id']}" in first and f"#{fix['id']}" in first, first
+    again = call("pre_turn", {"topic": "release", "keywords": ["release"],
+                              "exclude": [habit["id"], f"#{fix['id']}"], "profile": True})
+    assert f"#{habit['id']}" not in again and f"#{fix['id']}" not in again, again

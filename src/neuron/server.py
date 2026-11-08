@@ -1131,6 +1131,11 @@ def _all_tools() -> list[Tool]:
                         "description": "Also return the active `user` and `habit` facts (who the user is, how they work), like MEMORY.md. Once per session, on the first call; GM sets it for you.",
                         "default": False,
                     },
+                    "exclude": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Fact ids already shown in this session: they do not come back. GM sets it for you.",
+                    },
                     "fact_nodes": {
                         "type": "integer",
                         "description": f"How many top-ranked nodes contribute facts/files (default {FACT_NODES}, minimum 1). Raise it for broader recall, drop it to 1 for the top node only.",
@@ -2513,8 +2518,13 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     _seen.add(f["id"])
                     _hits.append((f, 0.0, kw))
     # ADR-015 D7.1: who the user is and how they work, whatever the message.
-    _profile = _profile_facts(g_pt, PROFILE_MAX_CHARS) if arguments.get("profile") else []
-    _hits = [h for h in _hits if h[0]["id"] not in {f["id"] for f in _profile}]
+    # D7: a fact already shown in this session does not come back.
+    _seen_ids = {str(i).lstrip("#") for i in (arguments.get("exclude") or [])
+                 if isinstance(i, (str, int))}
+    _profile = [f for f in (_profile_facts(g_pt, PROFILE_MAX_CHARS) if arguments.get("profile") else [])
+                if f["id"] not in _seen_ids]
+    _seen_ids |= {f["id"] for f in _profile}
+    _hits = [h for h in _hits if h[0]["id"] not in _seen_ids]
     if _hits:
         parts_pt.append("facts: " + " | ".join(
             f"[{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, _sc, kw in _hits))
