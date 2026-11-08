@@ -36,7 +36,7 @@ def test_neuron_tools_all_announces_everything(srv, monkeypatch):
 
 def test_what_the_schema_dropped_is_in_help(srv):
     from neuron.funnel import HELP_TEXT
-    for word in ("NEURON_TOOLS=all", "episode_lost", "switches the"):
+    for word in ("NEURON_TOOLS=all", "fact_truncated", "switches the"):
         assert word in HELP_TEXT, word
 
 

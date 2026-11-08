@@ -82,6 +82,9 @@ from pathlib import Path
 _PRIORITY = ("gray-matter", "neuron", "neurag")
 
 
+# What a fact is for (ADR-015): said the same way by every client.
+WHAT_TO_SAVE = "progress, decisions, fixes, details, ideas, the user and their habits"
+
 def _gme_root() -> Path:
     """Mirror of gray_matter.gme.gme_root() -- deliberately NOT imported.
 
@@ -207,9 +210,10 @@ def _memory_block(p: str, with_knowledge: bool, gateway: bool = False) -> str:
         "for this session.\n"
         + where +
         f"Each substantive turn: call {p}pre_turn(topic, keywords) BEFORE replying "
-        f"(fold the returned context in silently), then {p}store_turn(topic, "
-        "keywords, links) AFTER, to persist what is new.\n"
-        "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a "
+        f"(fold the returned context in silently), then {p}store_turn(facts=[{{kind, "
+        "text, concepts}]) AFTER, for what is worth not repeating: " + WHAT_TO_SAVE + ".\n"
+        "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
+        "supersedes=<#id>; links typed, never a "
         f"self-link; before minting a concept check {p}find_candidates; never "
         "store secrets or tokens.\n"
         + extra +

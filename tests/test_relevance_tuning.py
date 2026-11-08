@@ -75,3 +75,44 @@ def test_around_searches_with_the_content_words_of_the_sentence(tmp_path, monkey
     assert "focus" in probe and "tendina" in probe, probe
     assert not {"che", "il", "su", "a"} & set(probe.split()), f"parole vuote nella ricerca: {probe}"
     assert f"as '{probe}'" in out, "l'intestazione deve dire con cosa ha cercato"
+
+
+# --- ADR-015 D7: facts are recalled by what they say and the concepts named ---
+
+def test_an_off_topic_message_gets_no_fact(tmp_path, monkeypatch):
+    """The absolute floor: below it nothing comes back, even with slots free.
+    Until 6.9 the five slots filled anyway (the carbonara got 2-3 facts)."""
+    g, call = _setup(tmp_path, monkeypatch, {"turso": [1.0, 0.0, 0.0]})
+    _node(g, "turso")
+    g.add_fact("decision", "Turso anche in locale, il cloud e' facoltativo.", ["turso"], 1)
+
+    out = call("pre_turn", {"topic": "ricetta della carbonara con guanciale"})
+    assert "Turso anche in locale" not in out, out
+
+
+def test_a_message_that_names_the_concept_gets_its_fact(tmp_path, monkeypatch):
+    """"TUTTI usano Turso" barely resembles the sentence about Turso in local
+    (cos 0.3), but it names the concept: the bonus takes it over the floor.
+    The same message without the name does not."""
+    g, call = _setup(tmp_path, monkeypatch, {"locale": [0.3, 0.954, 0.0],
+                                             "usano": [1.0, 0.0, 0.0]})
+    _node(g, "turso")
+    g.add_fact("decision", "Tutti e tre i tool girano anche in locale.", ["turso"], 1)
+
+    named = call("pre_turn", {"topic": "TUTTI usano Turso"})
+    assert "girano anche in locale" in named, named
+    unnamed = call("pre_turn", {"topic": "TUTTI usano il database"})
+    assert "girano anche in locale" not in unnamed, unnamed
+
+
+def test_facts_lead_the_answer_and_carry_kind_and_id(tmp_path, monkeypatch):
+    """The budget cut takes the tail: facts first, so links and nodes go before
+    a fact does."""
+    g, call = _setup(tmp_path, monkeypatch, {"errori": [1.0, 0.0, 0.0]})
+    _node(g, "ngrx")
+    rep = g.add_fact("fix", "Gli errori HTTP si gestiscono negli effect.", ["ngrx"], 1)
+
+    out = call("pre_turn", {"topic": "errori HTTP", "keywords": ["ngrx"]})
+    body = out.split("<recalled-memory", 1)[1]
+    assert body.split(">", 1)[1].lstrip().startswith("facts: "), out
+    assert f"[fix] Gli errori HTTP si gestiscono negli effect. (ngrx) #{rep['id']}" in out, out

@@ -84,9 +84,12 @@ def test_the_schema_requires_only_what_the_guidance_sends():
     KeyError. Lo schema deve chiedere ciò che la guidance promette."""
     schema = _schema_of("store_turn")
     required = set(schema.get("required", []))
-    assert required == {"topic", "keywords"}, (
-        f"store_turn esige {sorted(required)}: la guidance ne manda 3"
+    # ADR-015: la chiamata nuova manda solo `facts`, la vecchia topic+keywords:
+    # un campo obbligatorio respingerebbe l'una o l'altra lato client.
+    assert required == set(), (
+        f"store_turn esige {sorted(required)}: una delle due forme non passa"
     )
+    assert "facts" in schema["properties"], "il campo dei fatti non e' offerto"
     # e i campi con default devono restare offerti, non spariti
     props = schema["properties"]
     for field in ("domain", "intent", "sentiment", "links"):
@@ -138,27 +141,27 @@ def test_a_truncated_episode_is_declared_in_the_response(_isolated):
     lo emetteva stava nel return di `_tool_auto`, dove quel nome non esiste: il
     report era dead code qui e un NameError là. Il modello superava il cap senza
     saperlo."""
-    from neuron.models import EPISODE_MAX_CHARS
+    from neuron.models import EPISODE_MAX_CHARS, FACT_MAX_CHARS
 
     clean = _call("store_turn", {
         "topic": "episodi", "keywords": ["retry backoff"],
         "episode": "scelto https su wss",
     })
-    assert "episode_lost" not in clean, "niente perso, niente da dichiarare"
+    assert "fact_truncated" not in clean, "niente perso, niente da dichiarare"
 
-    # 17 oltre il cap annunciato: dentro la grazia, e la risposta NON lo dice
-    grace = _call("store_turn", {
-        "topic": "episodi", "keywords": ["retry backoff"],
-        "episode": "x" * (EPISODE_MAX_CHARS + 17),
-    })
-    assert "episode_lost" not in grace, grace
-
-    over = _call("store_turn", {
+    # ADR-015: oltre la lunghezza consigliata il fatto resta intero
+    long = _call("store_turn", {
         "topic": "episodi", "keywords": ["retry backoff"],
         "episode": "x" * (EPISODE_MAX_CHARS * 2),
     })
-    assert "episode_lost" in over, over
-    assert f'"truncated": {EPISODE_MAX_CHARS}' in over, over
+    assert "fact_truncated" not in long, long
+
+    over = _call("store_turn", {
+        "topic": "episodi", "keywords": ["retry backoff"],
+        "episode": "x" * (FACT_MAX_CHARS + 17),
+    })
+    assert "fact_truncated" in over, over
+    assert '"truncated": 17' in over, over
 
 
 def test_auto_answers_at_all(_isolated):
@@ -318,3 +321,55 @@ def test_a_surfaced_node_stored_again_gains_trust_without_confirm(_isolated):
     out = _call("confirm", {"keywords": ["kelvinator"]})
     assert '"confirmed": ["kelvinator"]' in out, out
     assert g.get_node("kelvinator").trust == 2 * IMPLICIT_CONFIRM + 1.0
+
+
+def test_a_call_with_only_facts_saves_typed_facts(_isolated):
+    """ADR-015 D5: `facts` is enough. The concepts become the turn's keywords,
+    the topic defaults to the first fact, the response names each fact."""
+    out = _call("store_turn", {"facts": [
+        {"kind": "habit", "text": "Dopo un push la CI la controlla l'utente.",
+         "concepts": ["ci", "push"]},
+        {"kind": "fix", "text": "WAL bloccato: pyturso 0.6.1 nel Python di sistema.",
+         "concepts": ["pyturso", "wal"]},
+    ]})
+    assert "saved" in out.lower() and "error" not in out.lower(), out
+    assert "facts: 2 saved" in out and "habit" in out and "fix" in out, out
+    g = S._g.get()   # the module registry: other tests' facts may share the graph
+    mine = {f["kind"]: f["concepts"] for f in g.facts.values()
+            if f["text"].startswith(("Dopo un push", "WAL bloccato"))}
+    assert mine == {"habit": ["ci", "push"], "fix": ["pyturso", "wal"]}, mine
+
+
+def test_a_turn_without_facts_says_so(_isolated):
+    out = _call("store_turn", {"topic": "pranzo con Ada", "keywords": ["ada", "pranzo"]})
+    assert "facts: 0 saved" in out, out
+
+
+def test_pre_turn_shows_the_id_that_supersedes_needs(_isolated):
+    """The update loop end to end: pre_turn shows `#id`, store_turn supersedes
+    it, and the next pre_turn shows only the new fact."""
+    _call("store_turn", {"facts": [{"kind": "progress", "concepts": ["backup"],
+                                    "text": "La memoria esiste solo su questo PC."}]})
+    recall = _call("pre_turn", {"topic": "backup", "keywords": ["backup"]})
+    fid = recall.split("#", 1)[1].split()[0].strip("|")
+    out = _call("store_turn", {"facts": [{"kind": "progress", "concepts": ["backup"],
+                                          "supersedes": fid,
+                                          "text": "Ora c'e' una copia su disco esterno."}]})
+    assert f"supersedes #{fid}" in out, out
+    recall = _call("pre_turn", {"topic": "backup", "keywords": ["backup"]})
+    assert "copia su disco esterno" in recall, recall
+    assert "solo su questo PC" not in recall, recall
+
+
+def test_a_malformed_fact_costs_the_fact_not_the_turn(_isolated):
+    out = _call("store_turn", {"keywords": ["ada"], "facts": ["solo una stringa", {"kind": "fix"}]})
+    assert "saved" in out.lower(), out
+    assert "dropped fact" in out, out
+
+
+def test_more_concepts_than_the_keyword_cap_keep_the_turn(_isolated):
+    facts = [{"kind": "fact", "text": f"fatto numero {i}", "concepts": [f"c{i}a", f"c{i}b"]}
+             for i in range(5)]
+    out = _call("store_turn", {"facts": facts})
+    assert "facts: 5 saved" in out, out
+    assert "kept 8 of 10 concepts" in out, out

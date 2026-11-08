@@ -66,7 +66,7 @@ def test_embed_model_env_override():
         importlib.reload(srv)
 
 
-def test_dim_mismatch_raises_clear_error():
+def test_dim_mismatch_raises_clear_error(monkeypatch):
     pytest.importorskip("mcp")
     pytest.importorskip("fastembed")
     import neuron.server as srv
@@ -77,8 +77,11 @@ def test_dim_mismatch_raises_clear_error():
             # wrong width on purpose (VECTOR_DIM is 384)
             return [[0.0] * 7 for _ in texts]
 
-    srv._embedder = _FakeEmbedder()
-    srv._embed_dim_checked = False
+    # monkeypatch, not assignment: a plain `srv._embedder = ...` outlived the
+    # test, and every later test embedded with seven zeros (2026-11-08: the
+    # fact recall of three other files saw only a 0.0 cosine).
+    monkeypatch.setattr(srv, "_embedder", _FakeEmbedder())
+    monkeypatch.setattr(srv, "_embed_dim_checked", False)
     with pytest.raises(RuntimeError) as exc:
         srv._get_embedding("hello")
     msg = str(exc.value)

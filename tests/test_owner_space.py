@@ -38,7 +38,7 @@ def test_new_rows_carry_owner_and_space(tmp_path, ada):
     g.add_episode("proxy", "il proxy rifiuta il handshake wss", 1)
     path = str(tmp_path / "g.db")
     g.save_sqlite(path)
-    for table in ("nodes", "links", "episodes"):
+    for table in ("nodes", "links", "facts"):
         assert set(_rows(path, table)) == {("ada", "personale:ada")}, table
 
 
@@ -72,6 +72,11 @@ def _legacy(path):
         for table in ("nodes", "links", "episodes"):
             c.execute(f"ALTER TABLE {table} DROP COLUMN owner")
             c.execute(f"ALTER TABLE {table} DROP COLUMN space")
+        # before 6.10 a fact was an `episodes` row, and there was no facts table
+        c.execute("DROP TABLE facts")
+        c.execute("DROP TABLE fact_concepts")
+        c.execute("INSERT INTO episodes (context, keyword, turn, text) "
+                  "VALUES ('default', 'proxy', 1, 'fatto')")
         c.commit()
     finally:
         c.close()
@@ -80,7 +85,6 @@ def _legacy(path):
 def test_a_local_legacy_file_becomes_its_users(tmp_path, ada):
     path = str(tmp_path / "g.db")
     g = _graph("proxy")
-    g.add_episode("proxy", "fatto", 1)
     g.save_sqlite(path)
     _legacy(path)
     g2 = Graph()
@@ -88,7 +92,8 @@ def test_a_local_legacy_file_becomes_its_users(tmp_path, ada):
     g2.add_node(Node(keyword="cache", turn=2, topic="t", domain="general", sentiment="neutral"))
     g2.save_sqlite(path)                                   # the migration runs on save
     assert set(_rows(path, "nodes")) == {("ada", "personale:ada")}
-    assert set(_rows(path, "episodes")) == {("ada", "personale:ada")}
+    assert set(_rows(path, "episodes")) == {("ada", "personale:ada")}   # stamped, never rewritten
+    assert set(_rows(path, "facts")) == {("ada", "personale:ada")}      # migrated on load
 
 
 def test_a_shared_store_keeps_old_rows_unattributed(tmp_path, ada, monkeypatch):

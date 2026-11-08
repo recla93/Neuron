@@ -1,123 +1,219 @@
-"""Episodic payload tests (T56) — sqlite stdlib tier."""
+"""Facts (ADR-015): the unit of memory, indexed by concepts — sqlite stdlib tier.
+
+Until 6.9 a fact (`episode`) lived inside its node and died with it, four ways:
+the cap of 5 per node, the eviction past MAX_NODES, a merge, an orphan drop.
+Each has its test here, through a real save and load: the store is the memory.
+"""
 
 import os
+import sqlite3
 import sys
-import tempfile
-import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from neuron.models import (  # noqa: E402
-    EPISODE_MAX_CHARS, EPISODES_PER_NODE, Graph, Node,
-)
+from neuron import models  # noqa: E402
+from neuron.models import FACT_MAX_CHARS, Graph, Node  # noqa: E402
 
 
-def _node(kw, turn=1):
+def _node(kw, turn=1, salience=1):
     return Node(keyword=kw, turn=turn, topic="t", domain="general",
-                sentiment="neutral")
+                sentiment="neutral", salience=salience)
 
 
-class TestEpisodes(unittest.TestCase):
-    def test_add_and_recent(self):
-        g = Graph()
-        g.add_node(_node("retry backoff"))
-        self.assertTrue(g.add_episode("retry backoff", "chose https over wss", turn=3))
-        self.assertTrue(g.add_episode("retry backoff", "backoff base 0.5s", turn=5))
-        self.assertEqual(g.recent_episodes("retry backoff", 2),
-                         ["backoff base 0.5s", "chose https over wss"])
-
-    def test_requires_existing_node_and_text(self):
-        g = Graph()
-        self.assertFalse(g.add_episode("ghost", "fact", turn=1))
-        g.add_node(_node("real"))
-        self.assertFalse(g.add_episode("real", "   ", turn=1))
-
-    def test_same_turn_overwrites(self):
-        g = Graph()
-        g.add_node(_node("a"))
-        g.add_episode("a", "v1", turn=2)
-        g.add_episode("a", "v2", turn=2)
-        self.assertEqual(g.recent_episodes("a"), ["v2"])
-
-    def test_write_reports_what_it_lost(self):
-        """Regola 1: mai troncare o scartare in silenzio. Il report della
-        scrittura dice di quanto si è oltre e cosa è stato sfrattato."""
-        g = Graph()
-        g.add_node(_node("a"))
-        # sotto i limiti: nessuna perdita da dichiarare
-        clean = g.add_episode("a", "corto", turn=1)
-        self.assertEqual(clean, {"stored": True})
-        # oltre il cap annunciato ma dentro la grazia (1.5x): intero, e il
-        # report non lo dice — un limite morbido dichiarato e' il nuovo limite
-        grace = g.add_episode("a", "x" * (EPISODE_MAX_CHARS + 17), turn=2)
-        self.assertEqual(grace, {"stored": True})
-        self.assertEqual(len(g.recent_episodes("a")[0]), EPISODE_MAX_CHARS + 17)
-        # oltre la grazia: taglio a confine di parola, e il report conta i
-        # caratteri oltre il cap ANNUNCIATO, non oltre quello nascosto
-        words = ("parola " * EPISODE_MAX_CHARS).strip()
-        long = g.add_episode("a", words, turn=2)
-        self.assertEqual(long["truncated"], len(words) - EPISODE_MAX_CHARS)
-        stored = g.recent_episodes("a")[0]
-        self.assertLessEqual(len(stored), EPISODE_MAX_CHARS * 3 // 2)
-        self.assertTrue(stored.endswith("parola"), stored[-20:])
-        # sfratto: il report nomina i turni buttati dal cap
-        for t in range(3, EPISODES_PER_NODE + 4):
-            rep = g.add_episode("a", f"fact {t}", turn=t)
-        self.assertIn("dropped_turns", rep)
-        self.assertEqual(len(g.episodes["a"]), EPISODES_PER_NODE)
-        # nodo inesistente: falsy, come prima
-        self.assertFalse(g.add_episode("ghost", "fact", turn=1))
-
-    def test_cap_drops_oldest_and_tracks_removal(self):
-        g = Graph()
-        g.add_node(_node("a"))
-        for t in range(1, EPISODES_PER_NODE + 3):
-            g.add_episode("a", f"fact {t}", turn=t)
-        eps = g.episodes["a"]
-        self.assertEqual(len(eps), EPISODES_PER_NODE)
-        self.assertEqual(eps[0]["turn"], 3)          # 1 and 2 dropped
-        self.assertIn(("a", 1), g._removed_episodes)
-        self.assertIn(("a", 2), g._removed_episodes)
-
-    def test_roundtrip_sqlite(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, "g.db")
-            g = Graph()
-            g.add_node(_node("retry backoff"))
-            g.add_node(_node("salience"))
-            g.turn_count = 4
-            g.add_episode("retry backoff", "chose https over wss", turn=4)
-            g.save_sqlite(path)
-            # incremental save of a later episode
-            g.turn_count = 5
-            g.add_episode("retry backoff", "backoff base 0.5s", turn=5)
-            g.save_sqlite(path)
-
-            g2 = Graph()
-            g2.load_sqlite(path)
-            self.assertEqual(g2.recent_episodes("retry backoff", 2),
-                             ["backoff base 0.5s", "chose https over wss"])
-            self.assertEqual(g2.recent_episodes("salience"), [])
-
-    def test_removed_node_deletes_episodes_rows(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, "g.db")
-            g = Graph()
-            g.add_node(_node("a"))
-            g.add_node(_node("b"))
-            g.add_episode("a", "fact a", turn=1)
-            g.save_sqlite(path)
-            # simulate structural removal
-            g.nodes = [nd for nd in g.nodes if nd.keyword != "a"]
-            g._rebuild_node_map()
-            g.episodes.pop("a", None)
-            g._removed_nodes.add("a")
-            g._dirty = True   # manual structural removal (mutation helpers set this)
-            g.save_sqlite(path)
-            g2 = Graph()
-            g2.load_sqlite(path)
-            self.assertEqual(g2.recent_episodes("a"), [])
+def _graph(*kws):
+    g = Graph()
+    for kw in kws:
+        g.add_node(_node(kw))
+    return g
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+def _reload(g, path):
+    g.save_sqlite(path)
+    g2 = Graph()
+    g2.load_sqlite(path)
+    return g2
+
+
+def _texts(g):
+    return {f["text"] for f in g.facts.values()}
+
+
+# --- the write -------------------------------------------------------------
+
+def test_add_and_recent():
+    g = _graph("retry backoff")
+    assert g.add_episode("retry backoff", "chose https over wss", turn=3)
+    assert g.add_episode("retry backoff", "backoff base 0.5s", turn=5)
+    assert g.recent_episodes("retry backoff", 2) == ["backoff base 0.5s", "chose https over wss"]
+
+
+def test_the_legacy_call_requires_an_existing_node_and_text():
+    g = Graph()
+    assert not g.add_episode("ghost", "fact", turn=1)
+    g.add_node(_node("real"))
+    assert not g.add_episode("real", "   ", turn=1)
+
+
+def test_two_facts_of_the_same_turn_are_both_kept():
+    """It used to be one episode per (keyword, turn), the second overwriting."""
+    g = _graph("a")
+    g.add_fact("decision", "v1", ["a"], 2)
+    g.add_fact("fix", "v2", ["a"], 2)
+    assert sorted(g.recent_episodes("a")) == ["v1", "v2"]
+
+
+def test_a_fact_is_kept_whole_and_cut_only_at_the_trust_boundary():
+    g = _graph("a")
+    rep = g.add_fact("fact", "corto", ["a"], 1)
+    assert rep["stored"] and rep["id"] and "truncated" not in rep
+    long = "x" * 900                         # past the advisory 400: kept whole
+    assert "truncated" not in g.add_fact("fact", long, ["a"], 2)
+    assert long in g.recent_episodes("a", 5)
+    words = ("parola " * FACT_MAX_CHARS).strip()
+    cut = g.add_fact("fact", words, ["a"], 3)
+    assert cut["truncated"] == len(words) - FACT_MAX_CHARS
+    stored = g.facts[cut["id"]]["text"]
+    assert len(stored) <= FACT_MAX_CHARS and stored.endswith("parola")
+
+
+def test_the_same_text_again_is_the_same_fact():
+    """A retried store_turn must not make a twin: it adds the new concepts."""
+    g = _graph("a", "b")
+    first = g.add_fact("fix", "il WAL resta bloccato con pyturso 0.6.1", ["a"], 1)
+    again = g.add_fact("fix", "il WAL resta bloccato con pyturso 0.6.1", ["b"], 2)
+    assert again["id"] == first["id"] and again["duplicate"]
+    assert len(g.facts) == 1 and g.facts[first["id"]]["concepts"] == ["a", "b"]
+
+
+def test_an_unknown_kind_is_stored_as_fact():
+    g = _graph("a")
+    rep = g.add_fact("ricordo", "testo", ["a"], 1)
+    assert g.facts[rep["id"]]["kind"] == "fact"
+
+
+# --- supersede: an update, not a delete --------------------------------------
+
+def test_a_superseding_fact_takes_the_place_of_the_old_one(tmp_path):
+    g = _graph("backup")
+    old = g.add_fact("progress", "la memoria e' solo su questo PC", ["backup"], 1)
+    new = g.add_fact("progress", "c'e' una copia della memoria sul disco esterno",
+                     ["backup"], 2, supersedes=old["id"])
+    assert new["superseded"] == old["id"]
+    g2 = _reload(g, str(tmp_path / "g.db"))
+    assert g2.recent_episodes("backup", 5) == ["c'e' una copia della memoria sul disco esterno"]
+    assert g2.facts[old["id"]]["status"] == "superseded", "the old fact stays on disk"
+    assert g2.facts[new["id"]]["supersedes"] == old["id"]
+
+
+def test_superseding_an_unknown_id_is_reported_not_raised():
+    g = _graph("a")
+    rep = g.add_fact("fact", "testo", ["a"], 1, supersedes="deadbeef")
+    assert rep["stored"] and rep["supersedes_unknown"] == "deadbeef"
+
+
+# --- the four ways a fact was lost (ADR-015 §1.3) -----------------------------
+
+def test_1_no_cap_per_node(tmp_path):
+    g = _graph("release")
+    for t in range(1, 13):
+        g.add_fact("progress", f"passo {t} della release", ["release"], t)
+    g2 = _reload(g, str(tmp_path / "g.db"))
+    assert len(g2.facts) == 12, "the cap of 5 dropped the oldest seven"
+
+
+def test_2_an_evicted_node_keeps_its_facts(tmp_path, monkeypatch):
+    monkeypatch.setattr(models, "MAX_NODES", 3)
+    g = Graph()
+    g.add_node(_node("wal", salience=0))           # lowest salience: evicted first
+    g.add_fact("fix", "pyturso 0.6.1 tiene il WAL bloccato", ["wal"], 1)
+    for kw in ("a", "b", "c"):
+        g.add_node(_node(kw, salience=5))
+    assert g.get_node("wal") is None, "the setup must evict 'wal'"
+    path = str(tmp_path / "g.db")
+    g2 = _reload(g, path)
+    assert "pyturso 0.6.1 tiene il WAL bloccato" in _texts(g2)
+    # the concept comes back and finds its fact again
+    g2.add_node(_node("wal"))
+    assert g2.recent_episodes("wal") == ["pyturso 0.6.1 tiene il WAL bloccato"]
+
+
+def test_3_a_merge_moves_the_facts_to_the_survivor(tmp_path):
+    g = _graph("turso", "pyturso")
+    g.add_fact("decision", "Turso anche in locale, cloud facoltativo", ["pyturso"], 1)
+    path = str(tmp_path / "g.db")
+    g.save_sqlite(path)
+    g._merge_into(g.get_node("turso"), g.get_node("pyturso"), 0.9, 2, [])
+    g.mark_full_rewrite()                          # what consolidate does: the reconcile save
+    g2 = _reload(g, path)
+    assert g2.recent_episodes("turso") == ["Turso anche in locale, cloud facoltativo"]
+    assert g2.recent_episodes("pyturso") == []
+    with sqlite3.connect(path) as c:
+        rows = c.execute("SELECT keyword FROM fact_concepts").fetchall()
+    assert rows == [("turso",)]
+
+
+def test_4_an_orphan_drop_keeps_the_facts(tmp_path):
+    g = _graph("orfano", "altro")
+    g.add_fact("idea", "eventi in stile aspect per gli stimoli", ["orfano"], 1)
+    path = str(tmp_path / "g.db")
+    g.save_sqlite(path)
+    report: list = []
+    g._drop_orphans(5, 0, 2, report)
+    g.mark_full_rewrite()
+    assert g.get_node("orfano") is None, "the setup must drop 'orfano'"
+    g2 = _reload(g, path)
+    assert "eventi in stile aspect per gli stimoli" in _texts(g2)
+
+
+def test_a_removed_node_keeps_its_fact_rows(tmp_path):
+    path = str(tmp_path / "g.db")
+    g = _graph("a", "b")
+    g.add_fact("fact", "fact a", ["a"], 1)
+    g.save_sqlite(path)
+    g.nodes = [nd for nd in g.nodes if nd.keyword != "a"]
+    g._rebuild_node_map()
+    g._removed_nodes.add("a")
+    g._dirty = True
+    g2 = _reload(g, path)
+    assert g2.recent_episodes("a") == ["fact a"]
+
+
+# --- persistence and migration -------------------------------------------------
+
+def test_roundtrip_sqlite(tmp_path):
+    path = str(tmp_path / "g.db")
+    g = _graph("retry backoff", "salience")
+    g.turn_count = 4
+    g.add_episode("retry backoff", "chose https over wss", turn=4)
+    g.save_sqlite(path)
+    g.turn_count = 5                                # incremental save of a later fact
+    g.add_episode("retry backoff", "backoff base 0.5s", turn=5)
+    g2 = _reload(g, path)
+    assert g2.recent_episodes("retry backoff", 2) == ["backoff base 0.5s", "chose https over wss"]
+    assert g2.recent_episodes("salience") == []
+
+
+def test_legacy_episodes_become_one_fact_per_text(tmp_path):
+    """Before 6.10 store_turn copied the sentence onto every keyword: one row
+    per keyword, one fact in truth. Loading twice never makes a twin."""
+    path = str(tmp_path / "g.db")
+    _graph("ngrx", "effect", "safari").save_sqlite(path)
+    with sqlite3.connect(path) as c:
+        c.executemany("INSERT INTO episodes (context, keyword, turn, text) VALUES ('default',?,?,?)",
+                      [("ngrx", 3, "gli errori HTTP si gestiscono negli effect"),
+                       ("effect", 3, "gli errori HTTP si gestiscono negli effect"),
+                       ("safari", 7, "il p-dropdown perde il focus: appendTo body")])
+    g = Graph()
+    g.load_sqlite(path)
+    by_text = {f["text"]: f for f in g.facts.values()}
+    assert len(by_text) == 2
+    http = by_text["gli errori HTTP si gestiscono negli effect"]
+    assert sorted(http["concepts"]) == ["effect", "ngrx"]
+    assert (http["kind"], http["source"], http["turn"]) == ("fact", "migration", 3)
+    g.save_sqlite(path)
+    g3 = Graph()
+    g3.load_sqlite(path)
+    assert len(g3.facts) == 2 and not g3._new_facts, "a second load re-migrated"
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 3, \
+            "the legacy table is read, never rewritten"

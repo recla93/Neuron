@@ -543,17 +543,16 @@ def test_pre_turn_declares_the_route_it_answered_through():
 
 
 def test_pre_turn_facts_span_several_nodes(monkeypatch):
-    """facts: comes from the top FACT_NODES nodes, not only rank 1 — and
-    fact_nodes=1 restores the old single-node window.
+    """ADR-015 D7: facts come from every active fact, not from a window of top
+    nodes: two facts on two nodes both answer a question that names both, each
+    shown with its kind and its id.
 
-    The relevance cut is off here: this is about the rank window. With a live
-    embedder FACT_DELTA dropped the rank-2 fact, so the file passed only in
-    the full suite, where `_mockdeps` breaks the embedder and the cut is skipped.
-    """
+    The relative cut is off here: this is about the reach, not the ranking."""
     pytest.importorskip("mcp")
     import asyncio
     import neuron.server as srv
     monkeypatch.setattr(srv, "FACT_DELTA", 1.0)
+    monkeypatch.setattr(srv, "FACT_MIN_SCORE", -1.0)
 
     g = _make_graph_with_data()
     g.add_episode("kotlin flow", "chose flow over channel", turn=4)
@@ -565,15 +564,11 @@ def test_pre_turn_facts_span_several_nodes(monkeypatch):
         return await srv.call_tool("pre_turn", args)
 
     try:
-        base = {"topic": "kotlin flow", "keywords": ["coroutines"], "max_tokens": 600}
-        wide = asyncio.run(_run(base))[0].text
-        assert "chose flow over channel" in wide
-        assert "structured concurrency by default" in wide, \
-            "rank-2 node must contribute facts too"
-        assert "kotlin flow: " in wide, "facts must be attributed to their node"
-
-        narrow = asyncio.run(_run({**base, "fact_nodes": 1}))[0].text
-        assert "structured concurrency by default" not in narrow
+        out = asyncio.run(_run({"topic": "kotlin flow", "keywords": ["coroutines"],
+                                "max_tokens": 600}))[0].text
+        assert "chose flow over channel" in out
+        assert "structured concurrency by default" in out, "a fact on another node must answer too"
+        assert "[fact] chose flow over channel (kotlin flow) #" in out,             "a fact shows its kind, its concept and its id"
     finally:
         srv._g = old_g
 

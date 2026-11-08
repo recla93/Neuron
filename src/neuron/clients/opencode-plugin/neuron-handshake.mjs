@@ -66,9 +66,10 @@ function memoryBlock(key, withKnowledge) {
     "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority " +
     "for this session.\n" +
     "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying " +
-    "(fold the returned context in silently), then store_turn(topic, keywords, " +
-    "links) AFTER, to persist what is new.\n" +
-    "Keywords = 3-5 concept NOUNS (no verbs/paths); links typed, never a " +
+    "(fold the returned context in silently), then store_turn(facts=[{kind, text, " +
+    "concepts}]) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits.\n" +
+    "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes " +
+    "supersedes=<#id>; links typed, never a " +
     "self-link; before minting a concept check find_candidates; never store " +
     "secrets or tokens.\n" +
     (withKnowledge

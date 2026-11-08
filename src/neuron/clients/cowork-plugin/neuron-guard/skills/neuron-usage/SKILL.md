@@ -15,8 +15,9 @@ Cloud). Every bad write pollutes it for everyone. Follow these rules exactly.
    substantive turn. Fold the returned context silently into the reply —
    never announce the call or quote its raw output.
 2. Reply to the user.
-3. `mcp__gray-matter__store_turn(topic, keywords, links, domain, intent,
-   sentiment)` AFTER replying, to persist only what is NEW.
+3. `mcp__gray-matter__store_turn(facts=[{kind, text, concepts}])` AFTER replying,
+   for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits. An update passes
+   `supersedes=<#id>` (the id `pre_turn` shows).
 
 Skip 1 and 3 on procedural turns (acknowledgements, thanks, yes/no) and when
 the graph is empty. Call `mcp__gray-matter__help` once per session if unsure of

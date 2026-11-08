@@ -1,5 +1,62 @@
 # Changelog — Neuron
 
+## Unreleased
+- **I fatti non si perdono più (ADR-015, fase 1).** Un fatto viveva dentro il
+  suo nodo e moriva con lui in quattro modi: il tetto di 5 per nodo, lo
+  sfratto oltre `MAX_NODES`, il merge del consolidamento (gli episodi
+  dell'assorbito non passavano al sopravvissuto) e l'archiviazione degli
+  orfani. Ora il fatto ha la sua tabella (`facts`, append-only) e i concetti
+  sono il suo indice (`fact_concepts`): sfrattare o archiviare un nodo non
+  tocca i fatti, un merge sposta i concetti sul sopravvissuto, e un concetto
+  che torna ritrova i suoi fatti. Un test per ciascun caso, attraverso save e
+  load veri.
+- **`store_turn(facts=[{kind, text, concepts}])`.** Sette tipi: `progress`,
+  `decision`, `fix`, `fact`, `idea`, `user`, `habit`. `topic` e `keywords`
+  diventano facoltativi: i concetti dei fatti sono le keyword del turno. La
+  risposta nomina ogni fatto salvato con il suo id, e dice `facts: 0 saved`
+  quando un turno non lascia niente da ricordare. `episode` resta: diventa un
+  fatto di tipo `fact` su tutte le keyword.
+- **Gli aggiornamenti superano, non cancellano.** `supersedes=<id>`: il fatto
+  vecchio resta su disco con stato `superseded` ed esce dal richiamo.
+  `pre_turn` mostra l'id accanto a ogni fatto (`#a3f91c02`), così il modello
+  sa cosa superare.
+- **Un fatto resta intero.** Spariti il taglio a 600 caratteri e il report
+  `episode_lost`: resta solo un taglio di sicurezza a 2000
+  (`NEURON_FACT_MAX_CHARS`), dichiarato in `fact_truncated`. Lo stesso testo
+  salvato due volte è lo stesso fatto: un `store_turn` ripetuto non crea
+  doppioni.
+- **Migrazione al caricamento.** Le righe `episodes` diventano fatti, uno per
+  testo distinto (prima la stessa frase stava su ogni keyword del turno), di
+  tipo `fact` e fonte `migration`. La tabella `episodes` si legge e non si
+  scrive più. Provata su una copia dei grafi scritti dalla 6.4.5: 5 righe →
+  3 fatti, 16 → 16; un secondo caricamento non rimigra niente.
+- **Le istruzioni chiedono fatti.** La coda di `pre_turn`, `help`, gli hook di
+  Claude Code e Cowork, il plugin OpenCode, il playbook e l'opener dicevano
+  `store_turn(topic, keywords, links)`: con quelle nessun modello avrebbe
+  mandato un fatto. Ora dicono `store_turn(facts=[{kind, text, concepts}])` e
+  cosa salvare.
+- **`pre_turn` richiama fatti, non nodi (ADR-015, fase 2).** Cerca fra tutti
+  i fatti attivi, non fra quelli dei primi tre nodi: coseno fra il messaggio e
+  il fatto, più 0,20 quando il messaggio nomina un suo concetto («TUTTI usano
+  Turso» trova il fatto su Turso in locale), poi una soglia ASSOLUTA a 0,40 e
+  un taglio relativo a 0,15. Un messaggio fuori tema non riceve più fatti. I
+  fatti aprono la risposta, con tipo, concetto e id, e il taglio del budget
+  prende prima nodi e link. Sul bench, col messaggio come domanda: fatti trovati
+  45% → 52%, messaggi completi 10 → 11 su 20, zero fatti sui fuori tema.
+  Manopole: `NEURON_FACT_MIN_SCORE`, `NEURON_FACT_NAMED_BONUS`,
+  `NEURON_FACT_DELTA`, `NEURON_FACT_RECALL_K`.
+- **Via il promemoria in coda a `store_turn`.** «→ next: pre_turn;
+  confirm(keywords) if context helped» costava circa 12 token a ogni
+  salvataggio, per ripetere quello che dicono già le istruzioni di sessione e
+  gli hook.
+- **Un test non lascia più un embedder finto agli altri.**
+  `test_dim_mismatch_raises_clear_error` assegnava un embedder a 7 zeri al
+  server e non lo toglieva: ogni test successivo calcolava coseni nulli.
+- **Bench del richiamo** (`bench/run.py`, `bench/recall.json`): 30 fatti veri,
+  20 messaggi veri, 5 fuori tema. Con la scrittura per fatti, fatti trovati
+  invariati (45%), fatti mostrati sui fuori tema da 5 a 1 (lettura `extract`)
+  e da 3 a 0 (messaggio intero).
+
 ## 6.9.0 (2026-11-06)
 - **Niente più seed.** `base_knowledge.db`, il manuale di Neuron in 29 nodi,
   non si spedisce più, e con lui le note del `self-vault` e gli script che lo

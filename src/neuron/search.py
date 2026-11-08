@@ -20,11 +20,12 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import weakref
 from array import array
 
-from neuron.extraction import DOMAIN_ALIASES
+from neuron.extraction import DOMAIN_ALIASES, _fold_accents
 
 log = logging.getLogger("neuron.search")
 from neuron.db import SQLITE_MIN_VALID_SIZE
@@ -368,29 +369,30 @@ def _embed_recall(emb, eid: int, texts: list[str]) -> None:
         _RECALL_VECS[(eid, t)] = [x / norm for x in v]
 
 
-def _search_recall(query: str, top_n: int, graph) -> list[tuple[str, float]]:
-    """Nodes ranked by what they know, not by their name: each node scores its
-    best text (see _recall_texts).
+def _fact_text(f: dict) -> str:
+    """What a fact is embedded as: its concepts, then its sentence."""
+    return ", ".join(f["concepts"]) + ". " + f["text"]
 
-    `_search_embeddings` compares the query with the vector of the node's NAME:
-    a sentence like "il python lanciato dal repo importa i pacchetti sbagliati"
-    against the label `cwd-shadowing`. The name vector stays as it is for
-    dedup, which compares a keyword with a keyword: a vector full of facts
-    would make two different concepts look alike again.
 
-    Measured with the full pre_turn on a copy of the real `ai` graph
-    (2026-11-04), 18 questions on topic and 12 off topic, threshold 0.43:
-    name only 3/14 on an earlier set; name+topic+facts in one text 10/18 found
-    and 8/12 suppressed; one text per fact 14/18 and 8/12.
+def _ensure_recall_vecs(graph, per: "dict | None" = None) -> int:
+    """Make sure every recall text of ``graph`` has a vector: the nodes' texts
+    (_recall_texts) and the facts' (_fact_text), in ONE cache, so the prune
+    below never throws one kind away to make room for the other. Returns the
+    embedder id the cache is keyed by.
 
     A text is embedded only when it is new (a new fact, a new topic); the
-    vectors survive a restart in _RECALL_FILE (see the notes above it)."""
+    vectors survive a restart in _RECALL_FILE (see the notes above it). Past
+    _RECALL_INLINE_MAX missing texts they are embedded in the background, and
+    a search meanwhile skips what has no vector yet."""
     global _RECALL_VECS, _recall_warming
     emb = _get_embedder()
     eid = id(emb)
     persist = _persistable(emb)
-    per = {nd.keyword: _recall_texts(graph, nd) for nd in graph.nodes}
+    if per is None:
+        per = {nd.keyword: _recall_texts(graph, nd) for nd in graph.nodes}
     texts = {t for ts in per.values() for t in ts}
+    texts |= {_fact_text(f) for f in getattr(graph, "facts", {}).values()
+              if f["status"] == "active"}
     missing = [t for t in texts if (eid, t) not in _RECALL_VECS]
     if missing and persist:
         disk = _recall_from_disk()
@@ -418,6 +420,90 @@ def _search_recall(query: str, top_n: int, graph) -> list[tuple[str, float]]:
     if not _recall_warming and len(_RECALL_VECS) > 2 * len(texts) + 1000:
         # old facts, other graphs: drop them, keep this graph's
         _RECALL_VECS = {k: v for k, v in _RECALL_VECS.items() if k[1] in texts}
+    return eid
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", _fold_accents(text).lower()))
+
+
+def _names(concept: str, words: set[str]) -> bool:
+    """The message names ``concept`` when one of its words is a word of the
+    message, or the start of one: an Italian verb or plural ending (push ->
+    pusha, wheel -> wheels) is up to 3 letters past the stem."""
+    return any(w in words or (len(w) >= 3 and any(
+        t.startswith(w) and len(t) - len(w) <= 3 for t in words))
+        for w in _words(concept) if len(w) >= 2)
+
+
+def _search_facts(query: str, graph, k: int, min_score: float,
+                  named_bonus: float, delta: float = 1.0,
+                  embed=None) -> list[tuple[dict, float, str]]:
+    """ADR-015 D7: the facts that answer a message, not the nodes near it.
+
+    Score = cosine(message, `concepts. sentence`) + ``named_bonus`` when the
+    message names one of the fact's concepts. The vector finds the fact that
+    resembles the message; the bonus finds the one the message only names
+    ("TUTTI usano Turso" against the fact about Turso in local). An ABSOLUTE
+    floor, ``min_score``: below it nothing comes back, even with slots free.
+    Then a relative cut, ``delta`` from the best: on a hub concept every fact
+    gets the bonus, and the one about selectors rode in on a question about
+    HTTP errors.
+
+    Tuned on bench/recall.json v1 (2026-11-08), K=3: vector alone at 0.40 found
+    16/31 expected facts; with a 0.20 bonus 19/31, 12/20 messages complete, 1.30
+    unexpected facts per message; with delta 0.15, 17/31, 12/20 and 0.50. No
+    fact on the 5 off-topic messages anywhere from 0.35 up (their best: 0.29).
+    Returns ``(fact, score, concept)`` best first; ``concept`` is the first one
+    the message names, else the fact's first.
+
+    ``embed``: one function for the query AND every fact (no cache), when the
+    caller's embedding is not this module's: a test pins the rule with fixed
+    vectors, and they must never be compared with the model's."""
+    active = [f for f in getattr(graph, "facts", {}).values() if f["status"] == "active"]
+    if not active or not query.strip():
+        return []
+    if embed is None:
+        eid = _ensure_recall_vecs(graph)
+        q = _get_embedding(query)
+        vec = lambda f: _RECALL_VECS.get((eid, _fact_text(f)))  # noqa: E731
+    else:
+        q = embed(query)
+        vec = lambda f: embed(_fact_text(f))  # noqa: E731
+    words = _words(query)
+    out = []
+    for f in active:
+        v = vec(f)
+        if v is None:          # still warming
+            continue
+        named = [c for c in f["concepts"] if _names(c, words)]
+        score = sum(a * b for a, b in zip(q, v)) + (named_bonus if named else 0.0)
+        if score >= min_score:
+            out.append((f, round(score, 4),
+                        named[0] if named else (f["concepts"][0] if f["concepts"] else "")))
+    out.sort(key=lambda x: -x[1])
+    return [h for h in out if h[1] >= out[0][1] - delta][:k] if out else []
+
+
+def _search_recall(query: str, top_n: int, graph) -> list[tuple[str, float]]:
+    """Nodes ranked by what they know, not by their name: each node scores its
+    best text (see _recall_texts).
+
+    `_search_embeddings` compares the query with the vector of the node's NAME:
+    a sentence like "il python lanciato dal repo importa i pacchetti sbagliati"
+    against the label `cwd-shadowing`. The name vector stays as it is for
+    dedup, which compares a keyword with a keyword: a vector full of facts
+    would make two different concepts look alike again.
+
+    Measured with the full pre_turn on a copy of the real `ai` graph
+    (2026-11-04), 18 questions on topic and 12 off topic, threshold 0.43:
+    name only 3/14 on an earlier set; name+topic+facts in one text 10/18 found
+    and 8/12 suppressed; one text per fact 14/18 and 8/12.
+
+    A text is embedded only when it is new (a new fact, a new topic); the
+    vectors survive a restart in _RECALL_FILE (see the notes above it)."""
+    per = {nd.keyword: _recall_texts(graph, nd) for nd in graph.nodes}
+    eid = _ensure_recall_vecs(graph, per)
     q = _get_embedding(query)
     # ponytail: O(texts) Python dot products, ~30 ms for 713 texts at 500
     # nodes; numpy or a vector column in the store if MAX_NODES nears 5000.

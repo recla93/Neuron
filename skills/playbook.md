@@ -143,24 +143,25 @@ neuron_find_candidates(keywords=["kw1", "kw2", "kw3"])
 If a candidate matches your keyword with high similarity, reuse the existing
 keyword name (merge, don't create a duplicate node).
 
-### Step 3 — Store
+### Step 3 — Store facts
+Save what is worth not repeating, as facts: progress, decisions, fixes and
+debug findings, details, ideas, and what you learned about the user and their
+habits. One sentence each, with its why. 0-3 per turn; none on a trivial turn.
 ```
-neuron_store_turn(
-  topic="...",
-  domain="...",
-  intent="...",
-  sentiment="...",
-  keywords=["kw1", "kw2", "kw3", "kw4"],
-  entities=["..."],
-  tags=["..."],
-  links=[{ "source": "...", "target": "...", "link_type": "...", "weight": "...", "rationale": "..." }]
-)
+neuron_store_turn(facts=[
+  {"kind": "decision", "text": "chose https over wss: Turso rejects the ws handshake",
+   "concepts": ["turso", "websocket"]},
+  {"kind": "habit", "text": "the user checks CI after a push: do not poll it",
+   "concepts": ["ci"]}
+])
 ```
+Kinds: `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit`.
+Concepts are 1-5 nouns that index the fact; they become the turn's keywords.
+Facts are never evicted. An update is a new fact that replaces the old one:
+pass `supersedes="<id>"`, the `#id` that `pre_turn` shows next to each fact.
 
-Minimum viable call (when extraction was quick):
-```
-neuron_store_turn(topic="...", keywords=["kw1", "kw2"], links=[])
-```
+Optional extras, as before: `topic`, `keywords`, `links` (typed edges between
+concepts), `domain`, `intent`, `sentiment`, `entities`, `tags`, `references`.
 
 ### Step 4 — Confirm useful context (optional but valuable)
 If the context loaded in PRE directly influenced the response (you referenced

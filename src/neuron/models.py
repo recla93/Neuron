@@ -70,19 +70,21 @@ DRIFT_EXPIRY_TURNS       = _env_int("NEURON_DRIFT_EXPIRY_TURNS", 3)   # inactive
 SLEEP_IDLE_SECONDS       = _env_int("NEURON_SLEEP_IDLE_SECONDS", 1800)     # 30 min idle → sleep-mode on next load
 STAGE_FRESH_SECONDS      = _env_int("NEURON_STAGE_FRESH_SECONDS", 6 * 3600) # staged stimulus valid for 6h
 
-# Episodic payload (T56): nodes carry compact FACTS, not just themes.
-EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)     # cap per node; oldest dropped (consolidation-lite)
-EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 400)   # one compact sentence, ~65 words
-# 200 cut the WHY off the fact — the half an episode exists for. On a real
-# graph 7 of 9 episodes sat at exactly 200, i.e. truncated. Raising it cannot
-# run the cost up: what governs an injection is `max_tokens` (pre_turn: 200
-# tokens = 800 chars), and the cap only decides how that budget is spent.
-# Hidden grace zone: an episode past the announced cap is kept WHOLE up to
-# 1.5x, and cut only beyond that (on a word boundary). The announced cap is
-# what the writer aims at; the grace is what stops a 430-char fact from losing
-# its "why" over 30 chars. Deliberately not an env var and not in the schema: a
-# model that knows 600 is safe writes 600 every time, and the cap is 600 again.
-_EPISODE_HARD_CHARS = EPISODE_MAX_CHARS + EPISODE_MAX_CHARS // 2
+# Facts (ADR-015): the unit of memory. A fact lives in its own table and is
+# indexed by its concepts; the node is only an index entry. Facts are
+# append-only: an update is a new fact that supersedes the old one, and no
+# eviction, merge or orphan drop of a node deletes a fact (until 6.9 all four
+# did, with the per-node cap of 5).
+FACT_KINDS = ("progress", "decision", "fix", "fact", "idea", "user", "habit")
+# Advisory length the writer aims at: what governs an injection is pre_turn's
+# budget, so a fact past it is kept whole.
+EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 400)
+# Hard cut at the trust boundary only (a runaway or hostile write), not a memory
+# limit: 5x the advisory length.
+FACT_MAX_CHARS = _env_int("NEURON_FACT_MAX_CHARS", 2000)
+# How many of a node's newest facts pre_turn considers. A read window: nothing
+# past it is dropped from the store.
+EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)
 # Embedding dimension. Default 384 (the multilingual MiniLM-L12-v2 default below,
 # and the common 384-dim models). Overridable via NS_EMBED_DIM for a model with a
 # different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
@@ -227,9 +229,13 @@ _LINK_UPSERT = (
     "target_context=excluded.target_context"
 )
 
-_EPISODE_UPSERT = (
-    "INSERT INTO episodes(context, keyword, turn, text, owner, space) VALUES(?,?,?,?,?,?) "
-    "ON CONFLICT(context, keyword, turn) DO UPDATE SET text=excluded.text")
+# Facts are append-only: INSERT OR IGNORE, never an upsert that could rewrite
+# another writer's text. Only `status` changes, and only active -> superseded.
+_FACT_INSERT = (
+    "INSERT OR IGNORE INTO facts (context, id, kind, text, turn, created_at, source, "
+    "supersedes, status, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+_CONCEPT_INSERT = ("INSERT OR IGNORE INTO fact_concepts (context, fact_id, keyword) "
+                   "VALUES (?,?,?)")
 
 _VEC_UPSERT = ("INSERT OR REPLACE INTO node_vectors (context, keyword, embedding, dim) "
                "VALUES (?,?,?,?)")
@@ -335,12 +341,19 @@ class Graph:
     _dirty_links:   set = field(default_factory=set)   # link keys to upsert
     _removed_nodes: set = field(default_factory=set)   # keywords to delete
     _removed_links: set = field(default_factory=set)   # link keys to delete
-    # Episodic payload (T56): keyword -> [{"turn": int, "text": str}], capped at
-    # EPISODES_PER_NODE. Nodes carry FACTS ("we chose https because wss got 400"),
-    # not just themes. Persisted in the `episodes` table, scoped by context.
+    # Facts (ADR-015): id -> {id, kind, text, turn, created_at, source,
+    # supersedes, status, concepts}. Persisted in `facts` + `fact_concepts`.
+    facts: dict = field(default_factory=dict)
+    # Derived index, rebuilt from the ACTIVE facts: keyword -> [{"turn", "text",
+    # "id"}], oldest first. Every reader (pre_turn, recall search, export, promote)
+    # reads this, so it keeps the shape the `episodes` table had. It may hold a
+    # keyword that is not a node any more: an evicted concept that comes back
+    # finds its facts again.
     episodes: dict = field(default_factory=dict)
-    _dirty_episodes:   set = field(default_factory=set)   # (keyword, turn) to upsert
-    _removed_episodes: set = field(default_factory=set)   # (keyword, turn) to delete
+    _new_facts:     set  = field(default_factory=set)    # fact ids to INSERT
+    _new_concepts:  set  = field(default_factory=set)    # (fact_id, keyword) to INSERT
+    _moved_concepts: set = field(default_factory=set)    # (fact_id, old keyword) to DELETE
+    _fact_status:   set  = field(default_factory=set)    # fact ids whose status changed
     # Archived nodes (merged near-duplicates / dropped orphans) — recoverable,
     # flushed to the _graveyard table on save, then cleared. (E1.2/E1.3)
     _graveyard: list = field(default_factory=list)
@@ -522,8 +535,10 @@ class Graph:
         self._dirty_links.clear()
         self._removed_nodes.clear()
         self._removed_links.clear()
-        self._dirty_episodes.clear()
-        self._removed_episodes.clear()
+        self._new_facts.clear()
+        self._new_concepts.clear()
+        self._moved_concepts.clear()
+        self._fact_status.clear()
 
     def _snapshot_salience(self) -> None:
         """Record current salience/trust per node as the baseline for the next
@@ -532,60 +547,131 @@ class Graph:
         self._trust_baseline = {nd.keyword: nd.trust for nd in self.nodes}
 
     # ------------------------------------------------------------------
-    # Episodes (T56) — compact facts attached to a node
+    # Facts (ADR-015) — the unit of memory, indexed by concepts
     # ------------------------------------------------------------------
 
-    def add_episode(self, keyword: str, text: str, turn: "int | None" = None) -> dict:
-        """Attach one compact fact sentence to ``keyword`` for this turn.
+    def add_fact(self, kind: str, text: str, concepts, turn: "int | None" = None,
+                 supersedes: "str | None" = None, source: str = "model") -> dict:
+        """Store one fact, indexed under ``concepts``. Append-only.
 
-        Capped at EPISODES_PER_NODE per node (oldest dropped, its row deleted at
-        the next save). One episode per (keyword, turn): a second call in the
-        same turn overwrites.
-
-        Returns a REPORT of what the write actually did, so nothing is lost in
-        silence: ``{}`` (falsy) when nothing was stored — unknown node, or empty
-        text; otherwise ``{"stored": True}`` plus ``truncated`` (characters cut)
-        and ``dropped_turns`` (episodes evicted by the cap) when the write lost
-        something. A limit you can cross without noticing is not a limit, it's a
-        trap: the caller is expected to surface these to the user."""
-        keyword = self._norm(keyword)
-        if self._node_map.get(keyword) is None:
-            return {}
-        raw  = (text or "").strip()
-        text = raw
-        if len(raw) > _EPISODE_HARD_CHARS:
-            text = raw[:_EPISODE_HARD_CHARS].rsplit(" ", 1)[0]
+        Returns a REPORT, ``{}`` when nothing was stored (empty text):
+        ``stored``, ``id``; ``duplicate`` when the same text is already an active
+        fact (its concepts are merged instead of storing a twin, so a retried
+        store_turn is idempotent); ``truncated`` (chars cut past FACT_MAX_CHARS);
+        ``superseded`` (the id it replaced) or ``supersedes_unknown``.
+        An unknown ``kind`` is stored as ``fact``; the caller says so."""
+        text = (text or "").strip()
         if not text:
             return {}
         report: dict = {"stored": True}
-        if len(raw) > _EPISODE_HARD_CHARS:
-            # Measured from the ANNOUNCED cap, not the hard one: the number
-            # answers "how far past the limit did you go", which is what the
-            # writer needs to stay under it next time. Counting from the hard
-            # cap would hand out the grace zone, and with it the new cap.
-            report["truncated"] = len(raw) - EPISODE_MAX_CHARS
+        if len(text) > FACT_MAX_CHARS:
+            report["truncated"] = len(text) - FACT_MAX_CHARS
+            text = text[:FACT_MAX_CHARS].rsplit(" ", 1)[0]
+        concepts = list(dict.fromkeys(self._norm(c) for c in (concepts or []) if str(c).strip()))
         turn = self.turn_count if turn is None else turn
-        eps = self.episodes.setdefault(keyword, [])
-        eps[:] = [e for e in eps if e["turn"] != turn]
-        eps.append({"turn": turn, "text": text})
-        eps.sort(key=lambda e: e["turn"])
-        dropped: list[int] = []
-        while len(eps) > EPISODES_PER_NODE:
-            old = eps.pop(0)
-            dropped.append(old["turn"])
-            self._removed_episodes.add((keyword, old["turn"]))
-            self._dirty_episodes.discard((keyword, old["turn"]))
-        if dropped:
-            report["dropped_turns"] = dropped
-        self._dirty_episodes.add((keyword, turn))
-        self._removed_episodes.discard((keyword, turn))
+        twin = next((f for f in self.facts.values()
+                     if f["status"] == "active" and f["text"] == text), None)
+        if twin:
+            report.update(id=twin["id"], duplicate=True)
+            for kw in concepts:
+                if kw not in twin["concepts"]:
+                    twin["concepts"].append(kw)
+                    self._new_concepts.add((twin["id"], kw))
+                    self._index_one(kw, twin)
+        else:
+            import secrets
+            fid = secrets.token_hex(4)
+            while fid in self.facts:
+                fid = secrets.token_hex(4)
+            fact = {"id": fid, "kind": kind if kind in FACT_KINDS else "fact",
+                    "text": text, "turn": turn,
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "source": source, "supersedes": None, "status": "active",
+                    "concepts": concepts}
+            self.facts[fid] = fact
+            self._new_facts.add(fid)
+            self._new_concepts.update((fid, kw) for kw in concepts)
+            for kw in concepts:
+                self._index_one(kw, fact)
+            report["id"] = fid
+        if supersedes:
+            old = self.facts.get(str(supersedes).lstrip("#"))
+            if old and old["status"] == "active" and old["id"] != report["id"]:
+                old["status"] = "superseded"
+                self._fact_status.add(old["id"])
+                for kw in old["concepts"]:
+                    self.episodes[kw] = [e for e in self.episodes.get(kw, []) if e["id"] != old["id"]]
+                if not twin:
+                    self.facts[report["id"]]["supersedes"] = old["id"]
+                report["superseded"] = old["id"]
+            else:
+                report["supersedes_unknown"] = str(supersedes)
         self._dirty = True
         return report
 
+    def _index_one(self, kw: str, fact: dict) -> None:
+        eps = self.episodes.setdefault(kw, [])
+        eps.append({"turn": fact["turn"], "text": fact["text"], "id": fact["id"]})
+        eps.sort(key=lambda e: e["turn"])
+
+    def _rebuild_fact_index(self) -> None:
+        self.episodes.clear()
+        for f in sorted(self.facts.values(), key=lambda f: f["turn"]):
+            if f["status"] == "active":
+                for kw in f["concepts"]:
+                    self.episodes.setdefault(kw, []).append(
+                        {"turn": f["turn"], "text": f["text"], "id": f["id"]})
+
+    def _move_concept(self, old: str, new: str) -> None:
+        """A merge: every fact indexed under ``old`` is indexed under ``new``."""
+        for f in self.facts.values():
+            if old in f["concepts"]:
+                f["concepts"] = [c for c in f["concepts"] if c != old]
+                self._moved_concepts.add((f["id"], old))
+                self._new_concepts.discard((f["id"], old))
+                if new not in f["concepts"]:
+                    f["concepts"].append(new)
+                    self._new_concepts.add((f["id"], new))
+        self._rebuild_fact_index()
+        self._dirty = True
+
+    def import_episodes(self, rows) -> int:
+        """Migrate legacy ``(keyword, turn, text)`` episode rows into facts.
+
+        One fact per distinct text, indexed under every keyword that carried it
+        (store_turn copied one sentence onto each keyword of the turn), at its
+        first turn, kind ``fact`` (the real kind cannot be guessed), source
+        ``migration``. A text that is already a fact, in any status, is skipped:
+        loading twice, or an old client writing episodes after the migration,
+        never makes a twin. Returns how many facts were created."""
+        known = {f["text"] for f in self.facts.values()}
+        grouped: dict = {}
+        for kw, turn, text in rows:
+            text = (text or "").strip()
+            if not text or text in known:
+                continue
+            g = grouped.setdefault(text, {"turn": turn or 0, "concepts": []})
+            g["turn"] = min(g["turn"], turn or 0)
+            g["concepts"].append(kw)
+        for text, g in grouped.items():
+            self.add_fact("fact", text, g["concepts"], g["turn"], source="migration")
+        return len(grouped)
+
+    def add_episode(self, keyword: str, text: str, turn: "int | None" = None) -> dict:
+        """One fact of kind ``fact`` on an existing node (the pre-ADR-015 call).
+        ``{}`` for an unknown node or empty text."""
+        if self._node_map.get(self._norm(keyword)) is None:
+            return {}
+        return self.add_fact("fact", text, [keyword], turn)
+
+    def recent_facts(self, keyword: str, n: int = 2) -> list[dict]:
+        """Latest ``n`` active facts indexed under a concept, newest first."""
+        eps = self.episodes.get(self._norm(keyword), [])
+        return sorted(eps, key=lambda e: -e["turn"])[:n]
+
     def recent_episodes(self, keyword: str, n: int = 2) -> list[str]:
         """Latest ``n`` fact texts for a node, newest first (for pre_turn)."""
-        eps = self.episodes.get(self._norm(keyword), [])
-        return [e["text"] for e in sorted(eps, key=lambda e: -e["turn"])[:n]]
+        return [e["text"] for e in self.recent_facts(keyword, n)]
 
     # ------------------------------------------------------------------
     # Mutation — node
@@ -1040,7 +1126,8 @@ class Graph:
             "turn_count":   self.turn_count,
             "nodes":        [{k: v for k, v in nd.__dict__.items() if k != "vector"} for nd in self.nodes],
             "links":        [lk.__dict__ for lk in self.links],
-            "episodes":     self.episodes,   # keyword -> [{turn, text}]: the facts, not just the themes
+            "episodes":     self.episodes,   # keyword -> [{turn, text, id}]: the active facts, by concept
+            "facts":        list(self.facts.values()),   # every fact, superseded ones included
             "pruned_count": self.pruned_count,
         }
 
@@ -1240,6 +1327,7 @@ class Graph:
                 seen.add(key)
                 uniq.append(lk)
         self.links = uniq
+        self._move_concept(a, s)   # the absorbed node's facts follow it (until 6.9 they were deleted)
         self._graveyard.append({
             "keyword": a, "salience": absorbed.salience, "domain": absorbed.domain,
             "reason": f"merged into {s} (cos={round(sim, 3)})", "turn": turn,
@@ -1257,8 +1345,9 @@ class Graph:
         its incident links have been inactive for >= inactive_turns. Archived to
         _graveyard; its dangling links are dropped too.
 
-        The graveyard keeps keyword, salience and domain — NOT topic, episodes
-        or links — so a drop is only as recoverable as a backup. And on a real
+        The graveyard keeps keyword, salience and domain — NOT topic or links —
+        so a drop is only as recoverable as a backup. The node's facts are not
+        touched (ADR-015): they stay indexed under the keyword. And on a real
         graph most nodes sit at salience 0 with links long inactive: 2026-09-12
         one call archived 255 of 296 nodes. ``max_fraction`` refuses a drop
         above ``max(10, fraction * nodes)`` and says so in the report, instead
@@ -1473,6 +1562,25 @@ class Graph:
                 turn    INTEGER NOT NULL,
                 text    TEXT NOT NULL,
                 PRIMARY KEY (context, keyword, turn));
+            CREATE TABLE IF NOT EXISTS facts (
+                context    TEXT NOT NULL DEFAULT 'default',
+                id         TEXT NOT NULL,
+                kind       TEXT NOT NULL,
+                text       TEXT NOT NULL,
+                turn       INTEGER,
+                created_at TEXT NOT NULL,
+                source     TEXT NOT NULL,
+                supersedes TEXT,
+                status     TEXT NOT NULL DEFAULT 'active',
+                owner      TEXT DEFAULT '',
+                space      TEXT DEFAULT '',
+                PRIMARY KEY (context, id));
+            CREATE TABLE IF NOT EXISTS fact_concepts (
+                context TEXT NOT NULL DEFAULT 'default',
+                fact_id TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                PRIMARY KEY (context, fact_id, keyword));
+            CREATE INDEX IF NOT EXISTS idx_fact_concepts_kw ON fact_concepts(context, keyword);
             CREATE INDEX IF NOT EXISTS idx_links_source ON links(source);
             CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
             CREATE INDEX IF NOT EXISTS idx_links_turn   ON links(created_turn);
@@ -1626,6 +1734,8 @@ class Graph:
                 )
                 self._graveyard = []
 
+            self._save_facts(conn, context)
+
             # P3 — a reconcile (diff-delete) can drop rows another colleague added
             # to a shared context since we loaded. On a shared remote store, skip
             # the destructive delete unless explicitly allowed (coordinated
@@ -1690,8 +1800,6 @@ class Graph:
                              [(context, k) for k in self._removed_nodes])
             conn.executemany("DELETE FROM node_vectors WHERE context=? AND keyword=?",
                              [(context, k) for k in self._removed_nodes])
-            conn.executemany("DELETE FROM episodes WHERE context=? AND keyword=?",
-                             [(context, k) for k in self._removed_nodes])
             conn.executemany("DELETE FROM refs WHERE context=? AND keyword=?",
                              [(context, k) for k in self._removed_nodes])
         if self._removed_links:
@@ -1720,23 +1828,32 @@ class Graph:
         if link_set:
             conn.executemany(_LINK_UPSERT_ATOMIC, [self._link_row(lk, context) for lk in link_set])
 
-        # Episodes (T56): targeted deletes (cap overflow) + upsert of new facts.
-        if self._removed_episodes:
-            conn.executemany(
-                "DELETE FROM episodes WHERE context=? AND keyword=? AND turn=?",
-                [(context, k, t) for (k, t) in self._removed_episodes])
-        ep_rows = []
-        if all_rows:
-            for kw, eps in self.episodes.items():
-                ep_rows += [(context, kw, e["turn"], e["text"]) for e in eps]
-        else:
-            for (kw, t) in self._dirty_episodes:
-                for e in self.episodes.get(kw, []):
-                    if e["turn"] == t:
-                        ep_rows.append((context, kw, t, e["text"]))
-        if ep_rows:
+    def _save_facts(self, conn, context: str) -> None:
+        """Facts are additive in every save mode, so a fact never depends on
+        the node it is indexed under: rows are only INSERTed; a merge moves a
+        concept row; a supersede flips one status. Nothing else deletes them."""
+        if self._moved_concepts:
+            conn.executemany("DELETE FROM fact_concepts WHERE context=? AND fact_id=? AND keyword=?",
+                             [(context, fid, kw) for fid, kw in self._moved_concepts])
+        # A full write (fresh graph, a store that may lack rows) writes every
+        # fact, like it does every node: INSERT OR IGNORE makes it idempotent.
+        full = self._needs_full_write
+        rows = (list(self.facts.values()) if full else
+                [self.facts[fid] for fid in self._new_facts if fid in self.facts])
+        if full:
+            self._new_concepts.update((f["id"], kw) for f in rows for kw in f["concepts"])
+        if rows:
             who = (owner_identity(), current_space())
-            conn.executemany(_EPISODE_UPSERT, [r + who for r in ep_rows])
+            conn.executemany(_FACT_INSERT, [
+                (context, f["id"], f["kind"], f["text"], f["turn"], f["created_at"],
+                 f["source"], f["supersedes"], f["status"]) + who for f in rows])
+        if self._new_concepts:
+            conn.executemany(_CONCEPT_INSERT,
+                             [(context, fid, kw) for fid, kw in self._new_concepts])
+        if self._fact_status:
+            conn.executemany("UPDATE facts SET status=? WHERE context=? AND id=?",
+                             [(self.facts[fid]["status"], context, fid)
+                              for fid in self._fact_status if fid in self.facts])
 
     def _save_reconcile(self, conn, context: str, *, write_vectors: bool = True) -> None:
         """Structural reconcile (merge only): absolute upsert of every in-memory
@@ -1752,15 +1869,6 @@ class Graph:
                 conn.executemany(_VEC_UPSERT, [self._vec_row(nd, context) for nd in self.nodes])
         if self.links:
             conn.executemany(_LINK_UPSERT, [self._link_row(lk, context) for lk in self.links])
-        # Episodes (T56): reconcile writes all in-memory facts; stale episode rows
-        # of surviving nodes are left alone (harmless), those of deleted nodes are
-        # removed below together with the node.
-        ep_rows = [(context, kw, e["turn"], e["text"])
-                   for kw, eps in self.episodes.items() for e in eps]
-        if ep_rows:
-            who = (owner_identity(), current_space())
-            conn.executemany(_EPISODE_UPSERT, [r + who for r in ep_rows])
-
         mem_kw      = {nd.keyword for nd in self.nodes}
         existing_kw = {row[0] for row in
                        conn.execute("SELECT keyword FROM nodes WHERE context=?", (context,))}
@@ -1769,8 +1877,6 @@ class Graph:
             conn.executemany("DELETE FROM nodes WHERE context=? AND keyword=?",
                              [(context, k) for k in stale_nodes])
             conn.executemany("DELETE FROM node_vectors WHERE context=? AND keyword=?",
-                             [(context, k) for k in stale_nodes])
-            conn.executemany("DELETE FROM episodes WHERE context=? AND keyword=?",
                              [(context, k) for k in stale_nodes])
 
         mem_lk      = {self._link_key(lk) for lk in self.links}
@@ -1960,24 +2066,42 @@ class Graph:
                 )
                 self.links.append(link)
 
-            # Episodes (T56) — tolerate legacy/seed stores without the table.
-            self.episodes.clear()
+            # Facts (ADR-015), then the legacy `episodes` rows that are not facts
+            # yet: a store written before 6.10 — or still written by an older
+            # client on a shared store — is migrated on load, saved at the next
+            # save. The `episodes` table itself is never written again.
+            self.facts.clear()
+            try:
+                for fid, kind, text, turn, created, source, sup, status in conn.execute(
+                        "SELECT id, kind, text, turn, created_at, source, supersedes, status "
+                        "FROM facts WHERE context=?", (context,)):
+                    self.facts[fid] = {"id": fid, "kind": kind, "text": text, "turn": turn or 0,
+                                       "created_at": created, "source": source,
+                                       "supersedes": sup, "status": status, "concepts": []}
+                for fid, kw in conn.execute(
+                        "SELECT fact_id, keyword FROM fact_concepts WHERE context=?", (context,)):
+                    if fid in self.facts:
+                        self.facts[fid]["concepts"].append(kw)
+            except Exception as e:
+                log.debug("fact load skipped (table may be absent): %s", e)
+            legacy: list = []
             try:
                 if has_context:
                     erows = conn.execute(
                         "SELECT keyword, turn, text FROM episodes WHERE context=? "
-                        "ORDER BY keyword, turn", (context,))
+                        "ORDER BY turn, keyword", (context,))
                 else:
                     erows = conn.execute(
-                        "SELECT keyword, turn, text FROM episodes ORDER BY keyword, turn")
-                for kw, t, tx in erows:
-                    self.episodes.setdefault(kw, []).append({"turn": t, "text": tx})
+                        "SELECT keyword, turn, text FROM episodes ORDER BY turn, keyword")
+                legacy = list(erows)
             except Exception as e:
                 log.debug("episode load skipped (table may be absent): %s", e)
         finally:
             conn.close()
         self._rebuild_node_map()
         self._reset_tracking()
+        self._rebuild_fact_index()
+        self.import_episodes(legacy)
         # The loaded rows already live in the store, so the next save only needs
         # the dirty delta (incremental, atomic — safe under concurrent writers).
         self._needs_full_write = False

@@ -10,7 +10,8 @@ tools to the user — fold what you retrieve silently into your reasoning.
    `pre_turn(topic="<3-5 word summary>", keywords=["<2-4 concepts>"])`
    Use the returned links/nodes as invisible substrate for your answer.
 2. AFTER replying — persist what's new:
-   `store_turn(topic=..., keywords=[...], links=[...], domain=..., intent=..., sentiment=...)`
+   `store_turn(facts=[{kind, text, concepts}])`: progress, decisions, fixes,
+   details, ideas, the user and their habits. An update passes `supersedes=<#id>`.
    If the loaded context actually helped, also `confirm(keywords=[...])`.
 
 Skip both on procedural turns (ok / thanks / yes-no); skip `pre_turn` when the graph

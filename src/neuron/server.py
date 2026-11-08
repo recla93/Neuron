@@ -58,7 +58,7 @@ from neuron.models import (
     WEIGHT_ORDER, TANGENTIAL_EXPIRY_TURNS,
     SALIENCE_DECAY_THRESHOLD, SALIENCE_DECAY_AMOUNT,
     CONSOLIDATE_SIM_THRESHOLD,
-    EPISODE_MAX_CHARS, EPISODES_PER_NODE,
+    EPISODE_MAX_CHARS, EPISODES_PER_NODE, FACT_KINDS,
 
     VECTOR_DIM, pack_vector, unpack_vector, register_embed_fn,
 )
@@ -85,6 +85,7 @@ RATIONALE_MAX_LENGTH = 200
 
 # Validation limits (store_turn input bounds)
 MAX_KEYWORDS_PER_TURN  = 8
+MAX_FACTS_PER_TURN     = 5    # ADR-015: 0-3 facts is the normal turn
 MAX_ENTITIES_PER_TURN  = 15
 MAX_TAGS_PER_TURN      = 10
 MAX_REFERENCES_PER_TURN = 20
@@ -126,7 +127,11 @@ SEMANTIC_DEDUP_THRESHOLD = 0.90
 # link of the Safari bug. A fact is a sentence, so against the query it
 # separates cleanly: right fact 0.37-0.64, best wrong one <= 0.20.
 VEC_FALLBACK_DELTA = 0.20   # vector-fallback node kept if within this of the best
-FACT_DELTA = 0.15           # pre_turn fact kept if within this of the best fact
+FACT_DELTA = _config.env_float("NEURON_FACT_DELTA", 0.15)   # a fact is kept within this of the best
+# ADR-015 D7, tuned on bench/recall.json v1 (see search._search_facts)
+FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 3)
+FACT_MIN_SCORE   = _config.env_float("NEURON_FACT_MIN_SCORE", 0.40)
+FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
 
 DATA_TAG = "recalled-memory"
 
@@ -608,30 +613,48 @@ def _all_tools() -> list[Tool]:
         Tool(
             name="store_turn",
             description=(
-                "MEMORY LOOP — STEP 2 (after replying). Call this AFTER you answer a "
-                "substantive turn, to persist what is new into long-term memory. "
-                "Curate for a clean graph: topic = 3-5 words; keywords = 3-5 CONCEPT "
-                "nouns / entities / tech (never verbs or filler like 'use', 'make'); "
-                "links = typed edges between keywords (never link a keyword to itself). "
+                "MEMORY LOOP — STEP 2 (after replying). Save what is worth not repeating "
+                "as FACTS: progress, decisions, fixes, details, ideas, and what you "
+                "learned about the user and their habits. facts=[{kind, text, concepts}]: "
+                "one sentence each, with its why; concepts = 1-5 CONCEPT nouns that index "
+                "it (never verbs or filler). A fact that updates an older one passes "
+                "supersedes=<its #id, shown by pre_turn>. Facts are never evicted. "
+                "topic/keywords/links are optional extras. "
                 "Skip on trivial turns (greetings, acknowledgements, yes/no). "
                 "Field limits and pitfalls: `help`."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "topic": {"type": "string", "description": "Topic of the turn (3-5 words)"},
-                    "keywords": {"type": "array", "items": {"type": "string"}, "description": "Abstract keywords (3-5)"},
+                    "facts": {
+                        "type": "array",
+                        "description": "The memory of this turn: 0-3 facts, each one sentence.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string",   # literal: tests read the schema from source; = models.FACT_KINDS
+                                         "enum": ["progress", "decision", "fix", "fact", "idea", "user", "habit"],
+                                         "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work)"},
+                                "text": {"type": "string",
+                                         "description": f"One sentence with its why, ideally under {EPISODE_MAX_CHARS} chars."},
+                                "concepts": {"type": "array", "items": {"type": "string"},
+                                             "description": "1-5 concept nouns that index the fact"},
+                                "supersedes": {"type": "string",
+                                               "description": "Optional: id of the fact this one replaces (e.g. a3f91c02)"},
+                            },
+                            "required": ["kind", "text", "concepts"],
+                        },
+                    },
+                    "topic": {"type": "string", "description": "Optional: topic of the turn (3-5 words); defaults to the first fact"},
+                    "keywords": {"type": "array", "items": {"type": "string"}, "description": "Optional: extra concept keywords; the facts' concepts are added"},
                     "domain": {"type": "string", "description": "Free-form label (AI, backend, biology...). CAUTION: the same non-'general' domain on two consecutive turns SWITCHES the active context; keep 'general' to stay put.", "default": "general"},
                     "intent": {"type": "string", "enum": ["question", "task", "exploration", "clarification", "feedback"], "description": "Optional, defaults to 'exploration'.", "default": "exploration"},
                     "sentiment": {"type": "string", "enum": ["neutral", "positive", "critical", "urgent"], "description": "Optional, defaults to 'neutral'.", "default": "neutral"},
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
                     "episode": {
                         "type": "string",
-                        "description": (f"ONE fact sentence for this turn, max {EPISODE_MAX_CHARS} "
-                                        "chars (cut past that, not summarized). E.g. 'chose https "
-                                        "over wss because Turso rejects the ws handshake'. Attached "
-                                        "to every keyword; pre_turn surfaces it once, as a fact. "
-                                        f"A node keeps its {EPISODES_PER_NODE} most recent."),
+                        "description": ("Legacy: ONE fact sentence, stored as a fact of kind "
+                                        "'fact' indexed under every keyword. Prefer `facts`."),
                     },
                     "entities": {
                         "type": "array", "items": {"type": "string"},
@@ -670,12 +693,11 @@ def _all_tools() -> list[Tool]:
                         "description": "Links between current keywords and previous keywords",
                     },
                 },
-                # Solo topic e keywords sono davvero indispensabili: sono i due
-                # che la guidance iniettata in ogni sessione chiede sempre.
-                # domain/intent/sentiment restano nello schema (un modello che
-                # li sa li manda, e il grafo ne guadagna) ma hanno un default
-                # lato server — vedi _tool_store_turn.
-                "required": ["topic", "keywords"],
+                # Niente di obbligatorio (ADR-015 D5): una chiamata con soli
+                # `facts` e la chiamata di sempre `store_turn(topic, keywords,
+                # links)` devono passare entrambe la validazione del client. Il
+                # server rifiuta solo un turno senza fatti né keyword utili.
+                "required": [],
             },
         ),
         Tool(
@@ -1460,9 +1482,51 @@ def _semantic_twin(g, kw: str):
     return None
 
 
+def _parse_facts(arguments: dict, notes: list) -> list[dict]:
+    """The facts of a turn (ADR-015): `facts` as sent, plus the legacy `episode`
+    as one fact of kind `fact` on every keyword (concepts None). A malformed
+    item is dropped with a note, never the turn: same rule as `links`."""
+    out: list[dict] = []
+    raw = arguments.get("facts") or []
+    if not isinstance(raw, list):
+        notes.append("dropped facts: expected a list of {kind, text, concepts}")
+        raw = []
+    for item in raw[:MAX_FACTS_PER_TURN]:
+        if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+            notes.append(f"dropped fact {item!r}: expected an object with a non-empty 'text'")
+            continue
+        kind = str(item.get("kind") or "fact").strip().lower()
+        if kind not in FACT_KINDS:
+            notes.append(f"fact kind '{kind}' unknown → stored as 'fact' (use {'|'.join(FACT_KINDS)})")
+            kind = "fact"
+        cs = item.get("concepts") or []
+        cs = [str(c).strip() for c in (cs if isinstance(cs, list) else [cs]) if str(c).strip()]
+        out.append({"kind": kind, "text": str(item["text"]).strip(), "concepts": cs[:5],
+                    "supersedes": item.get("supersedes")})
+    if len(raw) > MAX_FACTS_PER_TURN:
+        notes.append(f"kept the first {MAX_FACTS_PER_TURN} facts of {len(raw)}")
+    ep = str(arguments.get("episode", "") or "").strip()
+    if ep:
+        out.append({"kind": "fact", "text": ep, "concepts": None, "supersedes": None})
+    return out
+
+
 async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
-    topic = arguments["topic"]
-    keywords = arguments["keywords"]
+    _fact_notes: list[str] = []
+    _facts_in = _parse_facts(arguments, _fact_notes)
+    # topic and keywords are optional once facts carry concepts (ADR-015 D5):
+    # the concepts index the facts, so they are the turn's keywords too.
+    keywords = [str(k) for k in (arguments.get("keywords") or [])
+                if isinstance(k, str)] if isinstance(arguments.get("keywords"), list) else []
+    for f in _facts_in:
+        for c in f["concepts"] or []:
+            if c not in keywords:
+                keywords.append(c)
+    topic = str(arguments.get("topic") or "").strip()
+    if not topic and _facts_in:
+        topic = _facts_in[0]["text"][:TOPIC_MAX_LENGTH].rsplit(" ", 1)[0] or _facts_in[0]["text"][:TOPIC_MAX_LENGTH]
+    if not topic:
+        topic = " ".join(keywords[:3])
     # domain/intent/sentiment con default. La guidance che la suite inietta in
     # OGNI sessione AI (hook Claude Code, plugin OpenCode, playbook, funnel,
     # e la coda dello stesso pre_turn) dice `store_turn(topic, keywords,
@@ -1540,6 +1604,13 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 f"dropped link {ld.get('source','?')}→{ld.get('target','?')}: {why}")
     new_links_data = _vetted_links
 
+    if len(keywords) > MAX_KEYWORDS_PER_TURN:
+        # Several facts can name more concepts than one turn's keyword cap: the
+        # first ones stay keywords, the rest are dropped from THIS turn with a
+        # note. Their facts keep the concepts that survived.
+        _cur_notes.append(f"kept {MAX_KEYWORDS_PER_TURN} of {len(keywords)} concepts: "
+                          f"dropped {', '.join(keywords[MAX_KEYWORDS_PER_TURN:])}")
+        keywords = keywords[:MAX_KEYWORDS_PER_TURN]
     err = validate_turn_input(keywords, topic, new_links_data,
                               entities=entities, tags=tags, references=references)
     if err:
@@ -1590,18 +1661,35 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                                target=_alias.get(ld["target"], ld["target"]))
                           for ld in new_links_data]
 
-    # T56: one compact fact sentence for this turn — nodes carry decisions, not
-    # just themes. On EVERY keyword: on the first only, a query landing on any
-    # other keyword of the turn never saw it (the proxy bug filed under
-    # `turso`, missed by a search on `firewall`). pre_turn shows each text once.
-    _episode_txt = str(arguments.get("episode", "") or "").strip()
-    _episode_report: dict = {}
-    for kw in (keywords if _episode_txt else []):
-        rep = g.add_episode(kw, _episode_txt, turn)
+    # ADR-015: the turn's facts. Each concept goes through the same curation and
+    # dedup as the keywords, so a fact is indexed under the node the turn really
+    # touched; the legacy `episode` (concepts None) goes on every keyword.
+    # dup-key -> the node the turn stored it under, semantic-dedup aliases included
+    _canon_kw = {_cur._dup_key(k): k for k in keywords}
+    _canon_kw.update({_cur._dup_key(a): t for a, t in _alias.items()})
+    _fact_report: list[str] = []
+    _fact_lost: dict = {}
+    for f in _facts_in:
+        cs = []
+        for c in (f["concepts"] if f["concepts"] is not None else keywords):
+            acc, _n = _cur.vet_keywords([c], _existing_map)
+            hit = _canon_kw.get(_cur._dup_key(acc[0])) if acc else None
+            if hit and hit not in cs:
+                cs.append(hit)
+        # A fact whose concepts all fell to curation is still indexed: under the
+        # turn's keywords, so it stays findable.
+        rep = g.add_fact(f["kind"], f["text"], cs or list(keywords), turn,
+                         supersedes=f["supersedes"])
+        if not rep:
+            continue
+        g_kind = g.facts[rep["id"]]["kind"]
+        _fact_report.append(f"#{rep['id']} {g_kind}"
+                            + (" (already stored)" if rep.get("duplicate") else "")
+                            + (f" supersedes #{rep['superseded']}" if rep.get("superseded") else ""))
         if "truncated" in rep:
-            _episode_report["truncated"] = rep["truncated"]   # same text, same cut
-        if "dropped_turns" in rep:
-            _episode_report.setdefault("dropped_turns", {})[g._norm(kw)] = rep["dropped_turns"]
+            _fact_lost["truncated"] = rep["truncated"]
+        if "supersedes_unknown" in rep:
+            _fact_notes.append(f"supersedes '{rep['supersedes_unknown']}': no active fact with that id")
 
     for ld in new_links_data:
         lk = Link(
@@ -1669,30 +1757,31 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     except Exception:  # noqa: BLE001
         pass
 
-    # T56: ciò che la scrittura ha perso lo dichiara la scrittura stessa —
-    # troncamento dell'episode e sfratto dei più vecchi oltre il cap. Il report
-    # di `add_episode` veniva compilato e mai emesso: il blocco stava nel return
-    # di `_tool_auto`, dove `_episode_report` NON esiste (ogni `auto` moriva di
-    # NameError). Va qui, dove il report è in scope. Assente se non si è perso
-    # niente.
-    _lost = _episode_report
+    # What the write cut, the write says (a limit you can cross without noticing
+    # is a trap). Only the trust-boundary cut is left: facts are never evicted.
     _episode_note = (
-        f"\n! episode_lost: {json.dumps(_lost, ensure_ascii=False)} — raise "
-        f"NEURON_EPISODE_MAX_CHARS / NEURON_EPISODES_PER_NODE to keep it whole."
-        if _lost else "")
+        f"\n! fact_truncated: {json.dumps(_fact_lost)} chars past NEURON_FACT_MAX_CHARS"
+        if _fact_lost else "")
+    _facts_line = (f"\nfacts: {len(_fact_report)} saved — " + ", ".join(_fact_report)
+                   if _fact_report else
+                   "\nfacts: 0 saved — this turn left no fact to recall. Pass "
+                   "facts=[{kind, text, concepts}] for what is worth not repeating.")
 
     return [TextContent(type="text", text=(
         f"Turn {turn} saved. Nodes: {len(g.nodes)}, Links: {len(g.links)}"
         + (f" (+{_co_links} same-turn)" if _co_links else "")
         + (f", pruned: {removed}" if removed else "")
+        + _facts_line
         + _episode_note
         # T65: surface the context dynamics — committed switch or pending signal
         + (f"\n⇄ context switched → '{_g.active}'" if _ctx_switched else
            (f"\n(domain signal: {_pend_dom} {_pend_n}/{CONTEXT_SWITCH_THRESHOLD} — "
             f"context will switch if it persists)" if _pend_dom else ""))
-        + _cur.curation_note(_cur_notes)   # T54: teach curation in-context
+        + _cur.curation_note(_cur_notes + _fact_notes)   # T54: teach curation in-context
         + _stimulus_block(g, keywords)   # E2.5: piggyback the top stimulus
-        + "\n→ next: pre_turn; confirm(keywords) if context helped."
+        # ADR-015 §3.3: no "→ next: pre_turn" tail any more. The session
+        # instructions and the hooks start the next turn; this one paid ~12
+        # tokens on every save to repeat them.
     ))]
 
 
@@ -2294,6 +2383,32 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         _resolve_context(search_kws_pt, 1, g_pt, "", mode_pt, focus_pt)
     g_pt._served_last = {kw for kw, _sc in nodes_pt}
     parts_pt: list[str] = []
+    # ADR-015 D7: facts first, found by what they say and by the concepts the
+    # message names, over EVERY active fact, not only those of the top nodes;
+    # an absolute floor, so an off-topic message gets none. First in the
+    # answer: the budget cut below takes links and nodes before a fact.
+    _fact_q = " ".join([str(topic_pt)] + [str(k) for k in extra_kws_pt
+                                          if isinstance(extra_kws_pt, list)]).strip()
+    try:
+        _hits = _search._search_facts(_fact_q, g_pt, FACT_RECALL_K,
+                                      FACT_MIN_SCORE, FACT_NAMED_BONUS, FACT_DELTA,
+                                      # replaced embedding (tests): used for both sides
+                                      embed=None if _get_embedding is _search._get_embedding
+                                      else _get_embedding)
+    except Exception as _e:  # noqa: BLE001 — no embedder: the graph still answers
+        # Without vectors the old window: the newest facts of the top nodes.
+        log.debug("fact recall by vector skipped: %s", _e)
+        _seen: set = set()
+        _hits = []
+        for kw, _ in nodes_pt[:_fact_nodes_pt]:
+            for e in g_pt.recent_facts(kw, EPISODES_PER_NODE):
+                f = g_pt.facts.get(e.get("id"))
+                if f and f["id"] not in _seen and len(_hits) < FACT_RECALL_K:
+                    _seen.add(f["id"])
+                    _hits.append((f, 0.0, kw))
+    if _hits:
+        parts_pt.append("facts: " + " | ".join(
+            f"[{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, _sc, kw in _hits))
     if lks:
         parts_pt.append("links:" + "|".join(
             f"{lk.source}-[{lk.weight[0]}]->{lk.target}" for lk in lks[:6]
@@ -2302,32 +2417,6 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         parts_pt.append("nodes:" + ",".join(
             f"{kw}({sc:.0f})" for kw, sc in nodes_pt[:5]
         ))
-        # T56: surface stored FACTS (episodes), newest first — "we decided X
-        # because Y", not just "we talked about X". Taken from the top
-        # fact_nodes ranked nodes, each attributed: weak convergence from
-        # several nodes beats one strong node, and unattributed facts aren't
-        # inspectable. Overflow is cut by char_budget_pt below, as before.
-        # A turn's fact sits on every keyword of that turn: each text shows
-        # once, under the best-ranked node holding it. Ranked by relevance to
-        # the query, not recency: a hub keyword (`ngrx`) carries the facts of
-        # every turn it was in, and its newest — about selectors — came first
-        # for a question about HTTP errors. Same cap as before (two per node).
-        _cand: dict[str, str] = {}
-        for kw, _ in nodes_pt[:_fact_nodes_pt]:
-            for f in g_pt.recent_episodes(kw, EPISODES_PER_NODE):
-                _cand.setdefault(f, kw)
-        _ranked = list(_cand)   # newest first per node: the order if no embedder
-        try:
-            from neuron.models import _cos
-            _qv = _get_embedding(" ".join(sorted(search_kws_pt)))
-            _rel = {f: _cos(_qv, _get_embedding(f)) for f in _ranked}
-            _ranked.sort(key=lambda f: -_rel[f])
-            _ranked = [f for f in _ranked if _rel[f] >= _rel[_ranked[0]] - FACT_DELTA]
-        except Exception as _e:  # noqa: BLE001 — relevance is an extra, never fatal
-            log.debug("fact relevance skipped: %s", _e)
-        _facts = [f"{_cand[f]}: {f}" for f in _ranked[:2 * _fact_nodes_pt]]
-        if _facts:
-            parts_pt.append("facts: " + " | ".join(_facts))
         # G1: surface file refs (project-relative paths) so a returning session
         # recalls WHERE it worked without re-searching files. Same rank window
         # as the facts, deduped in first-seen order.
@@ -2405,7 +2494,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                         f"(best={_best_sim:.2f}, soglia={_min_rel:.2f})")
         # Restano i ponti verso altri contesti: dicono dove guardare, e sono
         # l'unica cosa utile quando qui non c'e' niente.
-        parts_pt = [pp for pp in parts_pt if pp.startswith("altri contesti:")]
+        parts_pt = [pp for pp in parts_pt if pp.startswith(("altri contesti:", "facts:"))]
         lks, nodes_pt = [], []
     if _cross and _cross[0][2] > _best_sim + _config.env_float(
             "NEURON_ROUTE_MARGIN", 0.15):
@@ -2469,10 +2558,10 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # sentence is reserved for stimulus-free responses.
     if staged_line and stim_line:
         stim_line = ""   # staged is one-shot; the live stimulus returns next turn
-    tail = ("\n→ then store_turn(topic, keywords, links)."
+    tail = ("\n→ then store_turn(facts=[{kind, text, concepts}])."
             if (staged_line or stim_line) else
             "\n→ next: fold this context into your reply silently, then call "
-            "store_turn(topic, keywords, links) to persist the turn.")
+            "store_turn(facts=[{kind, text, concepts}]) for what is worth not repeating.")
     # Reinforcement-loop enforcement (2026-08-25), low-cost edition: the line
     # sits AFTER the budget (never truncated) but must stay cheap — top-2
     # keywords, three words of prose, ~12 tokens. Only with content served.
