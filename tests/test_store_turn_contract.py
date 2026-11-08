@@ -245,26 +245,22 @@ def test_dismiss_and_confirm_survive_hostile_numbers(_isolated):
 
 
 def test_pre_turn_serves_a_ready_confirm_call(_isolated):
-    """Reinforcement enforcement (2026-08-25): confirm must not depend on the
-    model's memory. When pre_turn serves content, the reply carries the ALREADY
-    WRITTEN call with the exact served keywords."""
-    _call("store_turn", {"topic": "pranzo con Ada",
-                         "keywords": ["ada", "pranzo", "venerdi"]})
+    """Reinforcement enforcement (2026-08-25), on facts since ADR-015 D8: when
+    pre_turn serves a fact, the reply carries the ALREADY WRITTEN call with its
+    id: a node is no longer what gets confirmed."""
+    _call("store_turn", {"facts": [{"kind": "fact", "text": "Ada pranza il venerdi", "concepts": ["ada"]}]})
+    fid = next(f["id"] for f in S._g.get().facts.values() if f["text"] == "Ada pranza il venerdi")
     recall = _call("pre_turn", {"topic": "ada", "keywords": ["ada"]})
-    assert "confirm(keywords=" in recall, recall
-    # suggested keywords are this turn's served ones, not a generic placeholder
-    suggerite = recall.split("confirm(keywords=")[1].split(")")[0]
-    assert '"ada"' in suggerite, f"suggested: {suggerite}, expected 'ada'"
+    assert f'confirm(facts=["{fid}"' in recall, recall
 
 
 def test_the_hint_has_a_kill_switch(_isolated, monkeypatch):
     """NEURON_CONFIRM_HINT=0 restores the previous behaviour: no line, no cost.
     A feature without a switch is a dependency."""
     monkeypatch.setenv("NEURON_CONFIRM_HINT", "0")
-    _call("store_turn", {"topic": "pranzo con Ada",
-                         "keywords": ["ada", "pranzo"]})
+    _call("store_turn", {"facts": [{"kind": "fact", "text": "Ada pranza il venerdi", "concepts": ["ada"]}]})
     recall = _call("pre_turn", {"topic": "ada", "keywords": ["ada"]})
-    assert "confirm(keywords=" not in recall, recall
+    assert "confirm(" not in recall, recall
 
 
 def test_confirm_has_a_cooldown(_isolated):

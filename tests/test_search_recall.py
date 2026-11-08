@@ -159,3 +159,31 @@ def test_a_new_fact_close_to_an_active_one_is_reported_not_merged(words, tmp_pat
     replaced = call([{"kind": "habit", "text": "no push when something breaks in use",
                       "concepts": ["push"], "supersedes": old["id"]}])
     assert "is similar to" not in replaced, replaced
+
+
+def test_a_shown_fact_written_about_or_cited_counts_one_use(words, tmp_path, monkeypatch):
+    """ADR-015 D8: shown by pre_turn, then written about (a shared concept) or
+    named by #id in the next store_turn = used. The profile never counts: it is
+    always shown."""
+    import asyncio
+    from neuron.registry import GraphRegistry
+    monkeypatch.setattr(S, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
+    monkeypatch.setattr(S, "TURSO_ENGINE", False)
+    call = lambda tool, args: asyncio.run(S.call_tool(tool, args))[0].text  # noqa: E731
+    call("store_turn", {"facts": [
+        {"kind": "fix", "text": "pacchetti importati dalla cartella sbagliata", "concepts": ["python"]},
+        {"kind": "habit", "text": "the user tests before committing", "concepts": ["python"]}]})
+    g = S._g.get()
+    fix, habit = (next(f for f in g.facts.values() if f["kind"] == k) for k in ("fix", "habit"))
+
+    shown = call("pre_turn", {"topic": "pacchetti importati cartella sbagliata",
+                              "keywords": ["python"], "profile": True})
+    assert f"#{fix['id']}" in shown and f'confirm(facts=["{fix["id"]}"])' in shown, shown
+    call("store_turn", {"facts": [{"kind": "decision", "text": "run python with -I", "concepts": ["python"]}]})
+    assert (fix["confirmed"], habit["confirmed"]) == (1, 0)
+    call("store_turn", {"facts": [{"kind": "decision", "text": "unrelated", "concepts": ["rust"]}]})
+    assert fix["confirmed"] == 1, "nothing shown since: no use"
+    call("store_turn", {"facts": [{"kind": "idea", "text": f"generalize #{fix['id']}", "concepts": ["rust"]}]})
+    assert fix["confirmed"] == 2
+    out = call("confirm", {"facts": [f"#{fix['id']}"]})
+    assert fix["id"] in out and fix["confirmed"] == 3

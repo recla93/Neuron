@@ -233,7 +233,7 @@ _LINK_UPSERT = (
 # another writer's text. Only `status` changes, and only active -> superseded.
 _FACT_INSERT = (
     "INSERT OR IGNORE INTO facts (context, id, kind, text, turn, created_at, source, "
-    "supersedes, status, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+    "supersedes, status, confirmed, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
 _CONCEPT_INSERT = ("INSERT OR IGNORE INTO fact_concepts (context, fact_id, keyword) "
                    "VALUES (?,?,?)")
 
@@ -354,6 +354,7 @@ class Graph:
     _new_concepts:  set  = field(default_factory=set)    # (fact_id, keyword) to INSERT
     _moved_concepts: set = field(default_factory=set)    # (fact_id, old keyword) to DELETE
     _fact_status:   set  = field(default_factory=set)    # fact ids whose status changed
+    _fact_conf:     set  = field(default_factory=set)    # fact ids whose `confirmed` changed
     # Archived nodes (merged near-duplicates / dropped orphans) — recoverable,
     # flushed to the _graveyard table on save, then cleared. (E1.2/E1.3)
     _graveyard: list = field(default_factory=list)
@@ -372,6 +373,7 @@ class Graph:
     # which is the feedback `confirm` asks for and the model never sends.
     # In-memory only, like `_confirm_at`: a restart costs one missed signal.
     _served_last: set = field(default_factory=set)
+    _facts_served: set = field(default_factory=set)   # fact ids the last pre_turn showed (D8)
     # Save mode for the next write:
     #   _needs_full_write  — upsert EVERY in-memory row (not just the dirty delta),
     #     additively (no deletes). Needed when the store may be missing rows we
@@ -539,6 +541,7 @@ class Graph:
         self._new_concepts.clear()
         self._moved_concepts.clear()
         self._fact_status.clear()
+        self._fact_conf.clear()
 
     def _snapshot_salience(self) -> None:
         """Record current salience/trust per node as the baseline for the next
@@ -587,7 +590,7 @@ class Graph:
                     "text": text, "turn": turn,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "source": source, "supersedes": None, "status": "active",
-                    "concepts": concepts}
+                    "concepts": concepts, "confirmed": 0}
             self.facts[fid] = fact
             self._new_facts.add(fid)
             self._new_concepts.update((fid, kw) for kw in concepts)
@@ -599,6 +602,9 @@ class Graph:
             if old and old["status"] == "active" and old["id"] != report["id"]:
                 old["status"] = "superseded"
                 self._fact_status.add(old["id"])
+                # D8: superseded means used — the new version carries the
+                # old one's confirmations, plus this one.
+                self.confirm_fact(report["id"], old.get("confirmed", 0) + 1)
                 for kw in old["concepts"]:
                     self.episodes[kw] = [e for e in self.episodes.get(kw, []) if e["id"] != old["id"]]
                 if not twin:
@@ -663,6 +669,17 @@ class Graph:
         if self._node_map.get(self._norm(keyword)) is None:
             return {}
         return self.add_fact("fact", text, [keyword], turn)
+
+    def confirm_fact(self, fid: str, delta: int = 1) -> bool:
+        """ADR-015 D8: count one use of a fact (negative = a refute, floored at
+        0). The signal lives on the fact, not on the node it is indexed under."""
+        f = self.facts.get(str(fid).lstrip("#"))
+        if not f or not delta:
+            return False
+        f["confirmed"] = max(0, f.get("confirmed", 0) + int(delta))
+        self._fact_conf.add(f["id"])
+        self._dirty = True
+        return True
 
     def recent_facts(self, keyword: str, n: int = 2) -> list[dict]:
         """Latest ``n`` active facts indexed under a concept, newest first."""
@@ -1248,6 +1265,10 @@ class Graph:
             if missing and not _db.REMOTE_TURSO:
                 conn.execute(f"UPDATE {table} SET owner=?, space=?",
                              (owner_identity(), current_space()))
+        # ADR-015 D8: how many times a fact was used (shown then cited, superseded
+        # or confirmed). Its own ALTER: a store from before it reads 0.
+        if self._table_cols(conn, "facts") and "confirmed" not in self._table_cols(conn, "facts"):
+            conn.execute("ALTER TABLE facts ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0")
 
     @staticmethod
     def _create_unique(conn, name: str, table: str, cols: str, *, dedupe_group: str) -> None:
@@ -1590,6 +1611,7 @@ class Graph:
                 status     TEXT NOT NULL DEFAULT 'active',
                 owner      TEXT DEFAULT '',
                 space      TEXT DEFAULT '',
+                confirmed  INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (context, id));
             CREATE TABLE IF NOT EXISTS fact_concepts (
                 context TEXT NOT NULL DEFAULT 'default',
@@ -1862,7 +1884,8 @@ class Graph:
             who = (owner_identity(), current_space())
             conn.executemany(_FACT_INSERT, [
                 (context, f["id"], f["kind"], f["text"], f["turn"], f["created_at"],
-                 f["source"], f["supersedes"], f["status"]) + who for f in rows])
+                 f["source"], f["supersedes"], f["status"], f.get("confirmed", 0)) + who
+                for f in rows])
         if self._new_concepts:
             conn.executemany(_CONCEPT_INSERT,
                              [(context, fid, kw) for fid, kw in self._new_concepts])
@@ -1870,6 +1893,10 @@ class Graph:
             conn.executemany("UPDATE facts SET status=? WHERE context=? AND id=?",
                              [(self.facts[fid]["status"], context, fid)
                               for fid in self._fact_status if fid in self.facts])
+        if self._fact_conf:
+            conn.executemany("UPDATE facts SET confirmed=? WHERE context=? AND id=?",
+                             [(self.facts[fid].get("confirmed", 0), context, fid)
+                              for fid in self._fact_conf if fid in self.facts])
 
     def _save_reconcile(self, conn, context: str, *, write_vectors: bool = True) -> None:
         """Structural reconcile (merge only): absolute upsert of every in-memory
@@ -2088,12 +2115,18 @@ class Graph:
             # save. The `episodes` table itself is never written again.
             self.facts.clear()
             try:
-                for fid, kind, text, turn, created, source, sup, status in conn.execute(
-                        "SELECT id, kind, text, turn, created_at, source, supersedes, status "
+                # `confirmed` (ADR-015 D8) is absent from a store not yet saved
+                # by this version: read it as 0 there, the next save adds it.
+                cols = "id, kind, text, turn, created_at, source, supersedes, status"
+                has_conf = "confirmed" in self._table_cols(conn, "facts")
+                for row in conn.execute(
+                        f"SELECT {cols}{', confirmed' if has_conf else ''} "
                         "FROM facts WHERE context=?", (context,)):
+                    fid, kind, text, turn, created, source, sup, status = row[:8]
                     self.facts[fid] = {"id": fid, "kind": kind, "text": text, "turn": turn or 0,
                                        "created_at": created, "source": source,
-                                       "supersedes": sup, "status": status, "concepts": []}
+                                       "supersedes": sup, "status": status, "concepts": [],
+                                       "confirmed": (row[8] or 0) if has_conf else 0}
                 for fid, kw in conn.execute(
                         "SELECT fact_id, keyword FROM fact_concepts WHERE context=?", (context,)):
                     if fid in self.facts:

@@ -217,3 +217,28 @@ def test_legacy_episodes_become_one_fact_per_text(tmp_path):
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 3, \
             "the legacy table is read, never rewritten"
+
+
+# --- ADR-015 D8: the use of a fact is counted on the fact -----------------
+
+def test_confirmations_persist_and_a_store_without_the_column_migrates(tmp_path):
+    path = str(tmp_path / "g.db")
+    g = _graph("wal")
+    f = g.add_fact("fix", "pyturso 0.6.1 keeps the WAL locked", ["wal"], 1)
+    g.save_sqlite(path)
+    with sqlite3.connect(path) as c:             # a store written before D8
+        c.execute("ALTER TABLE facts DROP COLUMN confirmed")
+    g2 = Graph(); g2.load_sqlite(path)
+    assert g2.facts[f["id"]]["confirmed"] == 0
+    g2.confirm_fact(f["id"]); g2.confirm_fact("#" + f["id"])
+    assert _reload(g2, path).facts[f["id"]]["confirmed"] == 2
+
+
+def test_a_superseding_fact_carries_the_uses_of_the_old_one():
+    g = _graph("backup")
+    old = g.add_fact("progress", "memory only on this PC", ["backup"], 1)
+    g.confirm_fact(old["id"], 3)
+    new = g.add_fact("progress", "a copy on the external disk", ["backup"], 2, supersedes=old["id"])
+    assert g.facts[new["id"]]["confirmed"] == 4          # 3 + superseding is a use
+    assert not g.confirm_fact("nope") and g.confirm_fact(old["id"], -9)
+    assert g.facts[old["id"]]["confirmed"] == 0          # a refute is floored at 0

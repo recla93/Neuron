@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import os
 import weakref
 from typing import Any
@@ -774,14 +775,19 @@ def _all_tools() -> list[Tool]:
         Tool(
             name="confirm",
             description=(
-                "Feedback signal: confirm that context retrieved from the graph was useful. "
-                "Boosts salience of specified keywords so they surface more prominently in "
-                "future get_context calls. Call this when retrieved context directly influenced "
-                "your response. Skipping is safe — it only affects future retrieval quality."
+                "Feedback signal: a recalled fact (or concept) was useful. `facts`: the #ids "
+                "pre_turn showed that shaped your answer — each counts one use (ADR-015 D8). "
+                "`keywords`: concepts, boosting their salience. Skipping is safe; citing or "
+                "superseding a fact in store_turn counts as a use too."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "facts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ids of recalled facts that were useful (as shown: #0a1b2c3d)",
+                    },
                     "keywords": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -799,7 +805,7 @@ def _all_tools() -> list[Tool]:
                     },
                     "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
                 },
-                "required": ["keywords"],
+                "required": [],
             },
         ),
         Tool(
@@ -1716,6 +1722,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _canon_kw.update({_cur._dup_key(a): t for a, t in _alias.items()})
     _fact_report: list[str] = []
     _fresh: list[str] = []          # new facts that replace nothing: D6 checks them
+    _turn_ids: set = set()          # every fact this turn stored or restated (D8)
     _fact_lost: dict = {}
     for f in _facts_in:
         cs = []
@@ -1731,6 +1738,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         if not rep:
             continue
         g_kind = g.facts[rep["id"]]["kind"]
+        _turn_ids.add(rep["id"])
         if not (rep.get("duplicate") or rep.get("superseded") or f["supersedes"]):
             _fresh.append(rep["id"])
         _fact_report.append(f"#{rep['id']} {g_kind}"
@@ -1740,6 +1748,22 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             _fact_lost["truncated"] = rep["truncated"]
         if "supersedes_unknown" in rep:
             _fact_notes.append(f"supersedes '{rep['supersedes_unknown']}': no active fact with that id")
+    # ADR-015 D8: a fact was used when the last pre_turn showed it and this
+    # turn writes about one of its concepts, or names it by #id. One use per
+    # fact per turn. The profile (user/habit) is never in the served set.
+    _used: set = set()
+    _named = {c for fid in _turn_ids for c in g.facts[fid]["concepts"]}
+    for fid in getattr(g, "_facts_served", set()):
+        f = g.facts.get(fid)
+        if f and fid not in _turn_ids and set(f["concepts"]) & _named:
+            _used.add(fid)
+    for fid in _turn_ids:
+        _used.update(c for c in re.findall(r"#([0-9a-f]{8})\b", g.facts[fid]["text"])
+                     if c not in _turn_ids and c in g.facts)
+    for fid in _used:
+        g.confirm_fact(fid)
+    g._facts_served = set()
+
     # ADR-015 §3.2: a fact gets its vector when it is written (~120 ms each),
     # so the next recall finds it even while a cold cache warms in the
     # background. Best-effort: without an embedder the fact is stored anyway.
@@ -2542,6 +2566,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 if f["id"] not in _seen_ids]
     _seen_ids |= {f["id"] for f in _profile}
     _hits = [h for h in _hits if h[0]["id"] not in _seen_ids]
+    g_pt._facts_served = {h[0]["id"] for h in _hits}   # D8: not the profile, always shown
     if _hits:
         parts_pt.append("facts: " + " | ".join(
             f"[{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, _sc, kw in _hits))
@@ -2706,9 +2731,9 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # Reinforcement-loop enforcement (2026-08-25), low-cost edition: the line
     # sits AFTER the budget (never truncated) but must stay cheap — top-2
     # keywords, three words of prose, ~12 tokens. Only with content served.
-    _served = [kw for kw, _sc in nodes_pt[:2]]
+    _served = [h[0]["id"] for h in _hits[:2]]          # D8: confirm facts, not nodes
     if _served and _confirm_hint_enabled():
-        tail += ("\n→ useful? confirm(keywords="
+        tail += ("\n→ useful? confirm(facts="
                  f"{json.dumps(_served, ensure_ascii=False)})")
     out_pt = out_pt + staged_line + stim_line + tail
     return [TextContent(type="text", text=out_pt)]
@@ -2730,9 +2755,13 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     for kw in keywords:
         {"confirmed": confirmed, "cooled": cooled, "skipped": skipped}[
             _reinforce(g, kw, confidence, boost)].append(kw)
-    if confirmed:
+    # ADR-015 D8: the signal on the fact; a refute counts one back.
+    facts_ok = [str(f).lstrip("#") for f in (arguments.get("facts") or [])
+                if g.confirm_fact(f, 1 if confidence >= 0 else -1)]
+    if confirmed or facts_ok:
         _g.save(ctx or None)
     return [TextContent(type="text", text=json.dumps({
+        **({"facts_confirmed": facts_ok} if arguments.get("facts") else {}),
         "confirmed": confirmed,
         "boost": boost,
         "confidence": confidence,
