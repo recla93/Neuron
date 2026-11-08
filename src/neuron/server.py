@@ -1850,7 +1850,8 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
            (f"\n(domain signal: {_pend_dom} {_pend_n}/{CONTEXT_SWITCH_THRESHOLD} — "
             f"context will switch if it persists)" if _pend_dom else ""))
         + _cur.curation_note(_fact_notes + _cur_notes)   # facts first: max 3 notes are shown
-        + _stimulus_block(g, keywords)   # E2.5: piggyback the top stimulus
+        + _stimulus_block(g, keywords, {fid for fid, f in g.facts.items()   # E2.5: never
+                                        if f["turn"] == turn})              # a fact of this turn
         # ADR-015 §3.3: no "→ next: pre_turn" tail any more. The session
         # instructions and the hooks start the next turn; this one paid ~12
         # tokens on every save to repeat them.
@@ -2689,7 +2690,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.
     staged = g_pt.take_staged_stimulus()
     staged_line = f"\n🧠 staged: {staged}" if staged else ""
-    stim_line = _stimulus_block(g_pt, search_kws_pt)
+    stim_line = _stimulus_block(g_pt, search_kws_pt,
+                                _seen_ids | {h[0]["id"] for h in _hits})
     # A4: don't stack staged + live stimulus + a long guide line. When any
     # stimulus is present the short tail is enough; the long teaching
     # sentence is reserved for stimulus-free responses.

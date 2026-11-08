@@ -23,6 +23,8 @@ def _g():
                     weight="medium", rationale="", created_turn=15, last_active_turn=15))
     g.add_link(Link(source="servlet", target="cors", link_type="deepening",
                     weight="tangential", rationale="", created_turn=5, last_active_turn=5))
+    for kw in ("spring", "servlet", "cors"):
+        g.add_fact("decision", f"a decision about {kw}", [kw], 5)
     return g
 
 

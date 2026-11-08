@@ -771,7 +771,7 @@ class TestSemanticFlashes:
             g.add_node(Node(keyword="docker", turn=0, topic="t", domain="architecture",
                             sentiment="neutral", salience=5))
             out = _build_context_window(_extraction(["kubernetes"]), turn=3, graph=g)
-            assert "Flash semantici" not in out
+            assert "Semantic flashes" not in out
 
     def test_no_flashes_when_disabled(self):
         with self._isolated(search=lambda *a, **k: [("docker", 0.9)], flash=False):
@@ -779,7 +779,7 @@ class TestSemanticFlashes:
             g.add_node(Node(keyword="docker", turn=0, topic="t", domain="architecture",
                             sentiment="neutral", salience=5))
             out = _build_context_window(_extraction(["kubernetes"]), turn=10, graph=g)
-            assert "Flash semantici" not in out
+            assert "Semantic flashes" not in out
 
     # -- 1. dormant pulse ----------------------------------------------------
 
@@ -884,7 +884,7 @@ class TestSemanticFlashes:
             _srv._g._active = "default"
             out = _build_context_window(_extraction(["kotlin"], domain="backend"),
                                         turn=10, graph=active_g)
-            assert "Flash semantici" in out
+            assert "Semantic flashes" in out
             n_flashes = out.count("💤") + out.count("🔗") + out.count("⚡")
             assert n_flashes == 2       # capped at top-2, not all three
 

@@ -99,7 +99,7 @@ def _auto_link(new_kw: list[str], turn: int, graph=None) -> list[Link]:
 def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -> str:
     """Build the optimal context window: active links + salient nodes + semantic flashes.
 
-    Flash semantici (3 types, only when flash_enabled and turn > 3):
+    Semantic flashes (3 types, only when flash_enabled and turn > 3):
       1. Dormant pulse — high-salience node not mentioned in ≥ TANGENTIAL_EXPIRY_TURNS turns,
          semantically close to current keywords. Surfaces forgotten knowledge.
       2. Cross-domain spark — semantically similar node from a *different* loaded context graph.
@@ -253,7 +253,7 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
 
         if candidates:
             candidates.sort(key=lambda x: -x[0])
-            parts.append("\nFlash semantici:")
+            parts.append("\nSemantic flashes:")
             for _score, fl in candidates[:MAX_FLASH_CANDIDATES]:   # top-2 by activation (E2.4)
                 parts.append(f"  {fl}")
 
@@ -266,7 +266,7 @@ _stim_recent: dict[str, int] = {}
 STIM_ECHO_COOLDOWN = 5
 
 
-def _stimulus_block(g, keywords) -> str:
+def _stimulus_block(g, keywords, skip=()) -> str:
     """Compact one-line associative stimulus for piggybacking on tool responses
     (E2.5, reshaped by T66). Candidates come from ``stimulus_candidates`` —
     activation × novelty bonuses, so it serves BOTH recall (useful memory,
@@ -280,7 +280,7 @@ def _stimulus_block(g, keywords) -> str:
         return ""
     cands = g.stimulus_candidates(list(keywords), k=2)
     turn = g.turn_count
-    pick = None
+    pick = fact = None
     for c in cands:
         # Floor on SCORE, not raw act (field test 2026-07-13): the list is
         # score-sorted, so an act-floor here (a) broke iteration order semantics
@@ -291,13 +291,34 @@ def _stimulus_block(g, keywords) -> str:
             break   # score-sorted: everything after is lower — stop cleanly
         if turn - _stim_recent.get(c["keyword"], -999) <= STIM_ECHO_COOLDOWN:
             continue   # anti-echo: recently emitted, let something else surface
-        pick = c
-        break
+        # ADR-016 D2, here too: a stimulus is a fact or nothing. Bare paths
+        # ("🧠 sessione ⇢ commit (recall)", live 2026-11-08) gave the model
+        # two names and nothing to act on.
+        fact = _spark_fact(g, c["keyword"], set(skip))
+        if fact:
+            pick = c
+            break
     if pick is None:
         return ""
     _stim_recent[pick["keyword"]] = turn
-    # Always show the connection (field test: a bare keyword doesn't fire the
-    # impulse) — 1 hop included: "java ⇢ spring", 2 hops: "java ⇢ servlet ⇢ cors".
+    # The connection travels with the fact: 1 hop "java ⇢ spring", 2 hops
+    # "java ⇢ servlet ⇢ cors".
     path = " ⇢ ".join(pick["path"]) if pick["hops"] >= 1 else pick["keyword"]
     why = ", ".join(pick["reasons"][:2])
-    return f"\n🧠 {path} ({why})"[:s.STIMULUS_MAX_CHARS]
+    head, tail = f"\n🧠 [{fact['kind']}] ", f" ({path}; {why}) #{fact['id']}"
+    room = max(20, s.STIMULUS_MAX_CHARS - len(head) - len(tail))
+    text = fact["text"] if len(fact["text"]) <= room else fact["text"][:room - 1].rstrip() + "…"
+    return head + text + tail
+
+
+def _spark_fact(g, keyword: str, skip: set) -> "dict | None":
+    """The newest active idea/decision/fix (or migrated `fact`) under a concept,
+    not one of ``skip`` (already in this answer or this session)."""
+    for e in g.recent_facts(keyword, 5):
+        f = getattr(g, "facts", {}).get(e.get("id"))
+        # A model's `fact` is a detail; a migrated one is an old episode (as the flash).
+        if (f and f["id"] not in skip and f["status"] == "active"
+                and (f["kind"] in ("idea", "decision", "fix")
+                     or (f["kind"] == "fact" and f.get("source") == "migration"))):
+            return f
+    return None
