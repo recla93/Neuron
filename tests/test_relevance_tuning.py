@@ -227,7 +227,7 @@ def test_profile_respects_its_cap_and_is_not_repeated_as_a_fact(tmp_path, monkey
     g, call = _setup(tmp_path, monkeypatch, {"commit": [1.0, 0.0, 0.0]})
     _node(g, "commit")
     keep = g.add_fact("habit", "commit only after a usage test", ["commit"], 2)
-    g.add_fact("habit", "x" * 700, ["commit"], 1)            # older, past the cap
+    g.add_fact("habit", "x" * 1100, ["commit"], 1)           # older, past the cap
     out = call("pre_turn", {"topic": "commit", "keywords": ["commit"], "profile": True})
     assert out.count(f"#{keep['id']}") == 1, out             # in the profile, not again in facts
     profile = out.split("profile: ", 1)[1].split(" | facts:", 1)[0]

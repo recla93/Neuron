@@ -134,9 +134,10 @@ FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 3)
 FACT_MIN_SCORE   = _config.env_float("NEURON_FACT_MIN_SCORE", 0.40)
 FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
 # ADR-015 D7.1: user/habit facts on the first call of a session, newest first.
-# shortcut: a fixed cap drops the oldest past it (3 habits = 434 chars on
-# 2026-11-08); rank by confirmations once D8 counts them.
-PROFILE_MAX_CHARS = _config.env_int("NEURON_PROFILE_MAX_CHARS", 600)
+# shortcut: a fixed cap drops the oldest past it; 600 dropped 2 of 4 live
+# (one long `user` fact, 2026-11-08), 4 now take ~850. Rank by `confirmed`
+# when the profile outgrows it.
+PROFILE_MAX_CHARS = _config.env_int("NEURON_PROFILE_MAX_CHARS", 1000)
 # ADR-015 D6, measured 2026-11-08 on `backend`: 33 pairs of distinct active facts
 # (same kind, a shared concept) top out at 0.73; restated facts 0.92-0.96, a
 # fact and its newer progress 0.64-0.80. 0.75: no false alarm, every restatement.
