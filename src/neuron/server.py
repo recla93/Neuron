@@ -132,6 +132,10 @@ FACT_DELTA = _config.env_float("NEURON_FACT_DELTA", 0.15)   # a fact is kept wit
 FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 3)
 FACT_MIN_SCORE   = _config.env_float("NEURON_FACT_MIN_SCORE", 0.40)
 FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
+# ADR-015 D7.1: user/habit facts on the first call of a session, newest first.
+# shortcut: a fixed cap drops the oldest past it (3 habits = 434 chars on
+# 2026-11-08); rank by confirmations once D8 counts them.
+PROFILE_MAX_CHARS = _config.env_int("NEURON_PROFILE_MAX_CHARS", 600)
 # ADR-016 D2: a flash is a dormant idea/decision/fix above this floor AND linked
 # to the message (a concept shared with a recalled fact, or named). On
 # bench/recall.json v1, linked, 0.40: 6 of 20 real messages, 0 of 5 off-topic;
@@ -1122,6 +1126,11 @@ def _all_tools() -> list[Tool]:
                         "description": "Active task for focus mode (injected by the GM proxy from the blackboard).",
                         "default": "",
                     },
+                    "profile": {
+                        "type": "boolean",
+                        "description": "Also return the active `user` and `habit` facts (who the user is, how they work), like MEMORY.md. Once per session, on the first call; GM sets it for you.",
+                        "default": False,
+                    },
                     "fact_nodes": {
                         "type": "integer",
                         "description": f"How many top-ranked nodes contribute facts/files (default {FACT_NODES}, minimum 1). Raise it for broader recall, drop it to 1 for the top node only.",
@@ -2053,6 +2062,19 @@ def _dormant_facts(g, near: str, threshold: int, top_n: int, exclude: set) -> st
         f"  [{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, kw in rows[:top_n]])
 
 
+def _profile_facts(g, cap: int) -> list:
+    """Active user/habit facts, newest first, as many as fit in `cap` chars."""
+    out, used = [], 0
+    for f in sorted((f for f in g.facts.values()
+                     if f["status"] == "active" and f["kind"] in ("user", "habit")),
+                    key=lambda f: f["turn"] or 0, reverse=True):
+        used += len(f["text"]) + 20          # "[habit] ... #12345678 | "
+        if used > cap:
+            break
+        out.append(f)
+    return out
+
+
 def _fact_hits(query: str, g, k: int, floor: float, delta: float) -> list:
     """search._search_facts with the recall bonus. A replaced embedding (tests)
     is used for the query and the facts alike, never mixed with the model's."""
@@ -2490,6 +2512,9 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 if f and f["id"] not in _seen and len(_hits) < FACT_RECALL_K:
                     _seen.add(f["id"])
                     _hits.append((f, 0.0, kw))
+    # ADR-015 D7.1: who the user is and how they work, whatever the message.
+    _profile = _profile_facts(g_pt, PROFILE_MAX_CHARS) if arguments.get("profile") else []
+    _hits = [h for h in _hits if h[0]["id"] not in {f["id"] for f in _profile}]
     if _hits:
         parts_pt.append("facts: " + " | ".join(
             f"[{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, _sc, kw in _hits))
@@ -2627,8 +2652,12 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # budget resta quello di sempre ma si applica al contesto, che e' la
     # parte che puo' crescere.
     ctx_out_pt = _fit(ctx_text_pt, char_budget_pt)
+    if _profile:   # its own cap, outside the context budget: never cut by it
+        ctx_out_pt = "profile: " + " | ".join(
+            f"[{f['kind']}] {f['text']} #{f['id']}" for f in _profile) + (
+            f" | {ctx_out_pt}" if parts_pt else "")
     out_pt = "\n".join([status_line, *warns_pt,
-                        _as_data(ctx_out_pt) if parts_pt else ctx_out_pt])
+                        _as_data(ctx_out_pt) if parts_pt or _profile else ctx_out_pt])
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
     # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.

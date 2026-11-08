@@ -200,3 +200,35 @@ def test_italian_verb_endings_name_the_concept():
                          ("pushiamo la release", "push"), ("le wheels vecchie", "wheel")):
         assert _names(concept, _words(msg)), (msg, concept)
     assert not _names("test", _words("testimonianze del processo")), "a short stem must not reach every word"
+
+
+# --- ADR-015 D7.1: user/habit facts whatever the message, once per session ---
+
+def test_profile_brings_user_and_habit_facts_on_any_message(tmp_path, monkeypatch):
+    """"possiamo committare?" scored 0.33 against the habit about commits, under
+    the 0.40 floor (live, 2026-11-08): by similarity it never came back."""
+    g, call = _setup(tmp_path, monkeypatch, {"turso": [1.0, 0.0, 0.0]})
+    _node(g, "commit")
+    habit = g.add_fact("habit", "Never commit before a real usage test.", ["commit"], 1)
+    user = g.add_fact("user", "The user is Italian and codes in English.", ["lingua"], 2)
+    old = g.add_fact("habit", "Old habit, replaced.", ["commit"], 1)
+    g.add_fact("habit", "New habit.", ["commit"], 3, supersedes=old["id"])
+    g.add_fact("decision", "Turso in local too.", ["turso"], 1)
+
+    out = call("pre_turn", {"topic": "carbonara recipe", "profile": True})
+    assert "profile: [habit] New habit." in out, out          # newest first
+    for f in (habit, user):
+        assert f"#{f['id']}" in out, out
+    assert "Old habit" not in out and "Turso in local" not in out, out
+    assert "profile:" not in call("pre_turn", {"topic": "carbonara recipe"})
+
+
+def test_profile_respects_its_cap_and_is_not_repeated_as_a_fact(tmp_path, monkeypatch):
+    g, call = _setup(tmp_path, monkeypatch, {"commit": [1.0, 0.0, 0.0]})
+    _node(g, "commit")
+    keep = g.add_fact("habit", "commit only after a usage test", ["commit"], 2)
+    g.add_fact("habit", "x" * 700, ["commit"], 1)            # older, past the cap
+    out = call("pre_turn", {"topic": "commit", "keywords": ["commit"], "profile": True})
+    assert out.count(f"#{keep['id']}") == 1, out             # in the profile, not again in facts
+    profile = out.split("profile: ", 1)[1].split(" | facts:", 1)[0]
+    assert "x" * 50 not in profile, out          # past the cap; relevance may still bring it
