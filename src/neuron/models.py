@@ -891,13 +891,29 @@ class Graph:
         # (seeding from all top-salient nodes would starve a tiny graph of targets).
         top = sorted(self.nodes, key=lambda n: -n.salience)
         seeds = self.last_keywords or ([top[0].keyword] if top else [])
-        ranked = self.spreading_activation(seeds, k=2) if seeds else []
-        if ranked:
-            kw, act = ranked[0]
-            self.staged_stimulus = f"{kw} (act={act:.2f})"
-            self._staged_ts = now
+        ranked = self.spreading_activation(seeds, k=5) if seeds else []
+        # ADR-016 D2: a fact or nothing ("🧠 staged: release (act=3.50)" was a
+        # bare name, live 2026-11-08). The first reached node that holds one.
+        for kw, _act in ranked:
+            f = self.spark_fact(kw)
+            if f:
+                self.staged_stimulus = f"[{f['kind']}] {f['text'][:160]} ({kw}) #{f['id']}"
+                self._staged_ts = now
+                break
         return {"consolidated": do_consolidate, "actions": actions,
                 "staged": self.staged_stimulus}
+
+    def spark_fact(self, keyword: str, skip: "set | frozenset" = frozenset()) -> "dict | None":
+        """The newest active idea/decision/fix under a concept (or a migrated
+        `fact`, an old episode), not one of ``skip``. What a stimulus may show:
+        never user/habit, never a model's `fact` (a detail)."""
+        for e in self.recent_facts(keyword, 5):
+            f = self.facts.get(e.get("id"))
+            if (f and f["id"] not in skip and f["status"] == "active"
+                    and (f["kind"] in ("idea", "decision", "fix")
+                         or (f["kind"] == "fact" and f.get("source") == "migration"))):
+                return f
+        return None
 
     def take_staged_stimulus(self, now: "float | None" = None,
                              fresh: float = STAGE_FRESH_SECONDS) -> "str | None":

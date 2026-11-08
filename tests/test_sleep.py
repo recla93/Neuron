@@ -34,11 +34,20 @@ def test_sleep_skipped_without_timestamp():
     assert g.sleep_maybe() is None
 
 
-def test_sleep_prestages_top_stimulus_when_idle():
+def test_sleep_prestages_a_fact_of_the_top_stimulus_when_idle():
     g = _g(); g._loaded_ts = time.time() - (m.SLEEP_IDLE_SECONDS + 10)
+    f = g.add_fact("decision", "django admin stays off in production", ["django"], 1)
     rep = g.sleep_maybe()
     assert rep is not None and rep["consolidated"] is False
-    assert g.staged_stimulus and "django" in g.staged_stimulus
+    assert g.staged_stimulus == f"[decision] django admin stays off in production (django) #{f['id']}"
+
+
+def test_sleep_stages_nothing_without_a_fact():
+    """ADR-016 D2: "🧠 staged: release (act=3.50)" was a bare name (2026-11-08)."""
+    g = _g(); g._loaded_ts = time.time() - (m.SLEEP_IDLE_SECONDS + 10)
+    g.add_fact("habit", "the user deploys on Fridays", ["django"], 1)   # personal: never staged
+    g.sleep_maybe()
+    assert g.staged_stimulus is None
 
 
 def test_sleep_consolidate_flag_runs_without_error():

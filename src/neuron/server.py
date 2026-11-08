@@ -2689,9 +2689,11 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # so the hint is always present and never truncated away (~15 tokens).
     # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.
     staged = g_pt.take_staged_stimulus()
+    _shown = _seen_ids | {h[0]["id"] for h in _hits}
+    if staged and any(f"#{i}" in staged for i in _shown):
+        staged = None                 # D7: not a fact this session already saw
     staged_line = f"\n🧠 staged: {staged}" if staged else ""
-    stim_line = _stimulus_block(g_pt, search_kws_pt,
-                                _seen_ids | {h[0]["id"] for h in _hits})
+    stim_line = _stimulus_block(g_pt, search_kws_pt, _shown)
     # A4: don't stack staged + live stimulus + a long guide line. When any
     # stimulus is present the short tail is enough; the long teaching
     # sentence is reserved for stimulus-free responses.

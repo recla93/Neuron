@@ -294,7 +294,7 @@ def _stimulus_block(g, keywords, skip=()) -> str:
         # ADR-016 D2, here too: a stimulus is a fact or nothing. Bare paths
         # ("🧠 sessione ⇢ commit (recall)", live 2026-11-08) gave the model
         # two names and nothing to act on.
-        fact = _spark_fact(g, c["keyword"], set(skip))
+        fact = g.spark_fact(c["keyword"], set(skip))
         if fact:
             pick = c
             break
@@ -309,16 +309,3 @@ def _stimulus_block(g, keywords, skip=()) -> str:
     room = max(20, s.STIMULUS_MAX_CHARS - len(head) - len(tail))
     text = fact["text"] if len(fact["text"]) <= room else fact["text"][:room - 1].rstrip() + "…"
     return head + text + tail
-
-
-def _spark_fact(g, keyword: str, skip: set) -> "dict | None":
-    """The newest active idea/decision/fix (or migrated `fact`) under a concept,
-    not one of ``skip`` (already in this answer or this session)."""
-    for e in g.recent_facts(keyword, 5):
-        f = getattr(g, "facts", {}).get(e.get("id"))
-        # A model's `fact` is a detail; a migrated one is an old episode (as the flash).
-        if (f and f["id"] not in skip and f["status"] == "active"
-                and (f["kind"] in ("idea", "decision", "fix")
-                     or (f["kind"] == "fact" and f.get("source") == "migration"))):
-            return f
-    return None
