@@ -22,8 +22,7 @@ def _names(S):
 
 def test_the_loop_tools_are_announced_and_the_admin_ones_are_not(srv):
     names = _names(srv)
-    assert {"pre_turn", "store_turn", "confirm", "dismiss", "find_candidates",
-            "get_context", "help", "skill"} <= names
+    assert {"pre_turn", "store_turn", "confirm", "help", "skill", "switch_context"} <= names
     assert not (names & srv._ADMIN_TOOLS), names & srv._ADMIN_TOOLS
     # served regardless: the dispatch table still knows every one of them
     assert srv._ADMIN_TOOLS <= set(srv._HANDLERS)

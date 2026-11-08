@@ -92,7 +92,7 @@ def test_the_schema_requires_only_what_the_guidance_sends():
     assert "facts" in schema["properties"], "the facts field is not offered"
     # and the fields with a default must stay offered, not vanish
     props = schema["properties"]
-    for field in ("domain", "intent", "sentiment", "links"):
+    for field in ("domain", "links"):   # intent/sentiment: accepted, no longer declared (token budget)
         assert field in props, f"'{field}' non è più proponibile al modello"
         if field != "links":
             assert "default" in props[field], f"'{field}' opzionale senza default"

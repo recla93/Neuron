@@ -214,7 +214,7 @@ def _memory_block(p: str, with_knowledge: bool, gateway: bool = False) -> str:
         "text, concepts}]) AFTER, for what is worth not repeating: " + WHAT_TO_SAVE + ".\n"
         "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
         "supersedes=<#id>; links typed, never a "
-        f"self-link; before minting a concept check {p}find_candidates; never "
+        f"self-link; a near-duplicate fact is flagged when stored; never "
         "store secrets or tokens.\n"
         + extra +
         "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per "

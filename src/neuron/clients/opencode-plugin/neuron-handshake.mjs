@@ -70,7 +70,7 @@ function memoryBlock(key, withKnowledge) {
     "concepts}]) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits.\n" +
     "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes " +
     "supersedes=<#id>; links typed, never a " +
-    "self-link; before minting a concept check find_candidates; never store " +
+    "self-link; a near-duplicate fact is flagged when stored; never store " +
     "secrets or tokens.\n" +
     (withKnowledge
       ? "Knowledge base: knowledge_query(query) when the question touches " +

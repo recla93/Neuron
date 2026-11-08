@@ -598,7 +598,12 @@ async def read_resource(uri) -> list[ReadResourceContents]:
 # announced unless NEURON_TOOLS=all.
 _ADMIN_TOOLS = frozenset({"prune", "consolidate", "dedup", "flash", "reset",
                           "extract", "auto", "export", "merge", "introspect",
-                          "vector_search", "summary", "around"})
+                          "vector_search", "summary", "around",
+                          # 2026-11-08, the loop no longer needs them: pre_turn
+                          # covers get_context, D6 flags duplicates at write,
+                          # confirm(confidence<0) refutes, GM calls forgotten
+                          # itself. ~4.5k chars of schema per session.
+                          "get_context", "find_candidates", "dismiss", "recall", "forgotten"})
 
 # Mid-band similarity to a topic: above it the node is already what get_context
 # serves, below it is noise. Shared by forgotten(near) and around.
@@ -668,50 +673,19 @@ def _all_tools() -> list[Tool]:
                     },
                     "topic": {"type": "string", "description": "Optional: topic of the turn (3-5 words); defaults to the first fact"},
                     "keywords": {"type": "array", "items": {"type": "string"}, "description": "Optional: extra concept keywords; the facts' concepts are added"},
-                    "domain": {"type": "string", "description": "Free-form label (AI, backend, biology...). CAUTION: the same non-'general' domain on two consecutive turns SWITCHES the active context; keep 'general' to stay put.", "default": "general"},
-                    "intent": {"type": "string", "enum": ["question", "task", "exploration", "clarification", "feedback"], "description": "Optional, defaults to 'exploration'.", "default": "exploration"},
-                    "sentiment": {"type": "string", "enum": ["neutral", "positive", "critical", "urgent"], "description": "Optional, defaults to 'neutral'.", "default": "neutral"},
-                    "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
-                    "episode": {
-                        "type": "string",
-                        "description": ("Legacy: ONE fact sentence, stored as a fact of kind "
-                                        "'fact' indexed under every keyword. Prefer `facts`."),
-                    },
-                    "entities": {
-                        "type": "array", "items": {"type": "string"},
-                        "description": "Explicit entities (people, technologies, concepts, places)",
-                    },
-                    "tags": {
-                        "type": "array", "items": {"type": "string"},
-                        "description": "Free labels beyond domain",
-                    },
+                    "domain": {"type": "string", "default": "general", "description": "Keep 'general'. The same other value on two consecutive turns SWITCHES the active context."},
+                    "context": {"type": "string", "description": "Context path; defaults to the active one."},
+                    # Not declared, still accepted (the schema allows extra
+                    # fields): intent, sentiment, entities, tags and the legacy
+                    # `episode`. ~2k chars of schema per session for fields the
+                    # loop no longer asks for (2026-11-08, token budget).
                     "references": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "type": {"type": "string", "enum": ["file", "url", "commit"]},
-                                "path": {"type": "string", "description": "Project-relative POSIX path (absolute is canonicalized)."},
-                                "description": {"type": "string"},
-                                "project_id": {"type": "string", "description": "Optional: UUID from .neuron/project.json."},
-                                "by": {"type": "string", "description": "Optional: provenance."},
-                            },
-                        },
-                        "description": "References to files (project-relative), URLs or commits",
+                        "type": "array", "items": {"type": "object"},
+                        "description": "Files (project-relative path), URLs or commits this turn touched: {type: file|url|commit, path, description}",
                     },
                     "links": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "source": {"type": "string"},
-                                "target": {"type": "string"},
-                                "link_type": {"type": "string", "enum": ["cause-effect", "analogy", "evolution", "contrast", "deepening", "instance-of"]},
-                                "weight": {"type": "string", "enum": ["strong", "medium", "tangential"]},
-                                "rationale": {"type": "string"},
-                            },
-                        },
-                        "description": "Links between current keywords and previous keywords",
+                        "type": "array", "items": {"type": "object"},
+                        "description": "Typed links between concepts: {source, target, link_type: cause-effect|analogy|evolution|contrast|deepening|instance-of, weight: strong|medium|tangential, rationale}",
                     },
                 },
                 # Nothing required (ADR-015 D5): a call with only `facts` and
@@ -758,17 +732,10 @@ def _all_tools() -> list[Tool]:
                         "default": "full",
                     },
                     "context": {"type": "string", "description": "Context path (e.g. java/spring). Defaults to active context.", "default": ""},
-                    "mode": {
-                        "type": "string",
-                        "enum": ["semantic", "focus"],
-                        "description": "semantic (default) or focus (boosts the active task).",
-                        "default": "semantic",
-                    },
-                    "focus": {
-                        "type": "string",
-                        "description": "Active task for focus mode (injected by the GM proxy from the blackboard).",
-                        "default": "",
-                    },
+                    "profile": {"type": "boolean", "default": False,
+                                "description": "First call of a session: also return the user/habit facts."},
+                    # Not declared, still accepted: mode, focus, exclude and
+                    # fact_nodes — GM and the CLI set them, the model never does.
                 },
                 "required": ["topic"],
             },

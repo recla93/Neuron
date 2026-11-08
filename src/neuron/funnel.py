@@ -32,7 +32,7 @@ SIGNPOST_BASE = (
     "Skip 2-3 only on procedural turns (ack/thanks/yes-no) or when the graph "
     "is empty; step 1 always applies.\n"
     "Rules: 1-5 noun concepts per fact (no verbs/paths); typed links, never self; "
-    "silent pre_turn once per turn; dedup via find_candidates; never secrets.\n"
+    "silent pre_turn once per turn; near-duplicate facts are flagged at write; never secrets.\n"
     "Full playbook: call skill(name='playbook')."
 )
 
@@ -68,7 +68,7 @@ HELP_TEXT = (
     "  store_turn      save a curated turn (recommended)\n"
     "  get_context     pull related nodes+links per topic\n"
     "\n"
-    "Search: find_candidates | vector_search | forgotten\n"
+    "Search (unannounced): find_candidates | vector_search | forgotten\n"
     "Contexts: switch_context | list_contexts\n"
     "Upkeep: status | summary | confirm(boost salience) | prune | consolidate | dedup | flash\n"
     "Danger: export | merge | reset(destructive)\n"
