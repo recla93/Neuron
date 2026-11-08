@@ -670,10 +670,18 @@ def cross_context_matches(query_vec, active_ctx: str, graphs_dir: str,
         try:
             conn = s._db.connect_local(db)
             try:
+                # Only concepts that index an active fact (ADR-015): a bare name
+                # has nothing to give after a switch. Live 2026-11-08: `default`
+                # held 125 such names of 127, and "pro e contro?" was routed
+                # there on `cosa` (0.59), "ok procedi" on `qualsiasi` (0.74).
                 rows = conn.execute(
                     "SELECT keyword, sim FROM ("
                     "  SELECT keyword, 1.0 - vector_distance_cos(embedding, ?) AS sim "
-                    "  FROM node_vectors"
+                    "  FROM node_vectors v WHERE EXISTS ("
+                    "    SELECT 1 FROM fact_concepts fc JOIN facts f"
+                    "      ON f.context = fc.context AND f.id = fc.fact_id"
+                    "    WHERE fc.context = v.context AND fc.keyword = v.keyword"
+                    "      AND f.status = 'active')"
                     ") WHERE sim > ? ORDER BY sim DESC LIMIT ?",
                     (query_blob, threshold, top_n),
                 ).fetchall()
