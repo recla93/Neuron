@@ -136,6 +136,10 @@ FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
 # shortcut: a fixed cap drops the oldest past it (3 habits = 434 chars on
 # 2026-11-08); rank by confirmations once D8 counts them.
 PROFILE_MAX_CHARS = _config.env_int("NEURON_PROFILE_MAX_CHARS", 600)
+# ADR-015 D6, measured 2026-11-08 on `backend`: 33 pairs of distinct active facts
+# (same kind, a shared concept) top out at 0.73; restated facts 0.92-0.96, a
+# fact and its newer progress 0.64-0.80. 0.75: no false alarm, every restatement.
+FACT_SIMILAR = _config.env_float("NEURON_FACT_SIMILAR", 0.75)
 # ADR-016 D2: a flash is a dormant idea/decision/fix above this floor AND linked
 # to the message (a concept shared with a recalled fact, or named). On
 # bench/recall.json v1, linked, 0.40: 6 of 20 real messages, 0 of 5 off-topic;
@@ -1711,6 +1715,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _canon_kw = {_cur._dup_key(k): k for k in keywords}
     _canon_kw.update({_cur._dup_key(a): t for a, t in _alias.items()})
     _fact_report: list[str] = []
+    _fresh: list[str] = []          # new facts that replace nothing: D6 checks them
     _fact_lost: dict = {}
     for f in _facts_in:
         cs = []
@@ -1726,6 +1731,8 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         if not rep:
             continue
         g_kind = g.facts[rep["id"]]["kind"]
+        if not (rep.get("duplicate") or rep.get("superseded") or f["supersedes"]):
+            _fresh.append(rep["id"])
         _fact_report.append(f"#{rep['id']} {g_kind}"
                             + (" (already stored)" if rep.get("duplicate") else "")
                             + (f" supersedes #{rep['superseded']}" if rep.get("superseded") else ""))
@@ -1744,6 +1751,15 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     if (id(_emb), t) not in _search._RECALL_VECS]
             if _new:
                 _search._embed_recall(_emb, id(_emb), _new)
+            # D6: a new fact close to an active one is said, never merged. One
+            # note, the closest: only 3 notes are shown, the others matter too.
+            hits = [(fid, h) for fid in _fresh
+                    if (h := _search._similar_fact(g, g.facts[fid], FACT_SIMILAR))]
+            if hits:
+                fid, (o, sim) = max(hits, key=lambda x: x[1][1])
+                _fact_notes.append(
+                    f"#{fid} is similar to #{o['id']} ({sim}): {o['text'][:120]} — if it "
+                    f"replaces it, store it again with supersedes=\"{o['id']}\"")
         except Exception as _e:  # noqa: BLE001
             log.debug("fact vectors at write skipped: %s", _e)
 

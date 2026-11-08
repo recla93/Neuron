@@ -137,3 +137,25 @@ def test_a_stored_fact_has_its_vector_at_once(words, tmp_path, monkeypatch):
         {"kind": "fix", "text": "pacchetti importati dalla cartella sbagliata", "concepts": ["python"]}]}))
     f = next(iter(S._g.get().facts.values()))
     assert (id(S._embedder), search._fact_text(f)) in search._RECALL_VECS
+
+
+def test_a_new_fact_close_to_an_active_one_is_reported_not_merged(words, tmp_path, monkeypatch):
+    """ADR-015 D6: live 2026-11-08 one habit was stored five times, restated.
+    The answer names the close one; the model decides with `supersedes`."""
+    import asyncio
+    from neuron.registry import GraphRegistry
+    monkeypatch.setattr(S, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
+    monkeypatch.setattr(S, "TURSO_ENGINE", False)
+    call = lambda facts: asyncio.run(S.call_tool("store_turn", {"facts": facts}))[0].text  # noqa: E731
+    call([{"kind": "habit", "text": "no push if something breaks in use", "concepts": ["push"]}])
+    old = next(iter(S._g.get().facts.values()))
+
+    out = call([{"kind": "habit", "text": "no push if anything breaks in use", "concepts": ["push"]}])
+    assert f"is similar to #{old['id']}" in out and f'supersedes="{old["id"]}"' in out, out
+    assert len([f for f in S._g.get().facts.values() if f["status"] == "active"]) == 2, "never merged"
+
+    other_kind = call([{"kind": "fix", "text": "no push if something breaks in use", "concepts": ["push"]}])
+    assert "is similar to" not in other_kind, other_kind
+    replaced = call([{"kind": "habit", "text": "no push when something breaks in use",
+                      "concepts": ["push"], "supersedes": old["id"]}])
+    assert "is similar to" not in replaced, replaced

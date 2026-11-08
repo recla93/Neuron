@@ -496,6 +496,28 @@ def _search_facts(query: str, graph, k: int, min_score: float,
     return [h for h in out if h[1] >= out[0][1] - delta][:k] if out else []
 
 
+def _similar_fact(graph, fact: dict, threshold: float) -> "tuple[dict, float] | None":
+    """ADR-015 D6: the active fact of the same kind, sharing a concept, closest
+    to ``fact`` above ``threshold`` — a candidate it may update. Only reported,
+    never merged: the model decides with `supersedes`. Vectors from the recall
+    cache; a fact without one yet (cache warming) is skipped."""
+    eid = _ensure_recall_vecs(graph)
+    v = _RECALL_VECS.get((eid, _fact_text(fact)))
+    if v is None:
+        return None
+    best = None
+    for o in getattr(graph, "facts", {}).values():
+        # Same turn: written together on purpose, not a restatement.
+        if (o["turn"] == fact["turn"] or o["status"] != "active" or o["kind"] != fact["kind"]
+                or not set(o["concepts"]) & set(fact["concepts"])):
+            continue
+        w = _RECALL_VECS.get((eid, _fact_text(o)))
+        sim = sum(a * b for a, b in zip(v, w)) if w else 0.0
+        if sim >= threshold and (best is None or sim > best[1]):
+            best = (o, round(sim, 2))
+    return best
+
+
 def _search_recall(query: str, top_n: int, graph) -> list[tuple[str, float]]:
     """Nodes ranked by what they know, not by their name: each node scores its
     best text (see _recall_texts).
