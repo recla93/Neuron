@@ -1,8 +1,8 @@
 # Neuron — notes for coding agents
 
 Neuron is the persistent semantic memory of the Gray Matter suite: an MCP
-server that keeps a graph of concepts (nodes, typed links, salience, trust,
-decay, episodes) across sessions.
+server that keeps typed facts, indexed by a graph of concepts (nodes, typed
+links, salience, trust, decay), across sessions.
 
 ## Where to change it
 
@@ -15,7 +15,7 @@ Develop in the umbrella repo, **recla93/GrayMatterEnvironment**, folder
 | Path | What |
 |---|---|
 | `src/neuron/server.py` | MCP server: tool definitions and handlers (`store_turn`, `pre_turn`, ...) |
-| `src/neuron/models.py` | The graph: nodes, links, episodes, decay, save |
+| `src/neuron/models.py` | The graph: nodes, links, facts (`facts`, `fact_concepts`), decay, save |
 | `src/neuron/db.py` | Storage tiers: Turso cloud → embedded Turso → stdlib sqlite3 |
 | `src/neuron/search.py` | Embeddings (`_embed_one` normalizes to unit length) and vector search |
 | `src/neuron/curation.py` | The keyword gate of `store_turn` |

@@ -19,7 +19,7 @@ you discussed yesterday, connects ideas across topics, and gets smarter the more
 <br>
 
 <!-- ── identity badges ─────────────────────────────────────────────── -->
-<img alt="version"  src="https://img.shields.io/badge/version-6.9.0-7c8cff?style=flat-square">
+<img alt="version"  src="https://img.shields.io/badge/version-6.10.0-7c8cff?style=flat-square">
 <img alt="license"  src="https://img.shields.io/badge/license-PolyForm_NC_1.0.0-4be1a0?style=flat-square">
 <img alt="python"   src="https://img.shields.io/badge/python-3.10_--_3.14-3776AB?style=flat-square&logo=python&logoColor=white">
 <img alt="protocol" src="https://img.shields.io/badge/protocol-MCP-000000?style=flat-square">
@@ -66,9 +66,9 @@ Neuron builds a **concept graph**:
 | 💾 | **Local-first, zero setup** | Embedded libSQL with native `vector_distance_cos()`. One file. No server, no port, no cloud required. |
 | 👥 | **Shared team brain (optional)** | Flip on Turso Cloud and everyone writes into one graph — atomic, concurrent, no one's save clobbers another's. |
 | 🎯 | **Quality at the door** | A curation gate drops filler, folds duplicates and canonicalizes links, so the graph stays clean instead of bloating. |
-| 📖 | **Episodic facts** | Nodes carry short "what actually happened" facts, surfaced back into context on the next turn. |
-| 🕰️ | **Time-travel visualizer** | A self-contained interactive HTML graph — replay your memory growing turn by turn, filter by domain, inspect every node & link. |
-| 🩺 | **Batteries-included tooling** | Cross-platform CLI (`neuron register` / `doctor`), a Tkinter visual hub (`neuron gui`), and a full test suite. |
+| 📖 | **Typed facts** | The unit of memory is a fact — a decision, a fix, an idea, who you are, how you work — one sentence with its why, indexed by concepts. Append-only: a newer fact supersedes an older one, nothing is evicted. |
+| 🕰️ | **See your memory** | The control center's **Grafi** view shows concepts, facts, the knowledge base and the bridges as one interactive graph; a self-contained HTML visualizer replays the memory turn by turn. |
+| 🩺 | **Batteries-included tooling** | Cross-platform CLI (`neuron register` / `doctor` / `console`), the shared web control center (`neuron gui`), and a full test suite. |
 
 ---
 
@@ -78,18 +78,21 @@ Neuron runs a simple **two-step loop** around every substantial turn:
 
 ```
         ┌─────────────────────────────────────────────────────────┐
-        │  1. pre_turn(topic, keywords)                           │
-        │     → loads the relevant slice of memory BEFORE you reply │
+        │  1. pre_turn(topic)                                     │
+        │     → loads the facts that matter BEFORE you reply      │
         └─────────────────────────────────────────────────────────┘
                               │  the model answers, now informed
                               ▼
         ┌─────────────────────────────────────────────────────────┐
-        │  2. store_turn(keywords, links, facts…)                 │
-        │     → saves what's NEW as concepts + typed links         │
+        │  2. store_turn(facts=[{kind, text, concepts}])          │
+        │     → saves what is worth not repeating, as facts       │
         └─────────────────────────────────────────────────────────┘
 ```
 
-Under the hood each concept is a **node** (keyword + embedding + salience + domain), each
+Each **fact** is one sentence with its why and a kind (`progress`, `decision`, `fix`,
+`fact`, `idea`, `user`, `habit`); a newer fact can **supersede** an older one, which stays on
+disk but leaves recall. Facts are indexed by **concepts**: each concept is a **node**
+(keyword + embedding + salience + domain), each
 relationship a **typed link** (`cause-effect`, `analogy`, `evolution`, `contrast`,
 `deepening`, `instance-of`). Links that keep co-activating get **reinforced**; idle tangential
 ones get **pruned**; concepts you stop touching fade to **dormant**. Retrieval blends vector
@@ -117,8 +120,8 @@ Pre-built `pyturso` wheels are bundled — no C/Rust compiler needed.
 ### Option B — pip (source checkout)
 
 ```bash
-git clone https://github.com/recla93/Neuron.git
-cd Neuron
+git clone https://github.com/recla93/GrayMatterEnvironment.git
+cd GrayMatterEnvironment/neuron
 pip install -e ".[dev]"        # editable install with test deps
 pip install "neuron[cloud]"    # optional: Turso Cloud support
 ```
@@ -193,7 +196,7 @@ string** — no code changes. Turn on the cloud in one step:
 
 ```bash
 pip install "neuron[cloud]"
-python scripts/connect_turso.py     # prompts, live-tests the connection, saves to .env
+neuron connect                      # prompts, live-tests the connection, saves to .env
 ```
 
 👥 Running a whole team on one brain? See the **[Team guide](docs/TEAM.md)**.
@@ -202,10 +205,12 @@ python scripts/connect_turso.py     # prompts, live-tests the connection, saves 
 
 ## 🕰️ Graph Visualizer
 
-Neuron ships an interactive, **self-contained HTML visualizer** — launch it from
-`neuron manage` (option 4, Graph visualizer) or `python scripts/generate_graph_html.py` from a source
-checkout (with Gray Matter installed, `gray-matter gui` → **Graphs** shows Neuron, NeuRAG and the
-bridges together). It reads through
+The everyday view is the control center: `neuron gui` (or `gray-matter gui`) → **Grafi**
+shows Neuron's concepts and facts, NeuRAG's nodes and the bridges together; click a concept
+to read its active facts, drag from a concept to a knowledge node to create a bridge.
+
+From a source checkout there is also a **self-contained HTML visualizer**:
+`neuron manage --visualize` or `python scripts/generate_graph_html.py`. It reads through
 Neuron's own engine (so it sees the cloud too) and gives you:
 
 salience-sized, domain-colored nodes · Hebbian-thickened edges · drift-link styling ·
@@ -227,11 +232,9 @@ behind the gateway). Admin tools are callable but not announced unless
 
 | Tool | Description |
 |---|---|
-| `pre_turn(topic, keywords)` | **PRE shortcut** — status + compact context in one call, with the piggybacked stimulus |
-| `store_turn(...)` | Save a turn: keywords, links, entities, tags, an episodic fact |
-| `confirm(keywords)` | Boost salience of nodes that influenced the response; re-raises a dormant one |
-| `dismiss(keywords)` | Negative feedback: lower salience and trust of misleading associations |
-| `get_context(topic, ...)` | Related nodes/links; `format=compact` for injection; inherits from parents |
+| `pre_turn(topic)` | **Before replying** — the facts relevant to the topic, each with its `#id`, plus the stimulus |
+| `store_turn(facts=[{kind, text, concepts}])` | **After replying** — save 0-3 facts; `supersedes=<#id>` replaces an older one; `links` and `references` optional |
+| `confirm(facts=[#id])` | A recalled fact helped (`keywords` boosts concepts; negative `confidence` refutes) |
 
 </details>
 
@@ -241,9 +244,6 @@ behind the gateway). Admin tools are callable but not announced unless
 | Tool | Description |
 |---|---|
 | `status` / `summary` | Graph state · top nodes and recent links |
-| `find_candidates(keywords)` | Find similar existing keywords before storing (dedup) |
-| `forgotten` / `recall` | Concepts idle for N turns · bring an archived node back into the active graph |
-| `around(topic, n?)` | The neighbourhood of a problem: mid-band nodes (0.30–0.75) with their facts and link rationales — raw material for `gray_matter_brainstorm` (admin) |
 | `switch_context` / `list_contexts` | Switch / list domain contexts (e.g. `java/spring`) |
 | `help` / `skill(name)` | One line per command · full text of a playbook on demand |
 
@@ -254,7 +254,11 @@ behind the gateway). Admin tools are callable but not announced unless
 
 | Tool | Description |
 |---|---|
-| `vector_search(keywords)` | Semantic vector search (no link traversal) |
+| `get_context(topic, ...)` | Related nodes/links; `format=compact` for injection (`pre_turn` covers it in the loop) |
+| `find_candidates(keywords)` / `vector_search(keywords)` | Similar existing keywords · semantic search over concepts |
+| `forgotten` / `recall` | Concepts idle for N turns (`facts=true`: dormant facts, what a flash shows) · bring an archived node back |
+| `around(topic, n?)` | Mid-band nodes (0.30–0.75) with their facts and link rationales — raw material for `gray_matter_brainstorm` |
+| `dismiss(keywords)` | Negative feedback: lower salience and trust of misleading associations |
 | `merge(canonical, aliases)` / `consolidate` / `dedup` | Absorb duplicates into one · merge near-duplicates by cosine · toggle keyword dedup |
 | `extract(text)` / `auto(text)` | Standalone extraction · extract-and-save in one call |
 | `prune` / `flash` | Force-prune expired links · toggle semantic flashbacks |
