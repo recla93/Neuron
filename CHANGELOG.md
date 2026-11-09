@@ -1,6 +1,6 @@
 # Changelog — Neuron
 
-## Unreleased
+## 6.10.0 (2026-11-09)
 - **Dal gateway un fatto incompleto non fa più rifiutare tutta la chiamata.**
   La libreria MCP valida lo schema prima del codice di Neuron: con `kind` e
   `concepts` obbligatori, un fatto senza concetti rifiutava anche i fatti
