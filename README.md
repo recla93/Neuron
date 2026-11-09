@@ -203,7 +203,9 @@ python scripts/connect_turso.py     # prompts, live-tests the connection, saves 
 ## 🕰️ Graph Visualizer
 
 Neuron ships an interactive, **self-contained HTML visualizer** — launch it from
-`neuron manage` (option 4, Graph visualizer) or `python scripts/generate_graph_html.py`. It reads through
+`neuron manage` (option 4, Graph visualizer) or `python scripts/generate_graph_html.py` from a source
+checkout (with Gray Matter installed, `gray-matter gui` → **Graphs** shows Neuron, NeuRAG and the
+bridges together). It reads through
 Neuron's own engine (so it sees the cloud too) and gives you:
 
 salience-sized, domain-colored nodes · Hebbian-thickened edges · drift-link styling ·

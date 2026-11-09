@@ -146,8 +146,10 @@ def do_visualize() -> int:
     cands.append(Path(__file__).resolve().parent.parent.parent / "scripts" / "generate_graph_html.py")
     script = next((p for p in cands if p.exists()), None)
     if script is None:
-        print("[!] generate_graph_html.py not found. Set NEURON_REPO to your source\n"
-              "    checkout, or run it from the repo / Configuration Center.")
+        # Installed suites have no scripts/: the graph view lives in the GM GUI.
+        print("[!] The repo visualizer is not installed. With Gray Matter: run\n"
+              "    `gray-matter gui` and open Graphs. Standalone: set NEURON_REPO\n"
+              "    to your source checkout.")
         return 1
     return subprocess.call([sys.executable, str(script)])
 
