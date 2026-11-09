@@ -31,21 +31,36 @@ import path from "node:path";
 
 const PRIORITY = ["gray-matter", "neuron", "neurag"];
 
-function gmeRoot() {
-  // Mirror of gray_matter.gme.user_base() -- never imported, just mirrored.
+function gmeRoots() {
+  // Mirror of gray_matter.gme.gme_root() -- never imported, just mirrored.
+  // Node has no venv to ask, so every place a suite can live is read: GM_HOME,
+  // the per-OS base, and ~/GrayMatterEnvironment (a suite outside AppData,
+  // where an MSIX client cannot redirect it). Each root: registry/ first, then
+  // the flat pre-suite layout. Reading only the flat one is why this plugin
+  // never fired once the registry moved into registry/.
   let base =
     process.platform === "win32"
       ? process.env.LOCALAPPDATA || ""
       : process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
   if (!base) base = os.homedir();
-  return path.join(base, "GrayMatterEnvironment");
+  const suites = [
+    process.env.GM_HOME,
+    path.join(os.homedir(), "GrayMatterEnvironment"),
+    path.join(base, "GrayMatterEnvironment"),
+  ].filter(Boolean);
+  return suites.flatMap((s) => [path.join(s, "registry"), s]);
 }
 
 function installedSlugs() {
   const out = new Set();
-  const root = gmeRoot();
-  try {
-    for (const f of fs.readdirSync(root)) {
+  for (const root of gmeRoots()) {
+    let files = [];
+    try {
+      files = fs.readdirSync(root);
+    } catch {
+      continue; /* no registry here: try the next root */
+    }
+    for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
         const raw = fs.readFileSync(path.join(root, f), "utf8");
@@ -55,8 +70,6 @@ function installedSlugs() {
         /* unreadable/not json: skip this one, never the whole hook */
       }
     }
-  } catch {
-    /* no registry: no handshake, never a crash at session start */
   }
   return out;
 }

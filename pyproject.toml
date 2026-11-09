@@ -1,6 +1,6 @@
 [project]
 name = "neuron"
-version = "6.10.0"
+version = "6.10.1"
 description = "Neuron - persistent semantic memory for AI (semantic graph + vector search with Turso)"
 requires-python = ">=3.10"
 # SPDX, non la tabella: pip >= 26.3 mostra ogni deprecazione di setuptools a chi

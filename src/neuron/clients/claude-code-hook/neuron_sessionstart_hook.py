@@ -104,13 +104,23 @@ def _gme_root() -> Path:
             os.path.expanduser("~"), ".local", "share")
     if not base:                       # scrubbed env -> never a relative path
         base = os.path.expanduser("~")
-    suite = Path(base) / "GrayMatterEnvironment"
+    suite = _venv_suite() or Path(base) / "GrayMatterEnvironment"
     current = suite / "registry"
     if current.is_dir():
         return current
     if suite.is_dir() and any(suite.glob("*.json")):
         return suite               # registro piatto pre-suite
     return current
+
+
+def _venv_suite():
+    """The suite this interpreter was installed into (<suite>/graymatter/.venv),
+    or None. Mirror of gray_matter/paths.py:venv_suite() -- a suite outside
+    AppData is found with no env var, which MCP clients may strip."""
+    p = Path(sys.prefix)
+    if p.name == ".venv" and p.parent.name == "graymatter"             and p.parent.parent.name == "GrayMatterEnvironment":
+        return p.parent.parent
+    return None
 
 
 def installed_slugs() -> set:
@@ -155,6 +165,8 @@ def _graphs_dir() -> Path:
         base = (os.environ.get("XDG_DATA_HOME", "")
                 or os.path.join(os.path.expanduser("~"), ".local", "share"))
     slug = os.environ.get("NEURON_SLUG", "neuron")
+    if _venv_suite():
+        return _venv_suite() / slug / "graphs"
     new = Path(base) / "GrayMatterEnvironment" / slug / "graphs"
     legacy = Path(base) / slug / "graphs"
     if not new.is_dir() and legacy.is_dir():

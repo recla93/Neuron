@@ -1,5 +1,15 @@
 # Changelog — Neuron
 
+## 6.10.1 (2026-11-10)
+- **Il plugin di OpenCode legge il registro giusto.** `neuron-handshake.mjs`
+  cercava i tool installati nel layout piatto di prima, non in `registry/`:
+  vedeva sempre zero tool e l'handshake non partiva mai in OpenCode. Ora legge
+  `registry/` (poi il piatto) in `GM_HOME`, in `~/GrayMatterEnvironment` e nella
+  base per-OS.
+- **Neuron e l'hook di inizio sessione trovano la suite dalla venv** in cui sono
+  installati (`<suite>/graymatter/.venv`), come Gray Matter 1.8.1.
+- **Kimi Code fra i client** (`~/.kimi-code/mcp.json`).
+
 ## 6.10.0 (2026-11-09)
 - **Dal gateway un fatto incompleto non fa più rifiutare tutta la chiamata.**
   La libreria MCP valida lo schema prima del codice di Neuron: con `kind` e

@@ -11,6 +11,7 @@ a fix in one never propagated to the others. They now all delegate here.
 from __future__ import annotations
 
 import os
+import sys
 
 __all__ = ["resolve_slug", "default_graphs_dir", "graphs_dir", "env_int", "env_float",
            "user_data_dir", "user_env_file", "set_user_env"]
@@ -66,6 +67,21 @@ def _os_base() -> str:
     return base or os.path.expanduser("~")
 
 
+def venv_suite() -> "str | None":
+    """The suite the running interpreter was installed into, or None.
+
+    The venv sits at <suite>/graymatter/.venv: a server or hook started from it
+    finds its data next to it with no env var (MCP clients strip the env, and an
+    MSIX client redirects AppData writes). Keep-in-sync with
+    gray_matter/paths.py:venv_suite()."""
+    p = os.path.normpath(sys.prefix)
+    venv_dir, parent = os.path.split(p)[1], os.path.dirname(p)
+    if venv_dir == ".venv" and os.path.basename(parent) == "graymatter" \
+            and os.path.basename(os.path.dirname(parent)) == SUITE_DIR:
+        return os.path.dirname(parent)
+    return None
+
+
 def user_data_dir() -> str:
     """The per-user Neuron home — the parent of ``graphs``.
 
@@ -82,6 +98,9 @@ def user_data_dir() -> str:
     *venv* location in install.ps1/install.sh, and honouring it here would
     silently relocate an existing graph store."""
     slug = resolve_slug()
+    suite = venv_suite()
+    if suite:
+        return os.path.join(suite, slug)
     base = _os_base()
     new = os.path.join(base, SUITE_DIR, slug)
     legacy = os.path.join(base, slug)

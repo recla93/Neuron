@@ -326,6 +326,15 @@ CLIENTS: dict[str, dict[str, Any]] = {
     # client del gateway vuol dire che standalone non serve a niente. Qui espone
     # il bridge di Neuron (:8000); `remote` dice a chi registra di non
     # cercargli un file e di non contarlo come "client non trovato".
+    # Kimi Code: ~/.kimi-code/mcp.json, the same mcpServers shape as Cursor.
+    "kimi": {
+        "label": "Kimi Code",
+        "candidates": lambda: [_home(".kimi-code", "mcp.json")],
+        "keys": ["mcpServers"],
+        "entry": lambda py: {"command": py, "args": ["-m", "neuron"]},
+        "format": "json",
+        "create_if_missing": False,
+    },
     "chatgpt": {
         "label": "ChatGPT",
         "candidates": lambda: [],
