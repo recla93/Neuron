@@ -207,8 +207,23 @@ function owned() {
   return { text: handshakeFor(have), python };
 }
 
-// OpenCode loads a plugin once per location (project): one loop per process.
-const g = (globalThis.__neuronMemory ||= { loop: null });
+// One turn state per process, shared by every instance of this plugin: OpenCode
+// sets a plugin up once per location AND again on every hot reload (an install
+// rewriting this file is one). A "already listening" flag broke there, live
+// 2026-11-10: the reloaded instance saw the flag of the dead one and never
+// subscribed. Now every instance subscribes, and duplicates are dropped per
+// event id and per context call instead.
+// Field by field: a hot reload finds the object an OLDER version of this file left.
+const g = (globalThis.__neuronMemory ||= {});
+g.seen ||= new Set();
+
+function firstSight(e) {
+  const id = e?.id ?? `${e?.type}:${JSON.stringify(e?.data ?? null).slice(0, 300)}`;
+  if (g.seen.has(id)) return false;
+  if (g.seen.size > 5000) g.seen.clear();   // a bound, not a window: ids are unique
+  g.seen.add(id);
+  return true;
+}
 
 export default {
   id: "neuron-handshake",
@@ -218,15 +233,17 @@ export default {
     const { text, python } = owned();
     const loop = python ? (g.loop ||= memoryLoop(python)) : null;
     await ctx.session.hook("context", async (ev) => {
+      if (ev.__neuronMemory) return;          // a second instance on the same call
+      ev.__neuronMemory = true;
       if (text) ev.system.push({ type: "text", text });
       const recalled = loop && ev.sessionID ? await loop.recalled(ev.sessionID) : "";
       // The daemon's text carries its own <recalled-memory> frame.
       if (recalled) ev.system.push({ type: "text", text: recalled });
     });
-    if (!loop || g.listening) return;
-    g.listening = true;
+    if (!loop) return;
     (async () => {
       for await (const e of ctx.event.subscribe()) {
+        if (!firstSight(e)) continue;
         const d = e?.data || {};
         if (e?.type === "session.inbox.enqueued" && d.item?.type === "user") loop.message(d.sessionID, d.item.payload?.text);
         else if (e?.type === "session.step.started") loop.step(d.sessionID);
@@ -236,7 +253,7 @@ export default {
           if (reason) await ctx.session.prompt({ sessionID: d.sessionID, text: reason });
         }
       }
-    })().catch(() => { g.listening = false; /* a dead stream never breaks the session */ });
+    })().catch(() => { /* a dead stream never breaks the session */ });
   },
 
   // OpenCode V1: the handshake only (its loop would need the V1 chat hooks).
