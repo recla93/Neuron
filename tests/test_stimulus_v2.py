@@ -61,7 +61,7 @@ class TestPiggybackAntiEcho(unittest.TestCase):
             STIMULUS_MAX_CHARS = 200
         orig = st._S
         st._S = lambda: _FakeSrv
-        st._stim_recent.clear()
+        st._stim_recent.clear(); st._stim_facts.clear()
         try:
             first = st._stimulus_block(g, ["java"])
             g.turn_count += 1
@@ -74,7 +74,7 @@ class TestPiggybackAntiEcho(unittest.TestCase):
             self.assertIn("(", third)                 # reasons rendered
         finally:
             st._S = orig
-            st._stim_recent.clear()
+            st._stim_recent.clear(); st._stim_facts.clear()
 
     def test_two_hop_spark_clears_score_floor(self):
         """Regression (field test 2026-07-13): with the floor on raw act, a
@@ -88,7 +88,7 @@ class TestPiggybackAntiEcho(unittest.TestCase):
             STIMULUS_MAX_CHARS = 200
         orig = st._S
         st._S = lambda: _FakeSrv
-        st._stim_recent.clear()
+        st._stim_recent.clear(); st._stim_facts.clear()
         try:
             st._stim_recent["spring"] = g.turn_count    # recall in cooldown
             st._stim_recent["servlet"] = g.turn_count   # bridge in cooldown
@@ -96,8 +96,55 @@ class TestPiggybackAntiEcho(unittest.TestCase):
             self.assertIn("cors", out)                  # the spark gets through
         finally:
             st._S = orig
-            st._stim_recent.clear()
+            st._stim_recent.clear(); st._stim_facts.clear()
 
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestFactEcho(unittest.TestCase):
+    """Live 2026-11-10: one fact under four concepts came back four times."""
+
+    def _block(self, g, seeds):
+        from neuron import stimulus as st
+
+        class _FakeSrv:
+            flash_enabled = True
+            STIMULUS_MIN_ACTIVATION = 0.01
+            STIMULUS_MAX_CHARS = 200
+        orig, st._S = st._S, (lambda: _FakeSrv)
+        try:
+            return st._stimulus_block(g, seeds)
+        finally:
+            st._S = orig
+
+    def setUp(self):
+        from neuron import stimulus as st
+        st._stim_recent.clear(); st._stim_facts.clear()
+
+    def test_one_fact_under_many_concepts_is_shown_once(self):
+        g = Graph()
+        g.turn_count = 40
+        for kw in ("seed", "a", "b", "c"):
+            g.add_node(Node(keyword=kw, turn=1, topic="t", domain="d", sentiment="neutral", salience=5))
+        for kw in ("a", "b", "c"):
+            g.add_link(Link(source="seed", target=kw, link_type="deepening", weight="strong",
+                            rationale="", created_turn=1, last_active_turn=1))
+        f = g.add_fact("fix", "the same fix everywhere", ["a", "b", "c"], 1)
+        shown = []
+        for _ in range(3):
+            shown.append(self._block(g, ["seed"]))
+            g.turn_count += 1
+        self.assertIn(f"#{f['id']}", shown[0])
+        self.assertEqual(shown[1:], ["", ""])
+
+    def test_a_fact_written_in_the_last_turns_is_not_a_stimulus(self):
+        g = Graph()
+        g.turn_count = 40
+        for kw in ("seed", "a"):
+            g.add_node(Node(keyword=kw, turn=1, topic="t", domain="d", sentiment="neutral", salience=5))
+        g.add_link(Link(source="seed", target="a", link_type="deepening", weight="strong",
+                        rationale="", created_turn=1, last_active_turn=1))
+        g.add_fact("fix", "just written", ["a"], 36)
+        self.assertEqual(self._block(g, ["seed"]), "")

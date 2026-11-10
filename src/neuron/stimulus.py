@@ -264,6 +264,13 @@ def _build_context_window(extraction: ExtractionResult, turn: int, graph=None) -
 # emitted again for a few turns (in-memory per process, like the Hebbian cooldown).
 _stim_recent: dict[str, int] = {}
 STIM_ECHO_COOLDOWN = 5
+# The cooldown above is per CONCEPT, and one fact sits under several: live
+# 2026-11-10, the same fix came back four times through opencode, plugin, hook
+# and recall. A shown fact rests longer, and a fact written in the last few
+# turns is not a stimulus at all: the model wrote it, nothing to rediscover.
+_stim_facts: dict[str, int] = {}
+FACT_ECHO_COOLDOWN = 30
+FRESH_FACT_TURNS = 10
 
 
 def _stimulus_block(g, keywords, skip=()) -> str:
@@ -280,6 +287,9 @@ def _stimulus_block(g, keywords, skip=()) -> str:
         return ""
     cands = g.stimulus_candidates(list(keywords), k=2)
     turn = g.turn_count
+    skip = set(skip) | {fid for fid, t in _stim_facts.items() if turn - t <= FACT_ECHO_COOLDOWN}
+    skip |= {fid for fid, f in g.facts.items()
+             if f.get("turn") is not None and 0 <= turn - f["turn"] < FRESH_FACT_TURNS}
     pick = fact = None
     for c in cands:
         # Floor on SCORE, not raw act (field test 2026-07-13): the list is
@@ -294,13 +304,14 @@ def _stimulus_block(g, keywords, skip=()) -> str:
         # ADR-016 D2, here too: a stimulus is a fact or nothing. Bare paths
         # ("🧠 sessione ⇢ commit (recall)", live 2026-11-08) gave the model
         # two names and nothing to act on.
-        fact = g.spark_fact(c["keyword"], set(skip))
+        fact = g.spark_fact(c["keyword"], skip)
         if fact:
             pick = c
             break
     if pick is None:
         return ""
     _stim_recent[pick["keyword"]] = turn
+    _stim_facts[fact["id"]] = turn
     # The connection travels with the fact: 1 hop "java ⇢ spring", 2 hops
     # "java ⇢ servlet ⇢ cors".
     path = " ⇢ ".join(pick["path"]) if pick["hops"] >= 1 else pick["keyword"]
