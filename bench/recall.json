@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "adr": "work/design/ADR-015-NEURON-MEMORIA-A-FATTI.md, fase 0",
   "what": "Una memoria fissa (facts) e dei messaggi veri (messages): per ognuno, i fatti che un buon richiamo deve portare. off_topic: messaggi per cui la memoria non ha niente, e il richiamo deve tacere.",
   "rules": {
@@ -7,7 +7,8 @@
     "messages": "Testo vero dell'utente, dai transcript del progetto, accorciato solo dove indicato con '...'. Molti sono anteriori alla memoria: la domanda e' cosa porterebbe il richiamo se arrivassero oggi.",
     "expect": "I fatti senza i quali la risposta giusta va ricostruita da capo. Giudicati leggendo il messaggio, NON guardando cosa ha restituito una run. Non si allarga dopo un mancato: si aggiunge un messaggio nuovo e si alza version.",
     "off_topic": "Inventati, dichiaratamente: nessun fatto della memoria li riguarda. Ogni fatto mostrato qui e' rumore.",
-    "signature": "Un fatto conta come mostrato se i primi 40 caratteri del suo testo compaiono nella risposta. Devono essere unici: tests/test_bench_recall_set.py lo controlla."
+    "signature": "Un fatto conta come mostrato se i primi 40 caratteri del suo testo compaiono nella risposta. Devono essere unici: tests/test_bench_recall_set.py lo controlla.",
+    "stale": "v2 (2026-11-10): coppie vecchio -> nuovo sullo stesso argomento, vere nella storia del progetto (s1 e s3 superati da s2 e s4, senza supersedes). Il vecchio somiglia di piu' al messaggio: si aspetta il nuovo. Il vecchio mostrato accanto al nuovo e' contesto, e conta come rumore."
   },
   "facts": [
     {"id": "u1", "kind": "user", "concepts": ["utente", "gray-matter"],
@@ -69,7 +70,15 @@
     {"id": "z3", "kind": "decision", "concepts": ["owner", "space", "multiutente"],
      "text": "ADR-013: owner e space di una riga si scrivono all'INSERT e non cambiano piu', anche se altri la aggiornano dopo."},
     {"id": "z4", "kind": "fact", "concepts": ["grafo", "tetto", "nodi"],
-     "text": "Il grafo ai ha toccato il tetto MAX_NODES di 500 il 4/11: da allora ogni concetto nuovo sfratta quello con meno salienza."}
+     "text": "Il grafo ai ha toccato il tetto MAX_NODES di 500 il 4/11: da allora ogni concetto nuovo sfratta quello con meno salienza."},
+    {"id": "s1", "kind": "fact", "concepts": ["hook", "kimi", "codex"],
+     "text": "Copertura degli hook per client: Kimi Code ha SessionStart e UserPromptSubmit ma niente Stop, Codex solo SessionStart dal plugin cowork, OpenCode un plugin sperimentale sul prompt di sistema."},
+    {"id": "s3", "kind": "fact", "concepts": ["episodi", "neuron"],
+     "text": "Neuron tiene al massimo 5 episodi per nodo: al sesto, il piu' vecchio viene cancellato (EPISODES_PER_NODE)."},
+    {"id": "s2", "kind": "progress", "concepts": ["hook", "kimi", "codex", "opencode"],
+     "text": "Hook multi-client chiusi: Kimi Code ha anche Stop (exit 2), Codex ha UserPromptSubmit e Stop in hooks.json, OpenCode un plugin a cartella con recall e controllo di salvataggio."},
+    {"id": "s4", "kind": "decision", "concepts": ["episodi", "neuron", "fatti"],
+     "text": "ADR-015: i fatti sono append-only e non si cancellano, un aggiornamento passa da supersedes; EPISODES_PER_NODE limita solo quanti fatti mostra pre_turn."}
   ],
   "messages": [
     {"id": "m01", "date": "2026-11-07", "expect": ["p1", "p2", "p3"],
@@ -111,7 +120,11 @@
     {"id": "m19", "date": "2026-08-05", "expect": ["i1"],
      "text": "la cosa interessante era la gestione degli eventi: qualcosa che intercetta gli eventi in stile aspect per lanciare stimoli o flash da DB e non da mcp sarebbe anche interessante: cosa ne pensi?"},
     {"id": "m20", "date": "2026-08-05", "expect": ["k7", "d4"],
-     "text": "io pensavo a qualcosa di più dinamico: Full Suite: Gm manda hook con i comandi dei suoi worker, controlla che ci siano e manda. GM + Neuron: GM rileva Neuron, manda hook solo con Neuron"}
+     "text": "io pensavo a qualcosa di più dinamico: Full Suite: Gm manda hook con i comandi dei suoi worker, controlla che ci siano e manda. GM + Neuron: GM rileva Neuron, manda hook solo con Neuron"},
+    {"id": "m21", "date": "2026-11-10", "expect": ["s2"],
+     "text": "Claude! ciao, domanda, ma i nostri Hooks sono compatibili con opencode e gli altri providers?"},
+    {"id": "m22", "date": "2026-11-10", "expect": ["s4"],
+     "text": "bisogna aggiornare la memoria, non abbiamo più gli episodes e neanche 5. Abbiamo i facts"}
   ],
   "off_topic": [
     {"id": "o1", "text": "ricetta della carbonara con guanciale"},

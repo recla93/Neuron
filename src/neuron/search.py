@@ -449,7 +449,8 @@ def _names(concept: str, words: set[str]) -> bool:
 
 def _search_facts(query: str, graph, k: int, min_score: float,
                   named_bonus: float, delta: float = 1.0,
-                  embed=None) -> list[tuple[dict, float, str]]:
+                  embed=None, newer: bool = False,
+                  exclude=frozenset()) -> list[tuple[dict, float, str]]:
     """ADR-015 D7: the facts that answer a message, not the nodes near it.
 
     Score = cosine(message, `concepts. sentence`) + ``named_bonus`` when the
@@ -493,7 +494,49 @@ def _search_facts(query: str, graph, k: int, min_score: float,
             out.append((f, round(score, 4),
                         named[0] if named else (f["concepts"][0] if f["concepts"] else "")))
     out.sort(key=lambda x: -x[1])
-    return [h for h in out if h[1] >= out[0][1] - delta][:k] if out else []
+    # `exclude` (seen in this session) goes before the cut, the window stays
+    # relative to the best of ALL: a seen fact on top does not let weak ones in.
+    hits = [h for h in out if h[1] >= out[0][1] - delta and h[0]["id"] not in exclude][:k] if out else []
+    return _with_newer(hits, out, vec, exclude) if newer else hits
+
+
+NEWER_MIN_SIM = 0.60   # how close a later fact must be to an earlier one to update it
+
+
+def _with_newer(hits: list, pool: list, vec, exclude=frozenset()) -> list:
+    """The latest word on a subject (ADR-015, consequentiality in the recall).
+
+    A fact that is updated without `supersedes` stays active, and it usually
+    resembles the question MORE than its update: live 2026-11-10, "where does
+    GM's memory live?" scored the 9/11 answer 0.91 and the 10/11 one 0.53,
+    fifth, out of the window. The two contradict, so they are not alike (0.58)
+    and the write-time check (D6) never flagged them.
+
+    For the first hit that has one, the closest LATER fact in `pool`
+    (above the floor already) sharing a concept and at least NEWER_MIN_SIM
+    alike goes in right BEFORE it: both stay, in order, and the model reads
+    the sequence. One per answer: measured on 8 real messages it fired 3 times,
+    every time on a real update; on bench v2, 0.60 adds 0.09 noise per message
+    and loses no recall (0.55: 0.14)."""
+    shown = {h[0]["id"] for h in hits} | set(exclude)
+    when = lambda f: (f.get("turn") or 0, f.get("created_at") or "")  # noqa: E731
+    for i, (f, _sc, _kw) in enumerate(hits):
+        vf, best = vec(f), None
+        for n, nsc, nkw in pool:
+            if (n["id"] in shown or when(n) <= when(f)
+                    or not set(n["concepts"]) & set(f["concepts"])):
+                continue
+            vn = vec(n)
+            sim = sum(a * b for a, b in zip(vf, vn)) if vf is not None and vn is not None else 0.0
+            if sim >= NEWER_MIN_SIM and (best is None or sim > best[3]):
+                best = (n, nsc, nkw, sim)
+        if best:
+            # Before every earlier fact on its subject, not only the one it matched.
+            n = best[0]
+            pos = next((j for j, (h, _s, _k) in enumerate(hits)
+                        if when(n) > when(h) and set(n["concepts"]) & set(h["concepts"])), i)
+            return hits[:pos] + [best[:3]] + hits[pos:]
+    return hits
 
 
 def _similar_fact(graph, fact: dict, threshold: float) -> "tuple[dict, float] | None":

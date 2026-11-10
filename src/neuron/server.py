@@ -2089,12 +2089,14 @@ def _profile_facts(g, cap: int) -> list:
     return out
 
 
-def _fact_hits(query: str, g, k: int, floor: float, delta: float) -> list:
+def _fact_hits(query: str, g, k: int, floor: float, delta: float,
+               newer: bool = False, exclude=frozenset()) -> list:
     """search._search_facts with the recall bonus. A replaced embedding (tests)
     is used for the query and the facts alike, never mixed with the model's."""
     return _search._search_facts(
         query, g, k, floor, FACT_NAMED_BONUS, delta,
-        embed=None if _get_embedding is _search._get_embedding else _get_embedding)
+        embed=None if _get_embedding is _search._get_embedding else _get_embedding,
+        newer=newer, exclude=exclude)
 
 
 async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
@@ -2513,8 +2515,18 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # answer: the budget cut below takes links and nodes before a fact.
     _fact_q = " ".join([str(topic_pt)] + [str(k) for k in extra_kws_pt
                                           if isinstance(extra_kws_pt, list)]).strip()
+    # ADR-015 D7.1: who the user is and how they work, whatever the message.
+    # D7: a fact already shown in this session does not come back, and it is
+    # left out BEFORE the top-k cut: dropped after it, three seen facts on top
+    # left the answer empty while the next ones were still relevant.
+    _seen_ids = {str(i).lstrip("#") for i in (arguments.get("exclude") or [])
+                 if isinstance(i, (str, int))}
+    _profile = [f for f in (_profile_facts(g_pt, PROFILE_MAX_CHARS) if arguments.get("profile") else [])
+                if f["id"] not in _seen_ids]
+    _seen_ids |= {f["id"] for f in _profile}
     try:
-        _hits = _fact_hits(_fact_q, g_pt, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA)
+        _hits = _fact_hits(_fact_q, g_pt, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA,
+                           newer=True, exclude=_seen_ids)
     except Exception as _e:  # noqa: BLE001 — no embedder: the graph still answers
         # Without vectors the old window: the newest facts of the top nodes.
         log.debug("fact recall by vector skipped: %s", _e)
@@ -2526,14 +2538,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 if f and f["id"] not in _seen and len(_hits) < FACT_RECALL_K:
                     _seen.add(f["id"])
                     _hits.append((f, 0.0, kw))
-    # ADR-015 D7.1: who the user is and how they work, whatever the message.
-    # D7: a fact already shown in this session does not come back.
-    _seen_ids = {str(i).lstrip("#") for i in (arguments.get("exclude") or [])
-                 if isinstance(i, (str, int))}
-    _profile = [f for f in (_profile_facts(g_pt, PROFILE_MAX_CHARS) if arguments.get("profile") else [])
-                if f["id"] not in _seen_ids]
-    _seen_ids |= {f["id"] for f in _profile}
-    _hits = [h for h in _hits if h[0]["id"] not in _seen_ids]
+    _hits = [h for h in _hits if h[0]["id"] not in _seen_ids]   # the no-vector path above
     g_pt._facts_served = {h[0]["id"] for h in _hits}   # D8: not the profile, always shown
     if _hits:
         parts_pt.append("facts: " + " | ".join(
