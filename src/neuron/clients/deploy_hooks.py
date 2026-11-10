@@ -187,28 +187,34 @@ def deploy_claude_code(root: Path, dry_run: bool) -> str:
 
 
 def deploy_opencode(root: Path, dry_run: bool) -> str:
-    """Copy the plugin next to opencode.json and list it in `plugin`."""
+    """Install the plugin as plugins/<name>/ (the .mjs + a package.json) and
+    list it in `plugin` as "./plugins/<name>": OpenCode 2.x loads a local plugin
+    only as a directory. KEEP IN SYNC with gray_matter/executor.py::_deploy_opencode."""
     cfg = Path.home() / ".config" / "opencode" / "opencode.json"
     if not cfg.exists():
         return "SKIPPED: OpenCode not configured on this machine"
     data = _load_json(cfg)
     if data is None:
         return f"SKIPPED: {cfg} is not parseable JSON, left untouched"
-    dst = cfg.parent / "plugins" / (root / OPENCODE).name
-    rel = f"./plugins/{dst.name}"
+    src = root / OPENCODE
+    dst = cfg.parent / "plugins" / src.stem
     plugins = data.setdefault("plugin", [])
     if not isinstance(plugins, list):
         return f"SKIPPED: {cfg} 'plugin' is not a list"
     if dry_run:
         return f"[dry-run] would deploy {dst}"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(root / OPENCODE, dst)
-    # Riconoscere l'entry dal NOME FILE, non dalla stringa esatta: GM la scrive
-    # senza "./" (gray_matter/executor.py) e un match esatto non la vedeva, così
-    # un'installazione GM seguita da una standalone appendeva un secondo
-    # elemento per lo stesso plugin.
-    if not any(dst.name in p for p in plugins if isinstance(p, str)):
-        plugins.append(rel)
+    dst.mkdir(parents=True, exist_ok=True)
+    # index.mjs: OpenCode 2.x loads the directory's index.*, not package.json `main`.
+    shutil.copyfile(src, dst / "index.mjs")
+    (dst / "package.json").write_text(json.dumps(
+        {"name": src.stem, "version": "1.0.0", "type": "module", "main": "./index.mjs"},
+        indent=2), encoding="utf-8")
+    (dst.parent / src.name).unlink(missing_ok=True)      # the pre-2.x single file
+    # Recognised by NAME, never by the exact string: every older spelling of the
+    # entry (with or without "./", the .mjs file) is replaced by the one that loads.
+    new = [p for p in plugins if not (isinstance(p, str) and src.stem in p)] + [f"./plugins/{src.stem}"]
+    if new != plugins:
+        data["plugin"] = new
         _save_json(cfg, data)
         return f"plugin copied + registered ({dst})"
     return f"plugin refreshed ({dst})"
