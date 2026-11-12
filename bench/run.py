@@ -146,9 +146,10 @@ def main() -> int:
     ap.add_argument("--mode", choices=MODES, action="append")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true", help="print every answer")
+    ap.add_argument("--set", default=str(SET), help="the recall set (default recall.json)")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")   # answers carry emoji; a Windows console is cp1252
-    data = load()
+    data = load(pathlib.Path(a.set))
     results = [asyncio.run(run_mode(m, data)) for m in (a.mode or MODES)]
     if a.json:
         print(json.dumps({"set_version": data["version"], "results": results},

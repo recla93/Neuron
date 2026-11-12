@@ -1,0 +1,555 @@
+{
+ "version": 2,
+ "adr": "work/design/ADR-015-NEURON-MEMORIA-A-FATTI.md, fase 0",
+ "what": "Una memoria fissa (facts) e dei messaggi veri (messages): per ognuno, i fatti che un buon richiamo deve portare. off_topic: messaggi per cui la memoria non ha niente, e il richiamo deve tacere. Variant en_text: facts in English, messages in Italian.",
+ "rules": {
+  "facts": "Veri alla data della memoria (2026-11-08), verificabili nel repo (CHANGELOG, work/audit, work/design) o detti dall'utente in chat. kind e' uno dei sette tipi dell'ADR-015 D3. concepts sono quelli che il modello sceglierebbe scrivendo il fatto. I fatti che nessun messaggio si aspetta sono distrattori: servono a far contare il ranking.",
+  "messages": "Testo vero dell'utente, dai transcript del progetto, accorciato solo dove indicato con '...'. Molti sono anteriori alla memoria: la domanda e' cosa porterebbe il richiamo se arrivassero oggi.",
+  "expect": "I fatti senza i quali la risposta giusta va ricostruita da capo. Giudicati leggendo il messaggio, NON guardando cosa ha restituito una run. Non si allarga dopo un mancato: si aggiunge un messaggio nuovo e si alza version.",
+  "off_topic": "Inventati, dichiaratamente: nessun fatto della memoria li riguarda. Ogni fatto mostrato qui e' rumore.",
+  "signature": "Un fatto conta come mostrato se i primi 40 caratteri del suo testo compaiono nella risposta. Devono essere unici: tests/test_bench_recall_set.py lo controlla.",
+  "stale": "v2 (2026-11-10): coppie vecchio -> nuovo sullo stesso argomento, vere nella storia del progetto (s1 e s3 superati da s2 e s4, senza supersedes). Il vecchio somiglia di piu' al messaggio: si aspetta il nuovo. Il vecchio mostrato accanto al nuovo e' contesto, e conta come rumore."
+ },
+ "facts": [
+  {
+   "id": "u1",
+   "kind": "user",
+   "concepts": [
+    "utente",
+    "gray-matter"
+   ],
+   "text": "The user develops Gray Matter, Neuron and NeuRAG alone, writes in Italian and works on two PCs: one's local memory is not on the other."
+  },
+  {
+   "id": "u2",
+   "kind": "habit",
+   "concepts": [
+    "ci",
+    "push"
+   ],
+   "text": "After a push the user checks CI: do not watch or rerun it, just say what was pushed."
+  },
+  {
+   "id": "u3",
+   "kind": "habit",
+   "concepts": [
+    "piano",
+    "costi"
+   ],
+   "text": "Before implementing, the user wants the plan with pros, cons and measured gains: no code before the decision."
+  },
+  {
+   "id": "u4",
+   "kind": "habit",
+   "concepts": [
+    "test",
+    "utente"
+   ],
+   "text": "After a fix the user wants a real-user test, interactive on the installers and the GUI, not just a green test suite."
+  },
+  {
+   "id": "d1",
+   "kind": "decision",
+   "concepts": [
+    "standalone",
+    "install"
+   ],
+   "text": "The three tools are standalone: Neuron and NeuRAG install and work without GM; GM is optional but recommended, as gateway and bridge."
+  },
+  {
+   "id": "d2",
+   "kind": "decision",
+   "concepts": [
+    "turso",
+    "cloud"
+   ],
+   "text": "All three tools use Turso, locally too through pyturso; Turso cloud is optional and sqlite3 stays only as an automatic fallback."
+  },
+  {
+   "id": "d3",
+   "kind": "decision",
+   "concepts": [
+    "neuron",
+    "fatti",
+    "memoria"
+   ],
+   "text": "ADR-015 (8/11): Neuron stores typed, append-only facts, concepts are only the index; node evictions and merges must no longer delete facts."
+  },
+  {
+   "id": "d4",
+   "kind": "decision",
+   "concepts": [
+    "memhook",
+    "ipc",
+    "flash"
+   ],
+   "text": "ADR-014 D3b: the UserPromptSubmit hook makes a single IPC request to the GM daemon, which builds Neuron context, KB pointer and flash."
+  },
+  {
+   "id": "d5",
+   "kind": "decision",
+   "concepts": [
+    "kb",
+    "bridge",
+    "soglia"
+   ],
+   "text": "The recall's KB pointer is vector-based with a 0.55 threshold: search by name pointed at whole folders and minted noise bridges like flash-audit."
+  },
+  {
+   "id": "p1",
+   "kind": "progress",
+   "concepts": [
+    "release",
+    "ci"
+   ],
+   "text": "Release 1.7.0 published on 6/11: gray_matter 1.7.0, neuron 6.9.0, neurag 1.7.1, commit 672bf01, CI green, installed with install.ps1 -Force."
+  },
+  {
+   "id": "p2",
+   "kind": "progress",
+   "concepts": [
+    "memhook",
+    "push",
+    "commit"
+   ],
+   "text": "As of 8/11 commit b29a186 (the install wires the memhook) is on main but not pushed, and the recall change in gray_matter/server.py is not committed."
+  },
+  {
+   "id": "p3",
+   "kind": "progress",
+   "concepts": [
+    "backup",
+    "memoria"
+   ],
+   "text": "As of 8/11 GM's memory exists only on the main PC: graphs 24 MB and NeuRAG 65 MB, backups on the same disk, no external copy."
+  },
+  {
+   "id": "x1",
+   "kind": "fix",
+   "concepts": [
+    "pyturso",
+    "wal",
+    "test"
+   ],
+   "text": "Neuron and neurag tests failed with a locked WAL and disk I/O error: system Python had pyturso 0.6.1 instead of the 0.8.3 pin. Fix: pip install the wheel in neuron/vendor."
+  },
+  {
+   "id": "x2",
+   "kind": "fix",
+   "concepts": [
+    "f32blob",
+    "ranking",
+    "neurag"
+   ],
+   "text": "NeuRAG's SQL vector ranking never ran: f32blob does not exist in pyturso and the except swallowed the error. Fix 1.3.2: vector_distance_cos already takes the blob."
+  },
+  {
+   "id": "x3",
+   "kind": "fix",
+   "concepts": [
+    "worker",
+    "wal",
+    "riavvio"
+   ],
+   "text": "Turns lost on restart: a killed worker left its last write in the WAL. Fix GM 1.3.0: clean shutdown via pipe, checkpoint every 8 mutations."
+  },
+  {
+   "id": "x4",
+   "kind": "fix",
+   "concepts": [
+    "processi",
+    "python",
+    "worker"
+   ],
+   "text": "Many python.exe running: the venv one is a CPython redirector and the real interpreter is its child, so each worker counts twice; _reap_orphans closes the orphans recorded in pids."
+  },
+  {
+   "id": "x5",
+   "kind": "fix",
+   "concepts": [
+    "consolidate",
+    "graveyard"
+   ],
+   "text": "On 12/9 consolidate with drop_orphans archived 255 nodes out of 296; now drop_orphans is False by default and a drop above 20% of the nodes is refused."
+  },
+  {
+   "id": "k1",
+   "kind": "fact",
+   "concepts": [
+    "grafi",
+    "backup",
+    "percorsi"
+   ],
+   "text": "Neuron's graphs live in %LOCALAPPDATA%\\GrayMatterEnvironment\\neuron\\graphs, the KB in ...\\neurag, the daily backups in ...\\backups."
+  },
+  {
+   "id": "k2",
+   "kind": "fact",
+   "concepts": [
+    "test",
+    "suite",
+    "mockdeps"
+   ],
+   "text": "The three test suites run in three processes: neuron/tests/_mockdeps.py injects fake mcp and fastembed that contaminate the other suites."
+  },
+  {
+   "id": "k3",
+   "kind": "fact",
+   "concepts": [
+    "mirror",
+    "repo",
+    "privacy"
+   ],
+   "text": "The Mirror workflow publishes the repo: graphs, KB, Claude Code memory and other personal data must never be committed."
+  },
+  {
+   "id": "k4",
+   "kind": "fact",
+   "concepts": [
+    "install",
+    "venv",
+    "client"
+   ],
+   "text": "After a code change you must reinstall (install.ps1 -Force or Repair in the GUI) and restart the client: the MCP server runs from a copy in the venv."
+  },
+  {
+   "id": "k5",
+   "kind": "fact",
+   "concepts": [
+    "pyturso",
+    "wheel",
+    "install"
+   ],
+   "text": "pyturso has no win_amd64 wheel on PyPI: the release builds an abi3 wheel and install.ps1 takes it from vendor/ with --find-links; the pin is exact on purpose."
+  },
+  {
+   "id": "k6",
+   "kind": "fact",
+   "concepts": [
+    "memhook",
+    "latenza",
+    "daemon"
+   ],
+   "text": "The hook's first recall after a restart lasts as long as the timeout (2.49 s of 2.5): the first message may get no memory; warm about 560 ms."
+  },
+  {
+   "id": "k7",
+   "kind": "fact",
+   "concepts": [
+    "memhook",
+    "settings",
+    "hook"
+   ],
+   "text": "The memhook is wired in ~/.claude/settings.json: recall on UserPromptSubmit, save in dry-run on Stop, both run with python -I."
+  },
+  {
+   "id": "i1",
+   "kind": "idea",
+   "concepts": [
+    "eventi",
+    "stimoli",
+    "flash"
+   ],
+   "text": "User's idea (5/8): intercept events aspect-style to fire stimuli and flashes straight from the DB instead of via MCP."
+  },
+  {
+   "id": "i2",
+   "kind": "idea",
+   "concepts": [
+    "gui",
+    "token",
+    "knowledge"
+   ],
+   "text": "User's idea (30/7): set from the GUI how much knowledge and how many stimuli are injected, to save tokens without filling the context."
+  },
+  {
+   "id": "z1",
+   "kind": "fact",
+   "concepts": [
+    "embedding",
+    "modello"
+   ],
+   "text": "The default embedding is paraphrase-multilingual-MiniLM-L12-v2 at 384 dimensions: changing it requires re-embedding the whole store."
+  },
+  {
+   "id": "z2",
+   "kind": "fact",
+   "concepts": [
+    "extract",
+    "tokenizer"
+   ],
+   "text": "Neuron extract's tokenizer splits on the apostrophe: dell'albero becomes dell, and 472 stopwords do not stop Italian greetings and verbs."
+  },
+  {
+   "id": "z3",
+   "kind": "decision",
+   "concepts": [
+    "owner",
+    "space",
+    "multiutente"
+   ],
+   "text": "ADR-013: a row's owner and space are written at INSERT and never change, even if others update it later."
+  },
+  {
+   "id": "z4",
+   "kind": "fact",
+   "concepts": [
+    "grafo",
+    "tetto",
+    "nodi"
+   ],
+   "text": "The ai graph hit the MAX_NODES cap of 500 on 4/11: since then every new concept evicts the one with the lowest salience."
+  },
+  {
+   "id": "s1",
+   "kind": "fact",
+   "concepts": [
+    "hook",
+    "kimi",
+    "codex"
+   ],
+   "text": "Hook coverage per client: Kimi Code has SessionStart and UserPromptSubmit but no Stop, Codex only SessionStart from the cowork plugin, OpenCode an experimental plugin on the system prompt."
+  },
+  {
+   "id": "s3",
+   "kind": "fact",
+   "concepts": [
+    "episodi",
+    "neuron"
+   ],
+   "text": "Neuron keeps at most 5 episodes per node: at the sixth, the oldest is deleted (EPISODES_PER_NODE)."
+  },
+  {
+   "id": "s2",
+   "kind": "progress",
+   "concepts": [
+    "hook",
+    "kimi",
+    "codex",
+    "opencode"
+   ],
+   "text": "Multi-client hooks done: Kimi Code has Stop too (exit 2), Codex has UserPromptSubmit and Stop in hooks.json, OpenCode a folder plugin with recall and save check."
+  },
+  {
+   "id": "s4",
+   "kind": "decision",
+   "concepts": [
+    "episodi",
+    "neuron",
+    "fatti"
+   ],
+   "text": "ADR-015: facts are append-only and never deleted, an update goes through supersedes; EPISODES_PER_NODE only limits how many facts pre_turn shows."
+  }
+ ],
+ "messages": [
+  {
+   "id": "m01",
+   "date": "2026-11-07",
+   "expect": [
+    "p1",
+    "p2",
+    "p3"
+   ],
+   "text": "Ciao Claude, controlliamo lo stato di GM, leggi stato dei lavori, la situazione l'ultima volta è critica"
+  },
+  {
+   "id": "m02",
+   "date": "2026-11-08",
+   "expect": [
+    "x1",
+    "k2"
+   ],
+   "text": "leggi stato dei lavori ed handoff di oggi, bisogna fixare la suite."
+  },
+  {
+   "id": "m03",
+   "date": "2026-11-08",
+   "expect": [
+    "u1",
+    "d3",
+    "p3"
+   ],
+   "text": "Scrivi l'ADR ma ti dico: siamo in un altro PC. Partiamo da Neuron, quello messo peggio"
+  },
+  {
+   "id": "m04",
+   "date": "2026-08-05",
+   "expect": [
+    "u2"
+   ],
+   "text": "committa tutto e pusha, controllo io la CI. Consigli di bumpare tags?"
+  },
+  {
+   "id": "m05",
+   "date": "2026-08-05",
+   "expect": [
+    "u2"
+   ],
+   "text": "si, fixa e pusha: la CI la controllo io"
+  },
+  {
+   "id": "m06",
+   "date": "2026-08-04",
+   "expect": [
+    "u3"
+   ],
+   "text": "let's plan before anything: advantages and disadvantages"
+  },
+  {
+   "id": "m07",
+   "date": "2026-08-05",
+   "expect": [
+    "u3"
+   ],
+   "text": "ok, prima di fare qualsiasi cosa vediamo i guadagni: se conviene davvero"
+  },
+  {
+   "id": "m08",
+   "date": "2026-07-27",
+   "expect": [
+    "u4"
+   ],
+   "text": "Ok, hai fatto i test simulando utente?"
+  },
+  {
+   "id": "m09",
+   "date": "2026-08-04",
+   "expect": [
+    "x4"
+   ],
+   "text": "I'd like to understand why I had 14 processes active from python. I've closed 6 for now"
+  },
+  {
+   "id": "m10",
+   "date": "2026-07-27",
+   "expect": [
+    "x4",
+    "x3"
+   ],
+   "text": "prima ho visto 12 processi di python attivi. ma perchè se ne attivano così tanti? cioè, come facciamo a gestire i processi stale o che non sono collegati a nulla?"
+  },
+  {
+   "id": "m11",
+   "date": "2026-07-21",
+   "expect": [
+    "d1",
+    "k5"
+   ],
+   "text": "Sono tutti stand alone, non capisco perchè le dependency e wheels devono stare in Neuron. Sono tool utilizzabili singolarmente"
+  },
+  {
+   "id": "m12",
+   "date": "2026-07-21",
+   "expect": [
+    "d2",
+    "k5"
+   ],
+   "text": "No, ormai abbiamo cambiato e TUTTI usano Turso. Tutti. bisogna mettere le wheel delle versioni."
+  },
+  {
+   "id": "m13",
+   "date": "2026-07-21",
+   "expect": [
+    "d2"
+   ],
+   "text": "Turso, oltre che Cloud, dovrebbe essere anche locale altrimenti non è coerente e, se serve, almeno, facilitiamo il trasferimento dei dati."
+  },
+  {
+   "id": "m14",
+   "date": "2026-08-05",
+   "expect": [
+    "x2"
+   ],
+   "text": "In neurag\\db.py line ~2248 the vector search SQL uses `1.0 - vector_distance_cos(f32blob(embedding), f32blob(?)) AS score`. `f32blob` does not exist in pyturso 0.6.1"
+  },
+  {
+   "id": "m15",
+   "date": "2026-08-04",
+   "expect": [
+    "k5",
+    "k4"
+   ],
+   "text": "BRO, allora, abbiamo un enorme problema e mi sto altamente seccando: Gli installer NON installano correttamente, non puliscono eventuali vecchie install e vanno a prendere wheels VECCHIE se presenti nel PC"
+  },
+  {
+   "id": "m16",
+   "date": "2026-07-27",
+   "expect": [
+    "k4"
+   ],
+   "text": "Per applicare tutto serve comunque un install.ps1 -Force, che ora ha anche senso proprio perché il fix dello schema è nel codice, non nell'installato"
+  },
+  {
+   "id": "m17",
+   "date": "2026-07-22",
+   "expect": [
+    "p1",
+    "p2"
+   ],
+   "text": "Pensi che possiamo andare in release allo stato attuale?"
+  },
+  {
+   "id": "m18",
+   "date": "2026-07-30",
+   "expect": [
+    "i2"
+   ],
+   "text": "Puoi partire ma una cosa: dovremmo poter far gestire all'utente, magari dalla gui, la questione knowledge, stimoli, ecc. L'obiettivo è risparmiare tokens ma se iniettiamo troppa knowledge non si prende molto contesto?"
+  },
+  {
+   "id": "m19",
+   "date": "2026-08-05",
+   "expect": [
+    "i1"
+   ],
+   "text": "la cosa interessante era la gestione degli eventi: qualcosa che intercetta gli eventi in stile aspect per lanciare stimoli o flash da DB e non da mcp sarebbe anche interessante: cosa ne pensi?"
+  },
+  {
+   "id": "m20",
+   "date": "2026-08-05",
+   "expect": [
+    "k7",
+    "d4"
+   ],
+   "text": "io pensavo a qualcosa di più dinamico: Full Suite: Gm manda hook con i comandi dei suoi worker, controlla che ci siano e manda. GM + Neuron: GM rileva Neuron, manda hook solo con Neuron"
+  },
+  {
+   "id": "m21",
+   "date": "2026-11-10",
+   "expect": [
+    "s2"
+   ],
+   "text": "Claude! ciao, domanda, ma i nostri Hooks sono compatibili con opencode e gli altri providers?"
+  },
+  {
+   "id": "m22",
+   "date": "2026-11-10",
+   "expect": [
+    "s4"
+   ],
+   "text": "bisogna aggiornare la memoria, non abbiamo più gli episodes e neanche 5. Abbiamo i facts"
+  }
+ ],
+ "off_topic": [
+  {
+   "id": "o1",
+   "text": "ricetta della carbonara con guanciale"
+  },
+  {
+   "id": "o2",
+   "text": "che tempo farà domani a Milano?"
+  },
+  {
+   "id": "o3",
+   "text": "traduci in inglese: la riunione è spostata a giovedì pomeriggio"
+  },
+  {
+   "id": "o4",
+   "text": "consigliami un romanzo di fantascienza da leggere in vacanza"
+  },
+  {
+   "id": "o5",
+   "text": "quanti grammi di farina servono per una pizza margherita?"
+  }
+ ]
+}
