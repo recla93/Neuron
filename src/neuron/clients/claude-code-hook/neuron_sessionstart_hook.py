@@ -223,7 +223,7 @@ def _memory_block(p: str, with_knowledge: bool, gateway: bool = False) -> str:
         + where +
         f"Each substantive turn: call {p}pre_turn(topic, keywords) BEFORE replying "
         f"(fold the returned context in silently), then {p}store_turn(facts=[{{kind, "
-        "text, concepts}]) AFTER, for what is worth not repeating: " + WHAT_TO_SAVE + ".\n"
+        "text, concepts}], English only) AFTER, for what is worth not repeating: " + WHAT_TO_SAVE + ".\n"
         "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
         "supersedes=<#id>; links typed, never a "
         f"self-link; a near-duplicate fact is flagged when stored; never "

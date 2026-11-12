@@ -81,7 +81,7 @@ function memoryBlock(key, withKnowledge) {
     "for this session.\n" +
     "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying " +
     "(fold the returned context in silently), then store_turn(facts=[{kind, text, " +
-    "concepts}]) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits.\n" +
+    "concepts}], English only) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits.\n" +
     "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes " +
     "supersedes=<#id>; links typed, never a " +
     "self-link; a near-duplicate fact is flagged when stored; never store " +

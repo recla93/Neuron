@@ -55,3 +55,18 @@ def test_a_reached_node_without_a_fact_gives_no_stimulus():
         f["status"] = "superseded"
     g.add_fact("habit", "the user pushes only after a usage test", ["x"], 1)   # personal: never a spark
     assert srv._stimulus_block(g, ["seed"]) == ""
+
+
+def test_a_save_carries_no_stimulus(tmp_path, monkeypatch):
+    """2026-11-12: a save answers nothing, and its result is re-read on every
+    later step of the turn. pre_turn keeps the stimulus, store_turn does not."""
+    pytest.importorskip("mcp"); pytest.importorskip("fastembed")
+    import asyncio
+    import neuron.server as srv
+    from neuron.registry import GraphRegistry
+    monkeypatch.setattr(srv, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
+    monkeypatch.setattr(srv, "TURSO_ENGINE", False)
+    monkeypatch.setattr(srv, "_stimulus_block", lambda *a, **k: "\n🧠 [idea] would be shown")
+    out = asyncio.run(srv.call_tool("store_turn", {"facts": [
+        {"kind": "fix", "text": "the save result stays short", "concepts": ["seed"]}]}))[0].text
+    assert "saved" in out and "🧠" not in out, out

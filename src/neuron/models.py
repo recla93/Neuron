@@ -82,6 +82,15 @@ EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 400)
 # Hard cut at the trust boundary only (a runaway or hostile write), not a memory
 # limit: 5x the advisory length.
 FACT_MAX_CHARS = _env_int("NEURON_FACT_MAX_CHARS", 2000)
+# The injected form of a fact (2026-11-12): a short English line the writing
+# model gives next to the full text. Recall shows it, search still reads the text.
+GIST_MAX_CHARS = _env_int("NEURON_GIST_MAX_CHARS", 120)
+
+
+def fact_shown(f: dict) -> str:
+    """What a fact costs in context: its gist when it has one (a trailing `+`
+    says the full text is there: pre_turn(topic="#id")), else its text."""
+    return f"{f['gist']} +" if f.get("gist") else f["text"]
 # How many of a node's newest facts pre_turn considers. A read window: nothing
 # past it is dropped from the store.
 EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)
@@ -233,7 +242,7 @@ _LINK_UPSERT = (
 # another writer's text. Only `status` changes, and only active -> superseded.
 _FACT_INSERT = (
     "INSERT OR IGNORE INTO facts (context, id, kind, text, turn, created_at, source, "
-    "supersedes, status, confirmed, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+    "supersedes, status, confirmed, gist, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
 _CONCEPT_INSERT = ("INSERT OR IGNORE INTO fact_concepts (context, fact_id, keyword) "
                    "VALUES (?,?,?)")
 
@@ -554,7 +563,7 @@ class Graph:
     # ------------------------------------------------------------------
 
     def add_fact(self, kind: str, text: str, concepts, turn: "int | None" = None,
-                 supersedes: "str | None" = None, source: str = "model") -> dict:
+                 supersedes: "str | None" = None, source: str = "model", gist: str = "") -> dict:
         """Store one fact, indexed under ``concepts``. Append-only.
 
         Returns a REPORT, ``{}`` when nothing was stored (empty text):
@@ -590,7 +599,8 @@ class Graph:
                     "text": text, "turn": turn,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "source": source, "supersedes": None, "status": "active",
-                    "concepts": concepts, "confirmed": 0}
+                    "concepts": concepts, "confirmed": 0,
+                    "gist": " ".join(str(gist or "").split())[:GIST_MAX_CHARS]}
             self.facts[fid] = fact
             self._new_facts.add(fid)
             self._new_concepts.update((fid, kw) for kw in concepts)
@@ -1269,6 +1279,9 @@ class Graph:
         # or confirmed). Its own ALTER: a store from before it reads 0.
         if self._table_cols(conn, "facts") and "confirmed" not in self._table_cols(conn, "facts"):
             conn.execute("ALTER TABLE facts ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0")
+        # The gist (2026-11-12), same rule: an older store reads ''.
+        if self._table_cols(conn, "facts") and "gist" not in self._table_cols(conn, "facts"):
+            conn.execute("ALTER TABLE facts ADD COLUMN gist TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
     def _create_unique(conn, name: str, table: str, cols: str, *, dedupe_group: str) -> None:
@@ -1612,6 +1625,7 @@ class Graph:
                 owner      TEXT DEFAULT '',
                 space      TEXT DEFAULT '',
                 confirmed  INTEGER NOT NULL DEFAULT 0,
+                gist       TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (context, id));
             CREATE TABLE IF NOT EXISTS fact_concepts (
                 context TEXT NOT NULL DEFAULT 'default',
@@ -1884,7 +1898,7 @@ class Graph:
             who = (owner_identity(), current_space())
             conn.executemany(_FACT_INSERT, [
                 (context, f["id"], f["kind"], f["text"], f["turn"], f["created_at"],
-                 f["source"], f["supersedes"], f["status"], f.get("confirmed", 0)) + who
+                 f["source"], f["supersedes"], f["status"], f.get("confirmed", 0), f.get("gist", "")) + who
                 for f in rows])
         if self._new_concepts:
             conn.executemany(_CONCEPT_INSERT,
@@ -2118,15 +2132,18 @@ class Graph:
                 # `confirmed` (ADR-015 D8) is absent from a store not yet saved
                 # by this version: read it as 0 there, the next save adds it.
                 cols = "id, kind, text, turn, created_at, source, supersedes, status"
-                has_conf = "confirmed" in self._table_cols(conn, "facts")
+                have = self._table_cols(conn, "facts")
+                # The same for `gist`: absent from a store not yet saved by 6.11.
+                extra = [c for c in ("confirmed", "gist") if c in have]
                 for row in conn.execute(
-                        f"SELECT {cols}{', confirmed' if has_conf else ''} "
-                        "FROM facts WHERE context=?", (context,)):
+                        f"SELECT {', '.join([cols, *extra])} FROM facts WHERE context=?", (context,)):
                     fid, kind, text, turn, created, source, sup, status = row[:8]
+                    more = dict(zip(extra, row[8:]))
                     self.facts[fid] = {"id": fid, "kind": kind, "text": text, "turn": turn or 0,
                                        "created_at": created, "source": source,
                                        "supersedes": sup, "status": status, "concepts": [],
-                                       "confirmed": (row[8] or 0) if has_conf else 0}
+                                       "confirmed": more.get("confirmed") or 0,
+                                       "gist": more.get("gist") or ""}
                 for fid, kw in conn.execute(
                         "SELECT fact_id, keyword FROM fact_concepts WHERE context=?", (context,)):
                     if fid in self.facts:

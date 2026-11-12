@@ -54,7 +54,7 @@ from mcp.types import Tool, TextContent, Resource
 # ---------------------------------------------------------------------------
 
 from neuron.models import (
-    Node, Link, Graph, compute_health,
+    Node, Link, Graph, compute_health, fact_shown,
     Weight, LinkType, Domain, Sentiment, Intent,
     WEIGHT_ORDER, TANGENTIAL_EXPIRY_TURNS,
     SALIENCE_DECAY_THRESHOLD, SALIENCE_DECAY_AMOUNT,
@@ -649,7 +649,7 @@ def _all_tools() -> list[Tool]:
                 "properties": {
                     "facts": {
                         "type": "array",
-                        "description": "The memory of this turn: 0-3 facts, each one sentence.",
+                        "description": "The memory of this turn: 0-3 facts, each one sentence, in English.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -657,11 +657,16 @@ def _all_tools() -> list[Tool]:
                                          "enum": ["progress", "decision", "fix", "fact", "idea", "user", "habit"],
                                          "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work)"},
                                 "text": {"type": "string",
-                                         "description": f"One sentence with its why, ideally under {EPISODE_MAX_CHARS} chars."},
+                                         "description": f"One sentence with its why, ideally under {EPISODE_MAX_CHARS} chars. "
+                                                        "ENGLISH ONLY, whatever the chat language: the memory's pivot language."},
                                 "concepts": {"type": "array", "items": {"type": "string"},
-                                             "description": "1-5 concept nouns that index the fact"},
+                                             "description": "1-5 concept nouns that index the fact, in English"},
                                 "supersedes": {"type": "string",
                                                "description": "Optional: id of the fact this one replaces (e.g. a3f91c02)"},
+                                "gist": {"type": "string",
+                                         "description": "Optional: the fact for a machine, ENGLISH ONLY, terse, max ~100 chars, e.g. "
+                                                        "'fix: daemon log locked on purge -> retry rmtree 30s'. "
+                                                        "Recall shows it instead of the text."},
                             },
                             # Only `text`: the MCP SDK validates against this
                             # schema BEFORE the handler, so one fact without
@@ -1081,7 +1086,9 @@ def _all_tools() -> list[Tool]:
                 "properties": {
                     "topic": {
                         "type": "string",
-                        "description": "Current topic or question to fetch context for",
+                        "description": "Current topic or question to fetch context for. "
+                                       "Only fact ids ('#a3f91c02 #0b1c2d3e') = the full text of "
+                                       "facts shown as a short gist (ending in '+')",
                     },
                     "keywords": {
                         "type": "array",
@@ -1523,7 +1530,7 @@ def _parse_facts(arguments: dict, notes: list) -> list[dict]:
                 notes.append(f"dropped concept {c!r}: use letters, digits, spaces, -_.:+")
         cs = ok
         out.append({"kind": kind, "text": str(item["text"]).strip(), "concepts": cs[:5],
-                    "supersedes": item.get("supersedes")})
+                    "supersedes": item.get("supersedes"), "gist": str(item.get("gist") or "")})
     if len(raw) > MAX_FACTS_PER_TURN:
         notes.append(f"kept the first {MAX_FACTS_PER_TURN} facts of {len(raw)}")
     ep = str(arguments.get("episode", "") or "").strip()
@@ -1702,7 +1709,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         # A fact whose concepts all fell to curation is still indexed: under the
         # turn's keywords, so it stays findable.
         rep = g.add_fact(f["kind"], f["text"], cs or list(keywords), turn,
-                         supersedes=f["supersedes"])
+                         supersedes=f["supersedes"], gist=f.get("gist", ""))
         if not rep:
             continue
         g_kind = g.facts[rep["id"]]["kind"]
@@ -1716,6 +1723,9 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             _fact_lost["truncated"] = rep["truncated"]
         if "supersedes_unknown" in rep:
             _fact_notes.append(f"supersedes '{rep['supersedes_unknown']}': no active fact with that id")
+        if _cur.foreign_language(f["text"]):     # kept: a fact is never lost for its language
+            _fact_notes.append(f"#{rep['id']} stored; write facts in English, the memory's pivot "
+                               "language, whatever the chat language")
     # ADR-015 D8: a fact was used when the last pre_turn showed it and this
     # turn writes about one of its concepts, or names it by #id. One use per
     # fact per turn. The profile (user/habit) is never in the served set.
@@ -1842,8 +1852,10 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
            (f"\n(domain signal: {_pend_dom} {_pend_n}/{CONTEXT_SWITCH_THRESHOLD} — "
             f"context will switch if it persists)" if _pend_dom else ""))
         + _cur.curation_note(_fact_notes + _cur_notes)   # facts first: max 3 notes are shown
-        + _stimulus_block(g, keywords, {fid for fid, f in g.facts.items()   # E2.5: never
-                                        if f["turn"] == turn})              # a fact of this turn
+        # No stimulus here any more (2026-11-12): a save answers nothing, and every
+        # character of its result is re-read on each later step of the turn. The
+        # stimulus had the lowest use of all (21%, ledger 10/11) and kept showing
+        # off-topic facts; pre_turn still carries it, next to the recall.
         # ADR-015 §3.3: no "→ next: pre_turn" tail any more. The session
         # instructions and the hooks start the next turn; this one paid ~12
         # tokens on every save to repeat them.
@@ -2073,7 +2085,7 @@ def _dormant_facts(g, near: str, threshold: int, top_n: int, exclude: set) -> st
     if not rows:
         return f"No dormant fact near '{near}'."
     return "\n".join([f"Dormant facts near '{near}':"] + [
-        f"  [{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, kw in rows[:top_n]])
+        f"  [{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}" for f, kw in rows[:top_n]])
 
 
 def _profile_facts(g, cap: int) -> list:
@@ -2082,7 +2094,7 @@ def _profile_facts(g, cap: int) -> list:
     for f in sorted((f for f in g.facts.values()
                      if f["status"] == "active" and f["kind"] in ("user", "habit")),
                     key=lambda f: f["turn"] or 0, reverse=True):
-        used += len(f["text"]) + 20          # "[habit] ... #12345678 | "
+        used += len(fact_shown(f)) + 20      # "[habit] ... #12345678 | "
         if used > cap:
             break
         out.append(f)
@@ -2480,8 +2492,26 @@ async def _tool_list_contexts(arguments: dict, ctx: str, g) -> list[TextContent]
     return [TextContent(type="text", text="\n".join(lines) or "No contexts found.")]
 
 
+_FACT_IDS = re.compile(r"#?([0-9a-f]{8})\b")
+
+
+def _expand_facts(topic: str, g) -> "str | None":
+    """pre_turn(topic="#id [#id ...]"): the full text of facts shown as a gist.
+    Only when the topic is nothing but ids, so a question never trips it."""
+    ids = _FACT_IDS.findall(topic or "")
+    if not ids or _FACT_IDS.sub("", topic).strip(" ,;|"):
+        return None
+    rows = [g.facts[i] for i in dict.fromkeys(ids) if i in g.facts]
+    if not rows:
+        return f"No fact with id {', '.join('#' + i for i in ids)} in this context."
+    return _as_data("\n".join(f"[{f['kind']}] {f['text']} #{f['id']}" for f in rows))
+
+
 async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     topic_pt = arguments.get("topic", "")
+    expanded = _expand_facts(topic_pt, _g.get())
+    if expanded is not None:
+        return [TextContent(type="text", text=expanded)]
     extra_kws_pt = arguments.get("keywords", [])
     max_tokens_pt = int(arguments.get("max_tokens", 200))
     char_budget_pt = max_tokens_pt * CHARS_PER_TOKEN
@@ -2542,7 +2572,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     g_pt._facts_served = {h[0]["id"] for h in _hits}   # D8: not the profile, always shown
     if _hits:
         parts_pt.append("facts: " + " | ".join(
-            f"[{f['kind']}] {f['text']} ({kw}) #{f['id']}" for f, _sc, kw in _hits))
+            f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}" for f, _sc, kw in _hits))
     if lks:
         parts_pt.append("links:" + "|".join(
             f"{lk.source}-[{lk.weight[0]}]->{lk.target}" for lk in lks[:6]
@@ -2679,7 +2709,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     ctx_out_pt = _fit(ctx_text_pt, char_budget_pt)
     if _profile:   # its own cap, outside the context budget: never cut by it
         ctx_out_pt = "profile: " + " | ".join(
-            f"[{f['kind']}] {f['text']} #{f['id']}" for f in _profile) + (
+            f"[{f['kind']}] {fact_shown(f)} #{f['id']}" for f in _profile) + (
             f" | {ctx_out_pt}" if parts_pt else "")
     out_pt = "\n".join([status_line, *warns_pt,
                         _as_data(ctx_out_pt) if parts_pt or _profile else ctx_out_pt])
@@ -2702,10 +2732,10 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # sentence is reserved for stimulus-free responses.
     if staged_line and stim_line:
         stim_line = ""   # staged is one-shot; the live stimulus returns next turn
-    tail = ("\n→ then store_turn(facts=[{kind, text, concepts}])."
+    tail = ("\n→ then store_turn(facts=[{kind, text, concepts}], English only)."
             if (staged_line or stim_line) else
             "\n→ next: fold this context into your reply silently, then call "
-            "store_turn(facts=[{kind, text, concepts}]) for what is worth not repeating.")
+            "store_turn(facts=[{kind, text, concepts}], English only) for what is worth not repeating.")
     # Reinforcement-loop enforcement (2026-08-25), low-cost edition: the line
     # sits AFTER the budget (never truncated) but must stay cheap — top-2
     # keywords, three words of prose, ~12 tokens. Only with content served.

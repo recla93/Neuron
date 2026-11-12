@@ -318,5 +318,7 @@ def _stimulus_block(g, keywords, skip=()) -> str:
     why = ", ".join(pick["reasons"][:2])
     head, tail = f"\n🧠 [{fact['kind']}] ", f" ({path}; {why}) #{fact['id']}"
     room = max(20, s.STIMULUS_MAX_CHARS - len(head) - len(tail))
-    text = fact["text"] if len(fact["text"]) <= room else fact["text"][:room - 1].rstrip() + "…"
+    from neuron.models import fact_shown
+    shown = fact_shown(fact)
+    text = shown if len(shown) <= room else shown[:room - 1].rstrip() + "…"
     return head + text + tail

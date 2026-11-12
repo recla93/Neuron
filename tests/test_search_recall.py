@@ -187,3 +187,58 @@ def test_a_shown_fact_written_about_or_cited_counts_one_use(words, tmp_path, mon
     assert fix["confirmed"] == 2
     out = call("confirm", {"facts": [f"#{fix['id']}"]})
     assert fix["id"] in out and fix["confirmed"] == 3
+
+
+# --- the gist (2026-11-12): recall shows the short form, search reads the text ----
+
+def test_a_gist_is_stored_shown_and_expanded(words, tmp_path, monkeypatch):
+    import asyncio
+    from neuron.registry import GraphRegistry
+    monkeypatch.setattr(S, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
+    monkeypatch.setattr(S, "TURSO_ENGINE", False)
+    call = lambda tool, args: asyncio.run(S.call_tool(tool, args))[0].text  # noqa: E731
+    long_text = "pacchetti importati dalla cartella sbagliata perche' -m mette la cwd in testa a sys.path"
+    call("store_turn", {"facts": [{"kind": "fix", "text": long_text, "concepts": ["python"],
+                                   "gist": "fix: -m imports from cwd -> run with -I"}]})
+    f = next(iter(S._g.get().facts.values()))
+    assert f["gist"] == "fix: -m imports from cwd -> run with -I"
+
+    out = call("pre_turn", {"topic": "pacchetti importati cartella sbagliata"})
+    assert "fix: -m imports from cwd -> run with -I +" in out and long_text not in out, out
+    assert long_text in call("pre_turn", {"topic": f"#{f['id']}"})        # the full text on request
+    assert "No fact with id" in call("pre_turn", {"topic": "#deadbeef"})
+    question = call("pre_turn", {"topic": f"cosa dice #{f['id']} sui pacchetti?"})   # a question:
+    assert question.startswith("[neuron] ctx=") and long_text not in question, question  # normal recall
+
+    # The gist survives a save and a reload of the store.
+    S._g.get().save_sqlite(S._g._db_path(S._g.active), context=S._g.active, force=True)
+    monkeypatch.setattr(S, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
+    assert S._g.get().facts[f["id"]]["gist"] == "fix: -m imports from cwd -> run with -I"
+
+
+def test_a_fact_without_gist_is_shown_as_before():
+    from neuron.models import fact_shown
+    assert fact_shown({"text": "full text", "gist": ""}) == "full text"
+    assert fact_shown({"text": "full text"}) == "full text"
+    assert fact_shown({"text": "full text", "gist": "short"}) == "short +"
+
+
+def test_an_old_store_without_the_gist_column_loads_and_is_upgraded(tmp_path):
+    """A store written before the gist reads '' and gets the column at its next save."""
+    from neuron import db as _db
+    from neuron.models import Graph
+    path = str(tmp_path / "graph_default.db")
+    g = Graph()
+    g.add_fact("fix", "old fact", ["x"], 1)
+    g.save_sqlite(path, context="default", force=True)
+    con = _db.connect_local(path)   # the store's own driver: stdlib sqlite3 misses its WAL
+    con.execute("ALTER TABLE facts DROP COLUMN gist")
+    con.commit()
+    con.close()
+    g2 = Graph()
+    g2.load_sqlite(path, context="default")
+    assert next(iter(g2.facts.values()))["gist"] == ""
+    g2.save_sqlite(path, context="default", force=True)
+    con = _db.connect_local(path)
+    assert "gist" in {r[1] for r in con.execute("PRAGMA table_info(facts)")}
+    con.close()

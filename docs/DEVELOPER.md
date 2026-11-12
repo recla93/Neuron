@@ -769,7 +769,8 @@ only the **top-2** are emitted (`_build_context_window`). Cross-domain stays a d
 (the engine is single-graph). A future "Option B" (engine as the primary generator) is noted in
 the code.
 
-**Piggyback stimulus (E2.5).** `store_turn` and `pre_turn` append a compact one-line stimulus
+**Piggyback stimulus (E2.5).** `pre_turn` appends a compact one-line stimulus (`store_turn` no
+longer does, since 2026-11-12: a save's result is re-read on every later step of the turn)
 (top spreading-activation node), capped to ~40 tokens and suppressed below
 `STIMULUS_MIN_ACTIVATION` (no noise on a cold graph). `_stimulus_block()`.
 

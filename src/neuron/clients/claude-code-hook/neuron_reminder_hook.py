@@ -89,7 +89,7 @@ def unsaved_prompts(transcript: str) -> int:
 
 def message(n: int, prefix: str) -> str:
     return ("[neuron] %d turns since the last store_turn. If something new came up "
-            "in this session, save it as facts with %sstore_turn(facts=[{kind, text, concepts}]) "
+            "in this session, save it as facts with %sstore_turn(facts=[{kind, text, concepts}], English only) "
             "before going on." % (n, prefix))
 
 

@@ -142,3 +142,29 @@ def curation_note(notes: list[str], max_notes: int = 3) -> str:
     extra = len(notes) - len(shown)
     tail = f" (+{extra} more)" if extra > 0 else ""
     return "\ncuration: " + "; ".join(shown) + tail
+
+
+# --- the pivot language (2026-11-12) ----------------------------------------
+# Facts are stored in English whatever the chat language: one store for every
+# user language, the multilingual embedder bridges the questions (bench: Italian
+# questions on English facts lost 1 fact of 33). A fact in another language is
+# KEPT, never refused; store_turn answers with a one-line correction. Common
+# words only: identifiers, paths and code in a technical fact say nothing.
+_EN = frozenset("""the a an and or of to in on for is are was were be been it its this that these
+with as by from not but if then when after before so do does did has have had will would can
+could should must into than there which who what while because only also""".split())
+# Italian, Spanish, French, German, Portuguese function words that are NOT English words.
+_FOREIGN = frozenset("""il lo la le gli di da del della dei delle degli che è non per con su nel nella
+sono ha hanno era come anche ma se quando dopo prima poi questo questa quello perché più già
+el los las que y es por para una del pero más como está están fue
+les des du et est une dans pour pas qui sur avec ce sont été
+der die das und ist nicht mit ein eine zu den von für auf dem auch wird sind
+os do da em um uma não com são foi""".split())
+
+
+def foreign_language(text: str) -> bool:
+    """True when `text` reads as a natural language other than English."""
+    import re
+    words = re.findall(r"[^\W\d_]+", text.lower())
+    foreign = sum(w in _FOREIGN for w in words)
+    return foreign >= 2 and foreign > sum(w in _EN for w in words)

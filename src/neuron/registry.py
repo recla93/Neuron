@@ -230,7 +230,8 @@ class GraphRegistry:
 
     @staticmethod
     def _needs_upgrade(path: str) -> bool:
-        """True when the file predates ADR-015 D8 (no facts.confirmed). Read
+        """True when the file predates ADR-015 D8 or the gist (no facts.confirmed
+        or facts.gist). Read
         with the store's own driver: stdlib sqlite3 does not see pyturso's WAL."""
         try:
             con = _db.connect_local(path)
@@ -240,7 +241,7 @@ class GraphRegistry:
                 con.close()
         except Exception:               # noqa: BLE001 — unreadable here: the normal load deals with it
             return False
-        return "confirmed" not in cols
+        return not {"confirmed", "gist"} <= cols
 
     def _contexts_on_disk(self) -> list[str]:
         """Context names that have a graph file, whether or not it is loaded."""
