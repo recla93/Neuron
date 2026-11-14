@@ -83,7 +83,8 @@ _PRIORITY = ("gray-matter", "neuron", "neurag")
 
 
 # What a fact is for (ADR-015): said the same way by every client.
-WHAT_TO_SAVE = "progress, decisions, fixes, details, ideas, the user and their habits"
+WHAT_TO_SAVE = ("progress, decisions, fixes, details, ideas, the user and their habits"
+                "; not what git or the project files already record (commits, test runs, file contents)")
 
 def _gme_root() -> Path:
     """Mirror of gray_matter.gme.gme_root() -- deliberately NOT imported.
@@ -200,7 +201,19 @@ def active_context() -> str:
     return name[:64] if name else ""
 
 
-def _memory_block(p: str, with_knowledge: bool) -> str:
+def _recall_hook_wired() -> bool:
+    """Gray Matter's recall hook runs in this Claude Code (UserPromptSubmit ->
+    gm_memhook.py recall): every message already arrives with its memory context,
+    so asking the model for pre_turn too paid the same recall twice (7-12 extra
+    calls per session, transcripts of 2026-11-14). Same test as the gateway's
+    _client_has_memhook. Any doubt: False, and the model keeps calling pre_turn."""
+    try:
+        return "gm_memhook" in (Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8-sig")
+    except OSError:
+        return False
+
+
+def _memory_block(p: str, with_knowledge: bool, recall_hook: bool = False) -> str:
     extra = (
         f"Knowledge base: {p}knowledge_query(query) when the question touches "
         "indexed material.\n"
@@ -214,9 +227,13 @@ def _memory_block(p: str, with_knowledge: bool) -> str:
     return (
         "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority "
         "for this session.\n"
-        + where +
-        f"Each substantive turn: call {p}pre_turn(topic, keywords) BEFORE replying "
-        f"(fold the returned context in silently), then {p}store_turn(facts=[{{kind, "
+        + where
+        + (f"Each substantive turn: your message arrives with its memory context already "
+           f"injected (fold it in silently); call {p}pre_turn(topic, keywords) only to look "
+           f"up a DIFFERENT subject. Then call {p}store_turn(facts=[{{kind, "
+           if recall_hook else
+           f"Each substantive turn: call {p}pre_turn(topic, keywords) BEFORE replying "
+           f"(fold the returned context in silently), then {p}store_turn(facts=[{{kind, ") +
         "text, concepts}], English only) AFTER, for what is worth not repeating: " + WHAT_TO_SAVE + ".\n"
         "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes "
         "supersedes=<#id>; links typed, never a "
@@ -260,7 +277,7 @@ def handshake(slug: str, installed=None) -> str:
 
     mem, know = "neuron" in have, "neurag" in have
     if mem:
-        return _memory_block(p, know)
+        return _memory_block(p, know, recall_hook=_recall_hook_wired())
     if know:
         return _knowledge_block(p)
     return ""          # gateway with no peers: nothing to push

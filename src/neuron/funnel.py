@@ -26,7 +26,7 @@ SIGNPOST_BASE = (
     "1. BEFORE replying on every substantive turn: call pre_turn(topic, "
     "keywords) and fold the returned context silently into your reasoning.\n"
     "2. AFTER replying: call store_turn(facts=[{kind, text, concepts}], English only) for "
-    "what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits. An update passes "
+    "what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits; not what git or the project files already record. An update passes "
     "supersedes=<#id>.\n"
     "Skip both only on procedural turns (ack/thanks/yes-no) or when the graph "
     "is empty. Wrong subject for the active context? switch_context first.\n"

@@ -75,13 +75,21 @@ function installedSlugs() {
   return out;
 }
 
-function memoryBlock(key, withKnowledge) {
+// The plugin itself injects each message's recall when the gateway loop runs: asking
+// the model for pre_turn too paid the same recall twice (transcripts, 2026-11-14).
+function memoryBlock(key, withKnowledge, recallWired) {
   return (
     "!IMPORTANT [NEURON]: persistent semantic memory is connected - priority " +
     "for this session.\n" +
-    "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying " +
-    "(fold the returned context in silently), then store_turn(facts=[{kind, text, " +
-    "concepts}], English only) AFTER, for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits.\n" +
+    (recallWired
+      ? "Each substantive turn: your message arrives with its memory context already " +
+        "injected (fold it in silently); call pre_turn(topic, keywords) only to look up " +
+        "a DIFFERENT subject. AFTER replying, call store_turn(facts=[{kind, text, " +
+        "concepts}], English only) "
+      : "Each substantive turn: call pre_turn(topic, keywords) BEFORE replying " +
+        "(fold the returned context in silently), then store_turn(facts=[{kind, text, " +
+        "concepts}], English only) AFTER, ") +
+    "for what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits; not what git or the project files already record (commits, test runs, file contents).\n" +
     "Concepts = 1-5 NOUNS per fact (no verbs/paths); an update passes " +
     "supersedes=<#id>; links typed, never a " +
     "self-link; a near-duplicate fact is flagged when stored; never store " +
@@ -105,7 +113,7 @@ function knowledgeBlock(key) {
   );
 }
 
-function handshakeFor(have) {
+function handshakeFor(have, recallWired = false) {
   const owner = PRIORITY.find((s) => have.has(s));
   if (!owner) return "";
   if (owner === "neurag") return knowledgeBlock(owner);
@@ -113,7 +121,7 @@ function handshakeFor(have) {
   // Gateway: the OWNER sets the key, the installed PEERS set the content.
   // Announcing a memory loop with no Neuron behind it points the model at
   // tools that are not there -- the same class of bug as a wrong prefix.
-  if (have.has("neuron")) return memoryBlock(owner, have.has("neurag"));
+  if (have.has("neuron")) return memoryBlock(owner, have.has("neurag"), recallWired);
   if (have.has("neurag")) return knowledgeBlock(owner);
   return "";
 }
@@ -201,7 +209,7 @@ function owned() {
   const owner = PRIORITY.find((s) => have.has(s));
   // The loop needs the GM daemon (recall, save check): only a gateway has one.
   const python = owner === "gray-matter" && have.has("neuron") ? gatewayPython(owner) : "";
-  return { text: handshakeFor(have), python };
+  return { text: handshakeFor(have, Boolean(python)), python };
 }
 
 // One turn state per process, shared by every instance of this plugin: OpenCode
