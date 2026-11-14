@@ -22,15 +22,13 @@ log = logging.getLogger("neuron.server")
 __all__ = [
     "cli", "main", "call_tool", "list_tools", "list_resources", "read_resource",
     "validate_turn_input", "GRAPHS_DIR", "INTENT_SALIENCE", "RANK_WEIGHTS",
-    "CONSOLIDATE_EVERY", "TOPIC_SHIFT_THRESHOLD", "STIMULUS_MIN_ACTIVATION",
-    "STIMULUS_MAX_CHARS", "NS_EMBED_MODEL",
+    "CONSOLIDATE_EVERY", "TOPIC_SHIFT_THRESHOLD", "NS_EMBED_MODEL",
 ]
 
 from fastembed import TextEmbedding
 
 from neuron import __version__, db as _db
 from neuron import curation as _cur   # T54 gate (stdlib-only module)
-from neuron import modes as _modes    # modalità operative del retrieval (focus) + log turni
 from neuron import project as _project   # G1/G4: project_id + path canonicalization (stdlib-only)
 # T57: extraction moved verbatim to its own module; every public name is
 # re-imported here so existing imports/tests via neuron.server keep working.
@@ -259,7 +257,6 @@ IMPLICIT_CONFIRM = _config.env_float("NEURON_IMPLICIT_CONFIRM", 0.25)
 # module and is resolved by neuron.stimulus at call time.
 from neuron.stimulus import (  # noqa: E402
     _auto_link, _build_context_window, _detect_topic_shift, _keyword_overlap,
-    _stimulus_block,
 )
 
 
@@ -493,11 +490,6 @@ RANK_WEIGHTS = {"sim": 0.5, "salience": 0.3, "recency": 0.2, "trust": 0.1}
 # most-salient nodes from being merged away. Threshold mirrors the Hebbian "strong"
 # bar: a node this reinforced is worth keeping intact. Tunable on real data (ADR-003).
 CONSOLIDATE_PROTECT_SALIENCE = _config.env_int("NEURON_CONSOLIDATE_PROTECT_SALIENCE", 8)
-# Piggyback stimulus (E2.5): a compact associative nudge appended to tool responses
-# that don't already carry the full flash block (store_turn, pre_turn). Emitted only
-# above the activation floor (no noise) and hard-capped to stay within ~40 tokens.
-STIMULUS_MIN_ACTIVATION = _config.env_float("NEURON_STIMULUS_MIN_ACTIVATION", 0.15)
-STIMULUS_MAX_CHARS = _config.env_int("NEURON_STIMULUS_MAX_CHARS", 200)   # ~40 tokens
 
 # ---------------------------------------------------------------------------
 # Context switch hysteresis
@@ -598,7 +590,7 @@ async def read_resource(uri) -> list[ReadResourceContents]:
 # announced unless NEURON_TOOLS=all.
 _ADMIN_TOOLS = frozenset({"prune", "consolidate", "dedup", "flash", "reset",
                           "extract", "auto", "export", "merge", "introspect",
-                          "vector_search", "summary", "around",
+                          "vector_search", "summary",
                           # 2026-11-08, the loop no longer needs them: pre_turn
                           # covers get_context, D6 flags duplicates at write,
                           # confirm(confidence<0) refutes, GM calls forgotten
@@ -611,7 +603,7 @@ _ADMIN_TOOLS = frozenset({"prune", "consolidate", "dedup", "flash", "reset",
                           "status", "help", "skill", "confirm", "list_contexts"})
 
 # Mid-band similarity to a topic: above it the node is already what get_context
-# serves, below it is noise. Shared by forgotten(near) and around.
+# serves, below it is noise. Used by forgotten(near).
 MID_BAND = (0.30, 0.75)
 
 
@@ -860,25 +852,6 @@ def _all_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="around",
-            description=(
-                "What surrounds a topic, with its history: mid-band nodes (0.30-0.75 "
-                "similarity — related but not obvious), dormant or not, each with its "
-                "recent facts and the reasons on its links. Nodes that carry a fact or a "
-                "link come first: a bare keyword is not a hint. Raw material for "
-                "gray_matter_brainstorm."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "The problem, dilemma or decision"},
-                    "n": {"type": "integer", "description": "How many nodes (default 8, max 20)", "default": 8},
-                    "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
-                },
-                "required": ["topic"],
-            },
-        ),
-        Tool(
             name="vector_search",
             description="Semantic vector search. Find similar keywords via Turso vector_distance_cos or a Python cosine fallback (384-dim fastembed embeddings, NS_EMBED_MODEL).",
             inputSchema={
@@ -1105,17 +1078,6 @@ def _all_tools() -> list[Tool]:
                         "description": "Max tokens for context output (default 200)",
                         "default": 200,
                     },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["semantic", "focus"],
-                        "description": "semantic (default) or focus (boosts the active task).",
-                        "default": "semantic",
-                    },
-                    "focus": {
-                        "type": "string",
-                        "description": "Active task for focus mode (injected by the GM proxy from the blackboard).",
-                        "default": "",
-                    },
                     "profile": {
                         "type": "boolean",
                         "description": "Also return the active `user` and `habit` facts (who the user is, how they work), like MEMORY.md. Once per session, on the first call; GM sets it for you.",
@@ -1184,8 +1146,6 @@ def _resolve_context(
     depth: int,
     g: "Graph",
     ctx: str,
-    mode: str = "semantic",
-    focus: str | None = None,
 ) -> tuple[list, list, bool, str | None, "Graph", list]:
     """Core context-resolution logic shared by get_context and pre_turn.
 
@@ -1325,14 +1285,6 @@ def _resolve_context(
                               + RANK_WEIGHTS["recency"] * recency
                               + RANK_WEIGHTS["trust"] * (nd.trust / max_trust))
 
-    # Modalità operative: ri-pesano node_scores PRIMA del sort, ma DOPO la
-    # selezione dei candidati — una modalità può cambiare l'ordine, mai il pool.
-    # semantic = invariato; focus = boost sui nodi simili al compito attivo (il
-    # focus arriva come parametro: iniettato dal proxy GM dal blackboard, o
-    # passato a mano in standalone).
-    if mode == "focus" and focus:
-        focus_sim = dict(_search_embeddings([focus], top_n=len(g.nodes), graph=g))
-        node_scores = _modes.focus_boost(node_scores, focus_sim)
     top_nodes = sorted(node_scores.items(), key=lambda x: -x[1])
 
     # FASE 5.6: MMR diversification at depth>=2 — avoid returning near-duplicate
@@ -1826,15 +1778,6 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             pass
         _g.save(ctx or None)
 
-    # Pattern: lo storico dei turni che il grafo non preserva (append-only,
-    # best-effort — mai bloccante sul path critico di store_turn). L'ordine
-    # delle keyword ricevute è la sequenza su cui la modalità pattern matcherà.
-    try:
-        from neuron import paths as _np
-        _modes.append_turn(_np.graphs_dir() / "turns.jsonl", topic,
-                           [kw.strip().lower() for kw in keywords if kw.strip()])
-    except Exception:  # noqa: BLE001
-        pass
 
     # What the write cut, the write says (a limit you can cross without noticing
     # is a trap). Only the trust-boundary cut is left: facts are never evicted.
@@ -1879,11 +1822,9 @@ async def _tool_get_context(arguments: dict, ctx: str, g) -> list[TextContent]:
     fmt        = arguments.get("format", "full")
     max_tokens = int(arguments.get("max_tokens", 400))
     char_budget = max_tokens * CHARS_PER_TOKEN
-    mode       = arguments.get("mode", "semantic")
-    focus      = arguments.get("focus") or None
 
     related_links_sorted, top_nodes, used_fallback, inherited_ctx, g = \
-        _resolve_context(search_kws, depth, g, ctx, mode, focus)
+        _resolve_context(search_kws, depth, g, ctx)
     g._served_last = {kw for kw, _sc in top_nodes}
 
 
@@ -2171,83 +2112,9 @@ async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
 
 
 # Hub centering lives in search.hub_excess and is applied inside
-# _search_embeddings for every ranking; around and forgotten compute their own
-# cosine and apply it by hand. The alias is what the tests patch.
+# _search_embeddings for every ranking; forgotten computes its own
+# cosine and applies it by hand. The alias is what the tests patch.
 _hubness = _search.hub_excess
-
-
-async def _tool_around(arguments: dict, ctx: str, g) -> list[TextContent]:
-    """The neighbourhood of a topic, with what it remembers.
-
-    pre_turn serves the facts of the CLOSEST nodes; forgotten(near) ranks the
-    mid band but only dormant nodes and without their facts; get_context cuts
-    rationales at 40 chars. This is the missing question — "what sits around
-    this problem, and what happened there" — for a dilemma or a decision: a
-    node in the mid band that carries a fact ("chose X because Y") or a typed
-    link with its reason is the hint; a bare keyword is not, so it goes last.
-    """
-    topic = (arguments.get("topic") or "").strip()
-    n = min(max(int(arguments.get("n", 8) or 8), 1), 20)
-    if not topic:
-        return [TextContent(type="text", text="around: serve un 'topic'.")]
-    if not g.nodes:
-        return [TextContent(type="text", text="No nodes in graph.")]
-    from neuron.models import _cos
-    # Nodes are single words, and a whole sentence sits far from all of them:
-    # `brainstorm` got a problem in one sentence and found nothing. Its content
-    # words, joined, measured better on 3 of 5 field cases (firewall 0.74 ->
-    # 0.82, focus 0.35 -> 0.47, angular 0.43 -> 0.69, the last one previously
-    # beaten by websocket at 0.51). Not the max over single words: short ones
-    # (`turso`, `ngrx`) reach 0.65-0.80 against ANY word, "carbonara" included.
-    # Still out of reach: "le query sono lente" -> `latenza`, with any variant.
-    words = SemanticExtractor.extract(topic).keywords
-    probe = " ".join(words) if words else topic
-    qv = _get_embedding(probe)
-    lo, hi = MID_BAND
-    hub = _hubness(g)
-    band, anchor = [], ("", -1.0)
-    for nd in g.nodes:
-        v = getattr(nd, "vector", None)
-        if qv and v:
-            raw = _cos(qv, v)
-            if raw > anchor[1]:
-                anchor = (nd.keyword, raw)
-            sim = raw - _search.hub_penalty(hub, nd.keyword)
-            if lo <= sim <= hi:
-                band.append((sim, nd))
-    # The anchor is the closest node of all, band or not: it tells the reader
-    # what the memory takes this topic to BE. Similarity values do not — a
-    # sentence tops out near 0.58 whether the graph knows it (a daemon question:
-    # `daemon`) or not (a recipe: `seed-cachato`); the name is the signal.
-    head = (f"Around '{topic}'" + (f" as '{probe}'" if probe != topic else "")
-            + f" (anchor {anchor[0]}={anchor[1]:.2f}"
-            + (" — no node above the band" if anchor[1] < hi else "")
-            + f"; mid-band {lo}-{hi}: {len(band)} nodes, now={g.turn_count}):")
-    if not band:
-        return [TextContent(type="text", text=head + " nothing in the band.")]
-    now = g.turn_count
-    rows = []
-    for sim, nd in band:
-        facts = g.recent_episodes(nd.keyword, 2)
-        links = [lk for lk in g.links if nd.keyword in (lk.source, lk.target)][:3]
-        rows.append((bool(facts or links), sim, nd, facts, links))
-    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
-    lines = [head]
-    seen_facts: set[str] = set()   # a turn's fact sits on all its keywords: show it once
-    for _has, sim, nd, facts, links in rows[:n]:
-        facts = [f for f in facts if f not in seen_facts]
-        seen_facts.update(facts)
-        idle = now - nd.turn
-        state = f"dormant {idle}t" if idle >= 5 else "active"
-        pen = _search.hub_penalty(hub, nd.keyword)
-        hubtag = f" (hub -{pen:.2f})" if pen else ""
-        lines.append(f"  {nd.keyword}  sim={sim:.2f}{hubtag}  salience={nd.salience}  {state}")
-        for f in facts:
-            lines.append(f"    fact: {f}")
-        for lk in links:
-            why = f"  #{lk.rationale}" if lk.rationale else ""
-            lines.append(f"    link: {lk.source}-[{lk.link_type}]->{lk.target}{why}")
-    return [TextContent(type="text", text=lines[0] + "\n" + _as_data("\n".join(lines[1:])))]
 
 
 async def _tool_prune(arguments: dict, ctx: str, g) -> list[TextContent]:
@@ -2520,8 +2387,6 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     extra_kws_pt = arguments.get("keywords", [])
     max_tokens_pt = int(arguments.get("max_tokens", 200))
     char_budget_pt = max_tokens_pt * CHARS_PER_TOKEN
-    mode_pt   = arguments.get("mode", "semantic")
-    focus_pt  = arguments.get("focus") or None
     _fact_nodes_pt = max(1, int(arguments.get("fact_nodes", FACT_NODES)))
     # Status line
     g_pt = _g.get()
@@ -2541,7 +2406,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if isinstance(extra_kws_pt, list):
         search_kws_pt.update(extra_kws_pt)
     lks, nodes_pt, fallback_pt, inh_pt, _ = \
-        _resolve_context(search_kws_pt, 1, g_pt, "", mode_pt, focus_pt)
+        _resolve_context(search_kws_pt, 1, g_pt, "")
     g_pt._served_last = {kw for kw, _sc in nodes_pt}
     parts_pt: list[str] = []
     # ADR-015 D7: facts first, found by what they say and by the concepts the
@@ -2720,26 +2585,9 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                         _as_data(ctx_out_pt) if parts_pt or _profile else ctx_out_pt])
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
-    # E3.4: serve the pre-staged "while you were away" stimulus once, if fresh.
-    staged = g_pt.take_staged_stimulus()
-    _shown = _seen_ids | {h[0]["id"] for h in _hits}
-    if staged and any(f"#{i}" in staged for i in _shown):
-        staged = None                 # D7: not a fact this session already saw
-    staged_line = f"\n🧠 staged: {staged}" if staged else ""
-    # Seeds = the concepts of the facts this recall showed, else its top node.
-    # The hook sends the whole message as the only keyword, which is no node:
-    # the stimulus never fired once in 24 recalls (live, 2026-11-08).
-    _seeds = (list(dict.fromkeys(c for h in _hits for c in h[0]["concepts"][:2]))
-              or [kw for kw, _ in nodes_pt[:1]])
-    stim_line = _stimulus_block(g_pt, _seeds or search_kws_pt, _shown)
-    # A4: don't stack staged + live stimulus + a long guide line. When any
-    # stimulus is present the short tail is enough; the long teaching
-    # sentence is reserved for stimulus-free responses.
-    if staged_line and stim_line:
-        stim_line = ""   # staged is one-shot; the live stimulus returns next turn
-    tail = ("\n→ then store_turn(facts=[{kind, text, concepts}], English only)."
-            if (staged_line or stim_line) else
-            "\n→ next: fold this context into your reply silently, then call "
+    # The 🧠 stimulus (live and pre-staged) was parked on 2026-11-14: without a
+    # model to judge relevance it showed off-topic facts (work/design/PARCHEGGIO.md).
+    tail = ("\n→ next: fold this context into your reply silently, then call "
             "store_turn(facts=[{kind, text, concepts}], English only) for what is worth not repeating.")
     # Reinforcement-loop enforcement (2026-08-25), low-cost edition: the line
     # sits AFTER the budget (never truncated) but must stay cheap — top-2
@@ -2748,7 +2596,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if _served and _confirm_hint_enabled():
         tail += ("\n→ useful? confirm(facts="
                  f"{json.dumps(_served, ensure_ascii=False)})")
-    out_pt = out_pt + staged_line + stim_line + tail
+    out_pt = out_pt + tail
     return [TextContent(type="text", text=out_pt)]
 
 
@@ -2936,7 +2784,6 @@ _HANDLERS = {
     "get_context": _tool_get_context,
     "find_candidates": _tool_find_candidates,
     "vector_search": _tool_vector_search,
-    "around": _tool_around,
     "summary": _tool_summary,
     "introspect": _tool_introspect,
     "forgotten": _tool_forgotten,

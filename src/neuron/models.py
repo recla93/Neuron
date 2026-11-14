@@ -63,12 +63,9 @@ HEBBIAN_UPGRADE_STRONG   = _env_int("NEURON_HEBBIAN_UPGRADE_STRONG", 8)   # co_a
 # turns, and pruned faster than intra-context tangentials (DRIFT_EXPIRY_TURNS < 5).
 DRIFT_COOLDOWN           = _env_int("NEURON_DRIFT_COOLDOWN", 5)   # min turns between forming/reinforcing the same drift
 DRIFT_EXPIRY_TURNS       = _env_int("NEURON_DRIFT_EXPIRY_TURNS", 3)   # inactive turns before a drift link is pruned
-# Sleep-mode (E3.3/E3.4): when a graph is loaded after being idle longer than
-# SLEEP_IDLE_SECONDS, consolidate it and pre-stage the top stimulus so pre_turn
-# can serve it "warm". The staged stimulus is only served while fresher than
-# STAGE_FRESH_SECONDS (else it's dropped as stale).
+# Sleep-mode (E3.3): when a graph is loaded after being idle longer than
+# SLEEP_IDLE_SECONDS, it may consolidate.
 SLEEP_IDLE_SECONDS       = _env_int("NEURON_SLEEP_IDLE_SECONDS", 1800)     # 30 min idle → sleep-mode on next load
-STAGE_FRESH_SECONDS      = _env_int("NEURON_STAGE_FRESH_SECONDS", 6 * 3600) # staged stimulus valid for 6h
 
 # Facts (ADR-015): the unit of memory. A fact lives in its own table and is
 # indexed by its concepts; the node is only an index entry. Facts are
@@ -416,11 +413,7 @@ class Graph:
     # Drift cooldown: (source, target, target_context) -> last turn formed/reinforced.
     # In-memory anti-noise, same rationale as _coact_cooldown. (E3.1)
     _drift_cooldown: dict = field(default_factory=dict)
-    # Sleep-mode / pre-staging (E3.3/E3.4). staged_stimulus + its timestamp persist
-    # in meta so a background/previous run can leave a warm stimulus for pre_turn;
-    # _loaded_ts is the last-active timestamp read at load (transient).
-    staged_stimulus: "str | None" = None
-    _staged_ts: "float | None" = None
+    # Sleep-mode (E3.3): _loaded_ts is the last-active timestamp read at load (transient).
     _loaded_ts: "float | None" = None
 
     # ------------------------------------------------------------------
@@ -902,10 +895,8 @@ class Graph:
                     idle_threshold: float = SLEEP_IDLE_SECONDS,
                     do_consolidate: bool = False) -> "dict | None":
         """If this graph was loaded after being idle > idle_threshold, run
-        sleep-mode: optionally consolidate (merge near-dupes + drop orphans),
-        then pre-stage the top stimulus (spreading activation from the most
-        salient nodes) so the next pre_turn can serve it warm (E3.4). Returns a
-        summary, or None if not idle / no last-active timestamp. This is the
+        sleep-mode: optionally consolidate (merge near-dupes + drop orphans).
+        Returns a summary, or None if not idle / no last-active timestamp. This is the
         "consolidate at startup if inactive" fallback when no scheduler drives it."""
         now = time.time() if now is None else now
         if self._loaded_ts is None or (now - self._loaded_ts) <= idle_threshold:
@@ -913,46 +904,8 @@ class Graph:
         actions = 0
         if do_consolidate:
             actions = len(self.consolidate(drop_orphans=True))
-        # Seed from the last turn's focus, or fall back to the single most-salient
-        # node — a single anchor leaves the rest of the graph as activation targets
-        # (seeding from all top-salient nodes would starve a tiny graph of targets).
-        top = sorted(self.nodes, key=lambda n: -n.salience)
-        seeds = self.last_keywords or ([top[0].keyword] if top else [])
-        ranked = self.spreading_activation(seeds, k=5) if seeds else []
-        # ADR-016 D2: a fact or nothing ("🧠 staged: release (act=3.50)" was a
-        # bare name, live 2026-11-08). The first reached node that holds one.
-        for kw, _act in ranked:
-            f = self.spark_fact(kw)
-            if f:
-                self.staged_stimulus = f"[{f['kind']}] {f['text'][:160]} ({kw}) #{f['id']}"
-                self._staged_ts = now
-                break
-        return {"consolidated": do_consolidate, "actions": actions,
-                "staged": self.staged_stimulus}
-
-    def spark_fact(self, keyword: str, skip: "set | frozenset" = frozenset()) -> "dict | None":
-        """The newest active idea/decision/fix under a concept (or a migrated
-        `fact`, an old episode), not one of ``skip``. What a stimulus may show:
-        never user/habit, never a model's `fact` (a detail)."""
-        for e in self.recent_facts(keyword, 5):
-            f = self.facts.get(e.get("id"))
-            if (f and f["id"] not in skip and f["status"] == "active"
-                    and (f["kind"] in ("idea", "decision", "fix")
-                         or (f["kind"] == "fact" and f.get("source") == "migration"))):
-                return f
-        return None
-
-    def take_staged_stimulus(self, now: "float | None" = None,
-                             fresh: float = STAGE_FRESH_SECONDS) -> "str | None":
-        """Return the pre-staged stimulus once if still fresh, then clear it
-        (one-shot: the "while you were away" nudge). Stale → dropped, None (E3.4)."""
-        now = time.time() if now is None else now
-        s, ts = self.staged_stimulus, self._staged_ts
-        self.staged_stimulus = None          # one-shot, whether served or dropped
-        self._staged_ts = None
-        if s and ts is not None and (now - ts) < fresh:
-            return s
-        return None
+        # The pre-staged 🧠 stimulus was parked on 2026-11-14 (PARCHEGGIO.md).
+        return {"consolidated": do_consolidate, "actions": actions}
 
     # ------------------------------------------------------------------
     # Queries
@@ -1014,94 +967,6 @@ class Graph:
                 break
         out = [(kw, round(a, 4)) for kw, a in activation.items() if kw not in seed_set]
         out.sort(key=lambda x: -x[1])
-        return out
-
-    def stimulus_candidates(self, seeds, k: int = 2, decay: float = 0.5,
-                            min_activation: float = 0.01) -> list[dict]:
-        """Balanced stimulus ranking (T66): activation × (1 + novelty bonuses).
-
-        Stimuli must serve BOTH recall (useful memory, strong relations) and
-        creative sparks (tangential/surprising connections) — so novelty is a
-        BONUS multiplier, never a gate: a high-activation known neighbour still
-        competes with a dormant cross-domain leap. Tracks the best path from a
-        seed for interpretability ("java ⇢ servlet ⇢ CORS" fires the impulse;
-        a bare keyword doesn't).
-
-        Bonuses: dormancy (up to +0.5, silent nodes resurface), domain shift
-        (+0.4 vs the seeds' majority domain), tangential edge in the path
-        (+0.3, the fragile unexpected connection). Familiarity damping: a first
-        edge heavily co-activated with the seeds (Hebbian count) is a synonym,
-        not a surprise → mild penalty. Returns dicts sorted by score:
-        {keyword, act, score, path, hops, reasons}."""
-        seed_set = {self._norm(s) for s in seeds}
-        seed_set = {s for s in seed_set if self.get_node(s) is not None}
-        if not seed_set:
-            return []
-        max_sal = max((nd.salience for nd in self.nodes), default=0) or 1
-        adj: dict[str, list] = {}
-        for lk in self.links:
-            if lk.link_type == "drift":
-                continue
-            adj.setdefault(lk.source, []).append((lk.target, lk))
-            adj.setdefault(lk.target, []).append((lk.source, lk))
-
-        seed_domains = [self.get_node(s).domain for s in seed_set]
-        majority_dom = max(set(seed_domains), key=seed_domains.count) if seed_domains else None
-
-        # Walk with best-path tracking: state per node = (act, path, tang, coact0)
-        best: dict[str, tuple] = {s: (1.0, [s], False, 0) for s in seed_set}
-        frontier = dict(best)
-        acc: dict[str, float] = {}
-        for _hop in range(k):
-            nxt: dict[str, tuple] = {}
-            for src, (act, path, tang, coact0) in frontier.items():
-                for other, lk in adj.get(src, ()):
-                    if other in path:
-                        continue
-                    strength = WEIGHT_ORDER.get(lk.weight, 0) / 3.0
-                    nd = self.get_node(other)
-                    if nd is None or strength == 0:
-                        continue
-                    contrib = act * strength * (1.0 + nd.salience / max_sal) * decay
-                    if contrib < min_activation:
-                        continue
-                    acc[other] = acc.get(other, 0.0) + contrib
-                    n_tang = tang or (lk.weight == "tangential")
-                    n_coact0 = coact0 if len(path) > 1 else getattr(lk, "co_activation_count", 0)
-                    prev = nxt.get(other)
-                    if prev is None or contrib > prev[0]:
-                        nxt[other] = (contrib, path + [other], n_tang, n_coact0)
-                    if other not in best or contrib > best[other][0]:
-                        best[other] = (contrib, path + [other], n_tang, n_coact0)
-            frontier = nxt
-            if not frontier:
-                break
-
-        out = []
-        for kw, act in acc.items():
-            if kw in seed_set:
-                continue
-            _, path, tang, coact0 = best[kw]
-            nd = self.get_node(kw)
-            dormancy = max(0, self.turn_count - nd.turn)
-            reasons: list[str] = []
-            bonus = 0.0
-            if dormancy >= 6:
-                bonus += 0.5 * min(dormancy / 12.0, 1.0)
-                reasons.append(f"dormant {dormancy}t")
-            if majority_dom and nd.domain != majority_dom and nd.domain != "general":
-                bonus += 0.4
-                reasons.append(f"→{nd.domain}")
-            if tang:
-                bonus += 0.3
-                reasons.append("tangential")
-            damping = 1.0 + 0.15 * min(coact0, 6)   # over-familiar first edge
-            score = act * (1.0 + bonus) / damping
-            if not reasons:
-                reasons.append("recall")
-            out.append({"keyword": kw, "act": round(act, 4), "score": round(score, 4),
-                        "path": path, "hops": len(path) - 1, "reasons": reasons})
-        out.sort(key=lambda c: -c["score"])
         return out
 
     # ------------------------------------------------------------------
@@ -1535,7 +1400,7 @@ class Graph:
     # Per-user session-state sidecar (T11 P1)
     # ------------------------------------------------------------------
     # On a shared remote Turso store the graph (nodes/links/vectors) is shared,
-    # but each user's session working-state (turn counter, staged stimulus,
+    # but each user's session working-state (turn counter,
     # last-topic, ...) is personal and must NOT go in the store's global meta.
     # It lives in a small local JSON file next to where the local graph file
     # would sit — the graphs dir is already per-user, like ``_cross_links.json``.
@@ -1748,7 +1613,7 @@ class Graph:
             # Meta split (T11 P1): SHARED graph-level settings vs PER-USER session
             # state. embed_dim (and embed_model, only when compatible) describe the
             # shared vector space and live in the store meta. The turn counter,
-            # staged stimulus, last-topic/keywords and session id are one user's
+            # last-topic/keywords and session id are one user's
             # working state; on a shared remote store the global meta has no
             # per-user key, so they go to a LOCAL per-user sidecar instead of
             # bleeding across colleagues. On a local single-writer store they stay
@@ -1765,8 +1630,6 @@ class Graph:
                 ("last_topic",            self.last_topic),
                 ("last_keywords",         json.dumps(self.last_keywords)),
                 ("last_active_timestamp", str(time.time())),           # E3.3
-                ("staged_stimulus",       self.staged_stimulus or ""),  # E3.4
-                ("staged_ts",             str(self._staged_ts or "")),
                 ("session_cache",         json.dumps(self._session_cache)),  # L1
             ]
             if _db.REMOTE_TURSO:
@@ -1989,8 +1852,6 @@ class Graph:
                 self.last_keywords = []
             # Sleep-mode / pre-staging state (E3.3/E3.4)
             self._loaded_ts      = _as_float(smeta.get("last_active_timestamp"))
-            self.staged_stimulus = smeta.get("staged_stimulus") or None
-            self._staged_ts      = _as_float(smeta.get("staged_ts"))
             # L1: Session cache (working memory)
             try:
                 self._session_cache = json.loads(smeta.get("session_cache", "{}"))

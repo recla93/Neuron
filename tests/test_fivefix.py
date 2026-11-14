@@ -248,13 +248,13 @@ class TestSessionSidecar:
             g = Graph(turn_count=5)
             g.add_node(Node(keyword="alpha", turn=1, topic="t", domain="backend",
                             sentiment="neutral"))
-            g.staged_stimulus = "beta (act=0.50)"
+            g.last_topic = "beta"
             g.save_sqlite(path, context="default", force=True)
             assert not os.path.exists(g._session_sidecar_path(path, "default"))  # no sidecar locally
             g2 = Graph()
             g2.load_sqlite(path, context="default")
             assert g2.turn_count == 5
-            assert g2.staged_stimulus == "beta (act=0.50)"
+            assert g2.last_topic == "beta"
 
     def test_remote_store_splits_meta_and_writes_sidecar(self, monkeypatch):
         """Remote shared store: embed_model/embed_dim go to the store meta, but
@@ -266,7 +266,7 @@ class TestSessionSidecar:
             path = os.path.join(d, "graph_default.db")
             g = Graph(turn_count=7)
             g.session_id = "sess-A"
-            g.staged_stimulus = "redis (act=0.80)"
+            g.last_topic = "redis"
             g._schema_ready = path          # skip DDL against the fake conn
             g._needs_full_write = False
             g._dirty = True                 # force the write path
@@ -276,12 +276,12 @@ class TestSessionSidecar:
             assert "embed_model" in meta_keys and "embed_dim" in meta_keys
             # session state must NOT have hit the shared meta table
             assert "turn_count" not in meta_keys
-            assert "staged_stimulus" not in meta_keys
+            assert "last_topic" not in meta_keys
             assert "session_id" not in meta_keys
 
             side = g._load_session_sidecar(path, "default")
             assert side.get("turn_count") == "7"
-            assert side.get("staged_stimulus") == "redis (act=0.80)"
+            assert side.get("last_topic") == "redis"
             assert side.get("session_id") == "sess-A"
 
 

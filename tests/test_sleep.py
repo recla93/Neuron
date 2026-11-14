@@ -1,4 +1,4 @@
-"""E3.3/E3.4 — sleep-mode trigger + pre-staging (Graph.sleep_maybe / take_staged_stimulus).
+"""E3.3 — sleep-mode trigger (Graph.sleep_maybe). The pre-staged stimulus was parked on 2026-11-14.
 
 Pure (neuron.models), runs anywhere.
 """
@@ -34,49 +34,9 @@ def test_sleep_skipped_without_timestamp():
     assert g.sleep_maybe() is None
 
 
-def test_sleep_prestages_a_fact_of_the_top_stimulus_when_idle():
-    g = _g(); g._loaded_ts = time.time() - (m.SLEEP_IDLE_SECONDS + 10)
-    f = g.add_fact("decision", "django admin stays off in production", ["django"], 1)
-    rep = g.sleep_maybe()
-    assert rep is not None and rep["consolidated"] is False
-    assert g.staged_stimulus == f"[decision] django admin stays off in production (django) #{f['id']}"
-
-
-def test_sleep_stages_nothing_without_a_fact():
-    """ADR-016 D2: "🧠 staged: release (act=3.50)" was a bare name (2026-11-08)."""
-    g = _g(); g._loaded_ts = time.time() - (m.SLEEP_IDLE_SECONDS + 10)
-    g.add_fact("habit", "the user deploys on Fridays", ["django"], 1)   # personal: never staged
-    g.sleep_maybe()
-    assert g.staged_stimulus is None
-
-
 def test_sleep_consolidate_flag_runs_without_error():
     g = _g(); g._loaded_ts = time.time() - (m.SLEEP_IDLE_SECONDS + 10)
     rep = g.sleep_maybe(do_consolidate=True)
     assert rep["consolidated"] is True            # ran the consolidate path
 
 
-def test_take_staged_is_one_shot():
-    g = _g(); g.staged_stimulus = "django (act=0.50)"; g._staged_ts = time.time()
-    assert g.take_staged_stimulus() == "django (act=0.50)"
-    assert g.take_staged_stimulus() is None        # cleared after serving
-
-
-def test_take_staged_drops_stale():
-    g = _g(); g.staged_stimulus = "x"; g._staged_ts = time.time() - (m.STAGE_FRESH_SECONDS + 10)
-    assert g.take_staged_stimulus() is None
-    assert g.staged_stimulus is None               # dropped, not kept
-
-
-def test_staged_state_survives_roundtrip():
-    g = _g(); g.staged_stimulus = "django (act=0.50)"; g._staged_ts = 1000.0
-    fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd); os.unlink(path)
-    try:
-        g.save_sqlite(path, context="default")
-        g2 = Graph()
-        g2.load_sqlite(path, context="default")
-        assert g2.staged_stimulus == "django (act=0.50)"
-        assert g2._staged_ts == 1000.0
-        assert g2._loaded_ts is not None           # last_active_timestamp was written
-    finally:
-        os.path.exists(path) and os.unlink(path)
