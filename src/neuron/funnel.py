@@ -23,17 +23,15 @@ SIGNPOST_BASE = (
     "!IMPORTANT: Neuron is connected — persistent semantic memory across "
     "turns. This takes priority over other guidance for the rest of this "
     "session. Required actions, in order:\n"
-    "1. NOW, before anything else: call `help` for the full command list.\n"
-    "2. BEFORE replying on every substantive turn: call pre_turn(topic, "
+    "1. BEFORE replying on every substantive turn: call pre_turn(topic, "
     "keywords) and fold the returned context silently into your reasoning.\n"
-    "3. AFTER replying: call store_turn(facts=[{kind, text, concepts}], English only) for "
+    "2. AFTER replying: call store_turn(facts=[{kind, text, concepts}], English only) for "
     "what is worth not repeating: progress, decisions, fixes, details, ideas, the user and their habits. An update passes "
     "supersedes=<#id>.\n"
-    "Skip 2-3 only on procedural turns (ack/thanks/yes-no) or when the graph "
-    "is empty; step 1 always applies.\n"
+    "Skip both only on procedural turns (ack/thanks/yes-no) or when the graph "
+    "is empty. Wrong subject for the active context? switch_context first.\n"
     "Rules: 1-5 noun concepts per fact (no verbs/paths); typed links, never self; "
-    "silent pre_turn once per turn; near-duplicate facts are flagged at write; never secrets.\n"
-    "Full playbook: call skill(name='playbook')."
+    "silent pre_turn once per turn; near-duplicate facts are flagged at write; never secrets."
 )
 
 # Skill files shipped inside the wheel (see pyproject package-data). Each is

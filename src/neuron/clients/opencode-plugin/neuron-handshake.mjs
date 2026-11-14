@@ -90,8 +90,7 @@ function memoryBlock(key, withKnowledge) {
       ? "Knowledge base: knowledge_query(query) when the question touches " +
         "indexed material.\n"
       : "") +
-    "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per " +
-    "session: help (commands), skill(name='playbook') (full workflow).\n" +
+    "Skip on procedural turns (ack/thanks/yes-no) or an empty graph.\n" +
     `If no ${key}_* tools exist here, memory is not connected - ignore this silently.`
   );
 }
@@ -102,8 +101,6 @@ function knowledgeBlock(key) {
     "answering from memory.\n" +
     "Search it with knowledge_query(query) when the question touches indexed " +
     "material; cite what you used.\n" +
-    "Once per session: knowledge_skill(name='usage') for the retrieval workflow " +
-    "(chunking, filters, when NOT to search).\n" +
     `If no ${key}_* tools exist here, the knowledge base is not connected - ignore this silently.`
   );
 }

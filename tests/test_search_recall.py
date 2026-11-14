@@ -178,7 +178,7 @@ def test_a_shown_fact_written_about_or_cited_counts_one_use(words, tmp_path, mon
 
     shown = call("pre_turn", {"topic": "pacchetti importati cartella sbagliata",
                               "keywords": ["python"], "profile": True})
-    assert f"#{fix['id']}" in shown and f'confirm(facts=["{fix["id"]}"])' in shown, shown
+    assert f"#{fix['id']}" in shown, shown         # the confirm hint is opt-in since 2026-11-14
     call("store_turn", {"facts": [{"kind": "decision", "text": "run python with -I", "concepts": ["python"]}]})
     assert (fix["confirmed"], habit["confirmed"]) == (1, 0)
     call("store_turn", {"facts": [{"kind": "decision", "text": "unrelated", "concepts": ["rust"]}]})

@@ -244,20 +244,21 @@ def test_dismiss_and_confirm_survive_hostile_numbers(_isolated):
     assert '"dismissed"' in dis.lower(), dis           # defaults applied, no crash
 
 
-def test_pre_turn_serves_a_ready_confirm_call(_isolated):
+def test_pre_turn_serves_a_ready_confirm_call(_isolated, monkeypatch):
     """Reinforcement enforcement (2026-08-25), on facts since ADR-015 D8: when
     pre_turn serves a fact, the reply carries the ALREADY WRITTEN call with its
-    id: a node is no longer what gets confirmed."""
+    id: a node is no longer what gets confirmed. Opt-in since 2026-11-14."""
+    monkeypatch.setenv("NEURON_CONFIRM_HINT", "1")
     _call("store_turn", {"facts": [{"kind": "fact", "text": "Ada pranza il venerdi", "concepts": ["ada"]}]})
     fid = next(f["id"] for f in S._g.get().facts.values() if f["text"] == "Ada pranza il venerdi")
     recall = _call("pre_turn", {"topic": "ada", "keywords": ["ada"]})
     assert f'confirm(facts=["{fid}"' in recall, recall
 
 
-def test_the_hint_has_a_kill_switch(_isolated, monkeypatch):
-    """NEURON_CONFIRM_HINT=0 restores the previous behaviour: no line, no cost.
-    A feature without a switch is a dependency."""
-    monkeypatch.setenv("NEURON_CONFIRM_HINT", "0")
+def test_the_hint_is_off_by_default(_isolated, monkeypatch):
+    """I/O contract (2026-11-14): confirm is not announced and explicit confirms
+    were 1%, so by default the line is gone: no line, no cost."""
+    monkeypatch.delenv("NEURON_CONFIRM_HINT", raising=False)
     _call("store_turn", {"facts": [{"kind": "fact", "text": "Ada pranza il venerdi", "concepts": ["ada"]}]})
     recall = _call("pre_turn", {"topic": "ada", "keywords": ["ada"]})
     assert "confirm(" not in recall, recall

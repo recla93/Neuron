@@ -205,12 +205,6 @@ def _memory_block(p: str, with_knowledge: bool, gateway: bool = False) -> str:
         f"Knowledge base: {p}knowledge_query(query) when the question touches "
         "indexed material.\n"
     ) if with_knowledge else ""
-    # Solo dietro il gateway: `brainstorm` e' un tool di GM. E' una lettura che
-    # nessun loop chiama da solo, quindi il momento va detto qui.
-    extra += (
-        f"On a problem, bug, dilemma or decision: {p}gray_matter_brainstorm(seed) "
-        "BEFORE answering - the seed is the problem in one sentence.\n"
-    ) if gateway else ""
     ctx = active_context()
     where = (
         "Memory context: %s -- store_turn writes there. Not this session's "
@@ -229,8 +223,7 @@ def _memory_block(p: str, with_knowledge: bool, gateway: bool = False) -> str:
         f"self-link; a near-duplicate fact is flagged when stored; never "
         "store secrets or tokens.\n"
         + extra +
-        "Skip on procedural turns (ack/thanks/yes-no) or an empty graph. Once per "
-        f"session: {p}help (commands), {p}skill(name='playbook') (full workflow).\n"
+        "Skip on procedural turns (ack/thanks/yes-no) or an empty graph.\n"
         "If a call fails because the tool is not loaded, load its schema and retry "
         f"once - some clients defer MCP tools. Only a tool list with no {p}* entry "
         "at all means memory is not connected: then ignore this silently."
@@ -243,8 +236,6 @@ def _knowledge_block(p: str) -> str:
         "answering from memory.\n"
         f"Search it with {p}knowledge_query(query) when the question touches "
         "indexed material; cite what you used.\n"
-        f"Once per session: {p}knowledge_skill(name='usage') for the retrieval workflow "
-        "(chunking, filters, when NOT to search).\n"
         "If a call fails because the tool is not loaded, load its schema and retry "
         f"once - some clients defer MCP tools. Only a tool list with no {p}* entry "
         "at all means the knowledge base is not connected: then ignore this silently."

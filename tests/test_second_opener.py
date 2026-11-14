@@ -100,6 +100,54 @@ def test_the_lock_fallback_is_read_only_and_names_the_reason(tmp_path, monkeypat
     assert path in db.DEGRADED_PATHS
 
 
+def _eof_while_tshm(monkeypatch, db, opened):
+    class _Turso:
+        @staticmethod
+        def connect(p, **_kw):
+            if os.path.exists(p + "-tshm"):
+                raise OSError("IoError('io-error-completion: UnexpectedEof')")
+            opened.append(p)
+            return sqlite3.connect(p)
+    monkeypatch.setattr(db, "_local_turso", _Turso, raising=False)
+    monkeypatch.setattr(db, "LOCAL_TURSO_ENGINE", True, raising=False)
+    monkeypatch.setattr(db, "DEGRADED_PATHS", set())
+    monkeypatch.setattr(db, "_local_conn_cache", {})
+    monkeypatch.setattr(db._time, "sleep", lambda _s: None)
+
+
+def test_a_stale_tshm_over_an_empty_wal_is_set_aside_and_the_engine_reopens(tmp_path, monkeypatch):
+    """Live 12-14/11: a -tshm describing frames the empty WAL did not have made
+    every open fail (UnexpectedEof) and Neuron wrote two days on the fallback."""
+    from neuron import db
+
+    path = str(tmp_path / "graph_x.db")
+    for suffix, data in (("", b""), ("-wal", b""), ("-tshm", b"old")):
+        open(path + suffix, "wb").write(data)
+    opened = []
+    _eof_while_tshm(monkeypatch, db, opened)
+
+    db._open_local_engine(path)
+    assert opened == [path]                                   # the engine, not the fallback
+    assert path not in db.DEGRADED_PATHS
+    assert not os.path.exists(path + "-tshm") and os.path.exists(path + "-tshm.stale")
+
+
+def test_a_tshm_with_frames_in_the_wal_is_never_touched(tmp_path, monkeypatch):
+    """Frames in the WAL may be writes not yet replayed: the sidecar stays."""
+    from neuron import db
+
+    path = str(tmp_path / "graph_x.db")
+    sqlite3.connect(path).execute("CREATE TABLE t (v TEXT)").connection.commit()
+    open(path + "-wal", "wb").write(b"frames")
+    open(path + "-tshm", "wb").write(b"old")
+    opened = []
+    _eof_while_tshm(monkeypatch, db, opened)
+
+    db._open_local_engine(path)
+    assert opened == [] and path in db.DEGRADED_PATHS
+    assert open(path + "-tshm", "rb").read() == b"old"
+
+
 def test_other_open_failures_still_get_a_writable_single_opener(tmp_path, monkeypatch):
     """Il caso L2 (NotFound transitorio, nessun altro processo sul file) resta
     com'era: sqlite3 scrivibile sullo stesso file, unico apertore."""

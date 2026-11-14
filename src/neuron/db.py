@@ -599,6 +599,30 @@ class _CachedLocalConn:
         setattr(object.__getattribute__(self, "_conn"), name, value)
 
 
+def _set_aside_stale_tshm(path: str) -> bool:
+    """Move a stale ``-tshm`` sidecar out of the way; True if one was moved.
+
+    Live 2026-11-12..14: a ``-tshm`` left from an older run described WAL frames
+    that the (empty) WAL no longer had, so every open failed with UnexpectedEof
+    and Neuron wrote two days through the sqlite3 fallback. With the WAL empty or
+    gone there is nothing the sidecar can describe, so it is stale by definition;
+    with frames in the WAL it is left alone (they may be unreplayed writes). A
+    sidecar another process holds cannot be renamed on Windows: that fails here
+    and the caller degrades as before.
+    """
+    tshm, wal = path + "-tshm", path + "-wal"
+    if not os.path.exists(tshm) or (os.path.exists(wal) and os.path.getsize(wal) > 0):
+        return False
+    try:
+        os.replace(tshm, tshm + ".stale")
+    except OSError:
+        return False
+    import sys as _sys
+    print(f"neuron: '{os.path.basename(tshm)}' described WAL frames that do not exist — "
+          f"set aside as .stale, reopening.", file=_sys.stderr)
+    return True
+
+
 def _open_local_engine(path: str):
     """Open the local pyturso engine, resilient to the L2 concurrent-open race.
 
@@ -633,6 +657,8 @@ def _open_local_engine(path: str):
             return conn
         except Exception as e:  # noqa: BLE001 — transient concurrent-open race
             last = e
+            if "UnexpectedEof" in repr(e) and _set_aside_stale_tshm(path):
+                continue
             _time.sleep(0.05 * (attempt + 1))
             _ensure_parent_dir(path)
     import sys as _sys

@@ -64,10 +64,11 @@ def test_signpost_present_and_compact():
     assert SIGNPOST_BASE and SIGNPOST_BASE.strip()
     # Token economy: the always-on signpost must stay small (~150 tokens ~= 900 chars).
     assert len(_build_signpost()) < 1000, f"signpost too long: {len(_build_signpost())} chars"
-    # It must state the loop and point at the door (the `skill` tool, which the
-    # model can actually call — resources aren't reliably model-followable).
+    # It states the loop and names only announced tools (I/O contract, 2026-11-14:
+    # `help`/`skill` are no longer announced, so the signpost must not send the
+    # model to them).
     assert "pre_turn" in SIGNPOST_BASE and "store_turn" in SIGNPOST_BASE
-    assert "skill(name='playbook')" in SIGNPOST_BASE
+    assert "help" not in SIGNPOST_BASE and "skill(" not in SIGNPOST_BASE
 
 
 def test_signpost_wired_into_init_options():

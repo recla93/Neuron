@@ -603,7 +603,12 @@ _ADMIN_TOOLS = frozenset({"prune", "consolidate", "dedup", "flash", "reset",
                           # covers get_context, D6 flags duplicates at write,
                           # confirm(confidence<0) refutes, GM calls forgotten
                           # itself. ~4.5k chars of schema per session.
-                          "get_context", "find_candidates", "dismiss", "recall", "forgotten"})
+                          "get_context", "find_candidates", "dismiss", "recall", "forgotten",
+                          # 2026-11-14, I/O contract (work/design/CONTRATTO-IO): the
+                          # model sees pre_turn, store_turn, switch_context. help/skill
+                          # cost a call per session, explicit confirm was used 1% of
+                          # the time (ledger), status/list_contexts are upkeep.
+                          "status", "help", "skill", "confirm", "list_contexts"})
 
 # Mid-band similarity to a topic: above it the node is already what get_context
 # serves, below it is noise. Shared by forgotten(near) and around.
@@ -2809,9 +2814,10 @@ def _reinforce(g, kw: str, confidence: float, boost: int, stamp: bool = True) ->
 
 
 def _confirm_hint_enabled() -> bool:
-    """Kill switch for the pre_turn hint: NEURON_CONFIRM_HINT=0."""
-    return os.environ.get("NEURON_CONFIRM_HINT", "1").strip().lower() \
-        not in ("0", "false", "no", "off")
+    """The pre_turn confirm hint, off by default since 2026-11-14 (confirm is no
+    longer announced, and explicit confirms were 1%): NEURON_CONFIRM_HINT=1."""
+    return os.environ.get("NEURON_CONFIRM_HINT", "0").strip().lower() \
+        in ("1", "true", "yes", "on")
 
 
 async def _tool_dismiss(arguments: dict, ctx: str, g) -> list[TextContent]:
