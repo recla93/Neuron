@@ -260,8 +260,7 @@ from neuron.stimulus import (  # noqa: E402
 )
 
 
-# (_build_context_window and _stimulus_block moved to neuron.stimulus — T57;
-#  re-imported above with the rest of the stimulus engine.)
+# (_build_context_window moved to neuron.stimulus — T57; re-imported above.)
 
 
 # ---------------------------------------------------------------------------

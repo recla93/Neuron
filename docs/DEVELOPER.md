@@ -769,10 +769,8 @@ only the **top-2** are emitted (`_build_context_window`). Cross-domain stays a d
 (the engine is single-graph). A future "Option B" (engine as the primary generator) is noted in
 the code.
 
-**Piggyback stimulus (E2.5).** `pre_turn` appends a compact one-line stimulus (`store_turn` no
-longer does, since 2026-11-12: a save's result is re-read on every later step of the turn)
-(top spreading-activation node), capped to ~40 tokens and suppressed below
-`STIMULUS_MIN_ACTIVATION` (no noise on a cold graph). `_stimulus_block()`.
+**Piggyback stimulus (E2.5): parked on 2026-11-14.** Without a model to judge relevance it
+showed off-topic facts; see `work/design/PARCHEGGIO.md` for what it did and when it may return.
 
 **Cross-context drift (E3.1/E3.2).** When a node from another *visited* context surfaces
 alongside the current keywords (via the cross-domain spark), Neuron forms an implicit `drift`
@@ -781,12 +779,10 @@ link: born tangential, `DRIFT_COOLDOWN` (5), pruned after `DRIFT_EXPIRY_TURNS` (
 the normal views and surfaces only on `get_context(depth≥3)`, rendered `target@context`. Schema:
 `links.target_context`. `Graph.form_drift_link()`.
 
-**Sleep-mode + pre-staging (E3.3/E3.4).** On load, if a context was idle >`SLEEP_IDLE_SECONDS`
+**Sleep-mode (E3.3).** On load, if a context was idle >`SLEEP_IDLE_SECONDS`
 (30 min), `Graph.sleep_maybe()` (called from `registry.get`) consolidates (when
-`NS_CONSOLIDATE_AUTO`) and pre-computes the top stimulus into `meta.staged_stimulus`. `pre_turn`
-serves it once via `take_staged_stimulus()` if fresher than `STAGE_FRESH_SECONDS` (6h) — a warm
-start that works around MCP's lack of push. Degrades to "consolidate-at-startup-if-idle" with no
-external scheduler. Schema: `meta.last_active_timestamp` / `staged_stimulus` / `staged_ts`.
+`NS_CONSOLIDATE_AUTO`). The pre-staged stimulus it used to compute was parked with the
+stimulus on 2026-11-14 (`work/design/PARCHEGGIO.md`). Schema: `meta.last_active_timestamp`.
 
 **Testing each** (all real-dep-free except where noted): `tests/test_hebbian.py`,
 `test_composite_ranking.py` (needs mcp/fastembed), `test_spreading.py`, `test_core.py`

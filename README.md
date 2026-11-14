@@ -257,7 +257,6 @@ behind the gateway). Admin tools are callable but not announced unless
 | `get_context(topic, ...)` | Related nodes/links; `format=compact` for injection (`pre_turn` covers it in the loop) |
 | `find_candidates(keywords)` / `vector_search(keywords)` | Similar existing keywords · semantic search over concepts |
 | `forgotten` / `recall` | Concepts idle for N turns (`facts=true`: dormant facts, what a flash shows) · bring an archived node back |
-| `around(topic, n?)` | Mid-band nodes (0.30–0.75) with their facts and link rationales — raw material for `gray_matter_brainstorm` |
 | `dismiss(keywords)` | Negative feedback: lower salience and trust of misleading associations |
 | `merge(canonical, aliases)` / `consolidate` / `dedup` | Absorb duplicates into one · merge near-duplicates by cosine · toggle keyword dedup |
 | `extract(text)` / `auto(text)` | Standalone extraction · extract-and-save in one call |
