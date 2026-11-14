@@ -148,6 +148,35 @@ def test_a_tshm_with_frames_in_the_wal_is_never_touched(tmp_path, monkeypatch):
     assert open(path + "-tshm", "rb").read() == b"old"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="the multiprocess -tshm exists only on Windows")
+def test_a_tshm_some_process_holds_is_never_moved(tmp_path, monkeypatch):
+    """Rust opens the sidecar with FILE_SHARE_DELETE, so a rename would succeed
+    under a live process (tried 2026-11-14) and split the shared memory in two.
+    A handle opened the same way stands in for that process."""
+    import ctypes
+    from ctypes import wintypes
+    from neuron import db
+
+    path = str(tmp_path / "graph_x.db")
+    for suffix, data in (("", b""), ("-wal", b""), ("-tshm", b"live")):
+        open(path + suffix, "wb").write(data)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    share_all = 0x1 | 0x2 | 0x4                                # READ | WRITE | DELETE, as Rust does
+    h = k32.CreateFileW(path + "-tshm", 0xC0000000, share_all, None, 3, 0, None)
+    assert h not in (None, wintypes.HANDLE(-1).value)
+    try:
+        opened = []
+        _eof_while_tshm(monkeypatch, db, opened)
+        db._open_local_engine(path)
+        assert opened == [] and path in db.DEGRADED_PATHS    # degrades as before
+        assert os.path.exists(path + "-tshm") and not os.path.exists(path + "-tshm.stale")
+    finally:
+        k32.CloseHandle(h)
+
+
 def test_other_open_failures_still_get_a_writable_single_opener(tmp_path, monkeypatch):
     """Il caso L2 (NotFound transitorio, nessun altro processo sul file) resta
     com'era: sqlite3 scrivibile sullo stesso file, unico apertore."""

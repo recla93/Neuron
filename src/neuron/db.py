@@ -599,6 +599,23 @@ class _CachedLocalConn:
         setattr(object.__getattribute__(self, "_conn"), name, value)
 
 
+def _held_elsewhere(file: str) -> bool:
+    """True if some handle has ``file`` open (Windows): an open that shares
+    nothing is refused with a sharing violation while any other handle lives."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    GENERIC_READ, OPEN_EXISTING = 0x80000000, 3
+    h = k32.CreateFileW(file, GENERIC_READ, 0, None, OPEN_EXISTING, 0, None)
+    if h in (None, wintypes.HANDLE(-1).value):
+        return True     # sharing violation, or cannot tell: either way, leave the file alone
+    k32.CloseHandle(h)
+    return False
+
+
 def _set_aside_stale_tshm(path: str) -> bool:
     """Move a stale ``-tshm`` sidecar out of the way; True if one was moved.
 
@@ -606,12 +623,15 @@ def _set_aside_stale_tshm(path: str) -> bool:
     that the (empty) WAL no longer had, so every open failed with UnexpectedEof
     and Neuron wrote two days through the sqlite3 fallback. With the WAL empty or
     gone there is nothing the sidecar can describe, so it is stale by definition;
-    with frames in the WAL it is left alone (they may be unreplayed writes). A
-    sidecar another process holds cannot be renamed on Windows: that fails here
-    and the caller degrades as before.
+    with frames in the WAL it is left alone (they may be unreplayed writes).
+    A sidecar some live process holds is never moved: Rust opens it with
+    FILE_SHARE_DELETE, so a rename WOULD succeed (tried 2026-11-14) and the two
+    processes would then coordinate on two different shared memories.
+    Windows only: the multiprocess sidecar exists only with TURSO_OPEN_KW.
     """
     tshm, wal = path + "-tshm", path + "-wal"
-    if not os.path.exists(tshm) or (os.path.exists(wal) and os.path.getsize(wal) > 0):
+    if os.name != "nt" or not os.path.exists(tshm) \
+            or (os.path.exists(wal) and os.path.getsize(wal) > 0) or _held_elsewhere(tshm):
         return False
     try:
         os.replace(tshm, tshm + ".stale")

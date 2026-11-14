@@ -2589,13 +2589,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # model to judge relevance it showed off-topic facts (work/design/PARCHEGGIO.md).
     tail = ("\n→ next: fold this context into your reply silently, then call "
             "store_turn(facts=[{kind, text, concepts}], English only) for what is worth not repeating.")
-    # Reinforcement-loop enforcement (2026-08-25), low-cost edition: the line
-    # sits AFTER the budget (never truncated) but must stay cheap — top-2
-    # keywords, three words of prose, ~12 tokens. Only with content served.
-    _served = [h[0]["id"] for h in _hits[:2]]          # D8: confirm facts, not nodes
-    if _served and _confirm_hint_enabled():
-        tail += ("\n→ useful? confirm(facts="
-                 f"{json.dumps(_served, ensure_ascii=False)})")
+    # No "→ useful? confirm(...)" line since 2026-11-14: confirm is not announced
+    # and explicit confirms were 1%; use is counted implicitly (ADR-015 D8).
     out_pt = out_pt + tail
     return [TextContent(type="text", text=out_pt)]
 
@@ -2659,13 +2654,6 @@ def _reinforce(g, kw: str, confidence: float, boost: int, stamp: bool = True) ->
     if confidence >= 0:           # L1: confirmed keywords enter session cache
         g.cache_add(nd.keyword, score=min(1.0, confidence * 0.8 + 0.2))
     return "confirmed"
-
-
-def _confirm_hint_enabled() -> bool:
-    """The pre_turn confirm hint, off by default since 2026-11-14 (confirm is no
-    longer announced, and explicit confirms were 1%): NEURON_CONFIRM_HINT=1."""
-    return os.environ.get("NEURON_CONFIRM_HINT", "0").strip().lower() \
-        in ("1", "true", "yes", "on")
 
 
 async def _tool_dismiss(arguments: dict, ctx: str, g) -> list[TextContent]:
