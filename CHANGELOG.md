@@ -1,5 +1,33 @@
 # Changelog — Neuron
 
+## 6.11.0 (2026-11-15)
+- **Il richiamo porta l'ultima parola su un argomento.** Un fatto aggiornato
+  senza `supersedes` somigliava alla domanda più del suo aggiornamento (0,91
+  contro 0,53, che restava fuori). Ora il fatto più recente sullo stesso
+  concetto entra davanti ai più vecchi; i fatti già visti nella sessione
+  escono prima del taglio ai primi 3.
+- **Gist e inglese come lingua pivot.** Ogni fatto può avere una riga breve in
+  inglese (`gist`, colonna con migrazione) che il richiamo mostra al posto del
+  testo; `pre_turn(topic="#id")` dà il testo intero. I fatti si scrivono in
+  inglese qualunque sia la lingua della chat: un controllo morbido salva
+  comunque e aggiunge una nota. −64% di token per fatto.
+- **Quattro tool annunciati**: `pre_turn`, `store_turn`, `switch_context`,
+  `knowledge_query`. Schemi da 11,6k a 5,65k caratteri (−51%); gli altri
+  restano chiamabili per nome (`NEURON_TOOLS=all` li annuncia).
+- **Tolti** (con il perché e la condizione per tornare in
+  `work/design/PARCHEGGIO.md`): lo stimolo 🧠 (uso 21%, il più basso), la
+  modalità focus, il tool `around`, il log `turns.jsonl` e la riga
+  "useful? confirm". `store_turn` non restituisce più lo stimolo.
+- **Il grafo si ripara da un `-tshm` vecchio.** Un `-tshm` che descrive frame
+  che il WAL vuoto non ha viene messo da parte come `.stale` e il grafo si
+  riapre su Turso, invece di scrivere per giorni sul ripiego sqlite3. Si sposta
+  solo se nessun processo lo tiene aperto, e solo su Windows.
+- **Hook**: il testo di inizio sessione non chiede `pre_turn` dove l'hook
+  inietta già il richiamo (7-12 richiami doppi per sessione), e il promemoria
+  di salvataggio esclude ciò che git e i file del progetto registrano già.
+  Plugin OpenCode 2.x caricato davvero (cartella con `index.mjs`) e robusto al
+  ricaricamento; `Stop` su Kimi Code, hook nativi su Codex.
+
 ## 6.10.1 (2026-11-10)
 - **Il plugin di OpenCode legge il registro giusto.** `neuron-handshake.mjs`
   cercava i tool installati nel layout piatto di prima, non in `registry/`:
