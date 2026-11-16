@@ -239,7 +239,7 @@ _LINK_UPSERT = (
 # another writer's text. Only `status` changes, and only active -> superseded.
 _FACT_INSERT = (
     "INSERT OR IGNORE INTO facts (context, id, kind, text, turn, created_at, source, "
-    "supersedes, status, confirmed, gist, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    "supersedes, status, confirmed, gist, shown, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 _CONCEPT_INSERT = ("INSERT OR IGNORE INTO fact_concepts (context, fact_id, keyword) "
                    "VALUES (?,?,?)")
 
@@ -591,7 +591,7 @@ class Graph:
                     "text": text, "turn": turn,
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "source": source, "supersedes": None, "status": "active",
-                    "concepts": concepts, "confirmed": 0,
+                    "concepts": concepts, "confirmed": 0, "shown": 0,
                     "gist": " ".join(str(gist or "").split())[:GIST_MAX_CHARS]}
             self.facts[fid] = fact
             self._new_facts.add(fid)
@@ -607,6 +607,8 @@ class Graph:
                 # D8: superseded means used — the new version carries the
                 # old one's confirmations, plus this one.
                 self.confirm_fact(report["id"], old.get("confirmed", 0) + 1)
+                # ...and its showings, plus the one this use came from: used/shown stays a rate.
+                self.note_shown(report["id"], old.get("shown", 0) + 1)
                 for kw in old["concepts"]:
                     self.episodes[kw] = [e for e in self.episodes.get(kw, []) if e["id"] != old["id"]]
                 if not twin:
@@ -680,6 +682,19 @@ class Graph:
         hits = [f for f in self.facts.values()
                 if f["status"] == "active" and f["id"] != fid and tag in f["text"]]
         return [f["id"] for f in sorted(hits, key=lambda f: f["turn"] or 0, reverse=True)[:n]]
+
+    def note_shown(self, fid: str, n: int = 1) -> bool:
+        """ADR-021 D1: count a showing of a fact by the recall. With `confirmed`
+        it gives the fact's own use rate: on the real sessions of 2026-11-16 a
+        fact used in another session was used again 30% of the time, one never
+        used 11%, while its similarity to the message predicted nothing."""
+        f = self.facts.get(str(fid).lstrip("#"))
+        if not f or n <= 0:
+            return False
+        f["shown"] = f.get("shown", 0) + int(n)
+        self._fact_conf.add(f["id"])
+        self._dirty = True
+        return True
 
     def confirm_fact(self, fid: str, delta: int = 1) -> bool:
         """ADR-015 D8: count one use of a fact (negative = a refute, floored at
@@ -1152,6 +1167,9 @@ class Graph:
         # or confirmed). Its own ALTER: a store from before it reads 0.
         if self._table_cols(conn, "facts") and "confirmed" not in self._table_cols(conn, "facts"):
             conn.execute("ALTER TABLE facts ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0")
+        # How many times the recall showed it (ADR-021 D1, 2026-11-16), same rule.
+        if self._table_cols(conn, "facts") and "shown" not in self._table_cols(conn, "facts"):
+            conn.execute("ALTER TABLE facts ADD COLUMN shown INTEGER NOT NULL DEFAULT 0")
         # The gist (2026-11-12), same rule: an older store reads ''.
         if self._table_cols(conn, "facts") and "gist" not in self._table_cols(conn, "facts"):
             conn.execute("ALTER TABLE facts ADD COLUMN gist TEXT NOT NULL DEFAULT ''")
@@ -1499,6 +1517,7 @@ class Graph:
                 space      TEXT DEFAULT '',
                 confirmed  INTEGER NOT NULL DEFAULT 0,
                 gist       TEXT NOT NULL DEFAULT '',
+                shown      INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (context, id));
             CREATE TABLE IF NOT EXISTS fact_concepts (
                 context TEXT NOT NULL DEFAULT 'default',
@@ -1769,7 +1788,7 @@ class Graph:
             who = (owner_identity(), current_space())
             conn.executemany(_FACT_INSERT, [
                 (context, f["id"], f["kind"], f["text"], f["turn"], f["created_at"],
-                 f["source"], f["supersedes"], f["status"], f.get("confirmed", 0), f.get("gist", "")) + who
+                 f["source"], f["supersedes"], f["status"], f.get("confirmed", 0), f.get("gist", ""), f.get("shown", 0)) + who
                 for f in rows])
         if self._new_concepts:
             conn.executemany(_CONCEPT_INSERT,
@@ -1779,8 +1798,8 @@ class Graph:
                              [(self.facts[fid]["status"], context, fid)
                               for fid in self._fact_status if fid in self.facts])
         if self._fact_conf:
-            conn.executemany("UPDATE facts SET confirmed=? WHERE context=? AND id=?",
-                             [(self.facts[fid].get("confirmed", 0), context, fid)
+            conn.executemany("UPDATE facts SET confirmed=?, shown=? WHERE context=? AND id=?",
+                             [(self.facts[fid].get("confirmed", 0), self.facts[fid].get("shown", 0), context, fid)
                               for fid in self._fact_conf if fid in self.facts])
 
     def _save_reconcile(self, conn, context: str, *, write_vectors: bool = True) -> None:
@@ -2003,7 +2022,7 @@ class Graph:
                 cols = "id, kind, text, turn, created_at, source, supersedes, status"
                 have = self._table_cols(conn, "facts")
                 # The same for `gist`: absent from a store not yet saved by 6.11.
-                extra = [c for c in ("confirmed", "gist") if c in have]
+                extra = [c for c in ("confirmed", "gist", "shown") if c in have]
                 for row in conn.execute(
                         f"SELECT {', '.join([cols, *extra])} FROM facts WHERE context=?", (context,)):
                     fid, kind, text, turn, created, source, sup, status = row[:8]
@@ -2012,7 +2031,8 @@ class Graph:
                                        "created_at": created, "source": source,
                                        "supersedes": sup, "status": status, "concepts": [],
                                        "confirmed": more.get("confirmed") or 0,
-                                       "gist": more.get("gist") or ""}
+                                       "gist": more.get("gist") or "",
+                                       "shown": more.get("shown") or 0}
                 for fid, kw in conn.execute(
                         "SELECT fact_id, keyword FROM fact_concepts WHERE context=?", (context,)):
                     if fid in self.facts:

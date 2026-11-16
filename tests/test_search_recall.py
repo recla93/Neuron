@@ -186,6 +186,16 @@ def test_a_fact_cited_or_confirmed_counts_one_use_a_shared_concept_does_not(word
     assert fix["confirmed"] == 1
     out = call("confirm", {"facts": [f"#{fix['id']}"]})
     assert fix["id"] in out and fix["confirmed"] == 2
+    # ADR-021 D1: the Stop hook also reports what was shown; both survive a reload,
+    # and a new version carries its predecessor's showings with its uses.
+    call("confirm", {"facts": [], "shown": [fix["id"], habit["id"], "nosuchid"]})
+    assert (fix["shown"], habit["shown"]) == (1, 1)
+    call("store_turn", {"facts": [{"kind": "fix", "text": "pacchetti importati: usare -I",
+                                   "concepts": ["python"], "supersedes": fix["id"]}]})
+    again = GraphRegistry(graphs_dir=str(tmp_path)).get()
+    new = next(f for f in again.facts.values() if f["supersedes"] == fix["id"])
+    assert (new["confirmed"], new["shown"]) == (3, 2)
+    assert again.facts[habit["id"]]["shown"] == 1
 
 
 # --- the gist (2026-11-12): recall shows the short form, search reads the text ----

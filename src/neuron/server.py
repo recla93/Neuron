@@ -2627,7 +2627,10 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     # ADR-015 D8: the signal on the fact; a refute counts one back.
     facts_ok = [str(f).lstrip("#") for f in (arguments.get("facts") or [])
                 if g.confirm_fact(f, 1 if confidence >= 0 else -1)]
-    if confirmed or facts_ok:
+    # ADR-021 D1: the facts the recall showed this turn, used or not. Reported by
+    # GM's Stop hook with the used ones: one write per turn, off the recall's path.
+    shown_ok = [f for f in (arguments.get("shown") or []) if g.note_shown(f)]
+    if confirmed or facts_ok or shown_ok:
         _g.save(ctx or None)
     return [TextContent(type="text", text=json.dumps({
         **({"facts_confirmed": facts_ok} if arguments.get("facts") else {}),

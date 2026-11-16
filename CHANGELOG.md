@@ -26,6 +26,11 @@
   confirmed live facts, 50 had only that: topic overlap. A fact is used when a
   later fact cites its `#id` or replaces it, or when Gray Matter's Stop hook
   reports that the reply reused it.
+- **Each fact counts its showings** (`shown`, beside `confirmed`): together they
+  are the fact's own use rate. Measured on 321 real showings: a fact used in
+  another session is used again 30% of the time, one never used 11%, while its
+  similarity to the message predicts nothing (AUC 0.50). Nothing ranks on it
+  yet. `confirm` takes `shown=[ids]`; a new version carries its predecessor's.
 - **The bench measures the recall's doubt**: per message, the top fact's score,
   its lead on the second and the rank of the missed facts. It predicts the
   misses (AUC 0.68-0.83) but as a filter it does worse than K=2: a measure only,
