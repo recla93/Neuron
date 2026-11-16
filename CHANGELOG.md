@@ -22,6 +22,10 @@
   (`claude-code`, `opencode`, …) instead of `model`, which was the same for 300
   facts out of 319. Gray Matter passes it (`by`); standalone, Neuron reads it
   from its own handshake.
+- **Writing about the same concept no longer counts as using a fact.** Of the 81
+  confirmed live facts, 50 had only that: topic overlap. A fact is used when a
+  later fact cites its `#id` or replaces it, or when Gray Matter's Stop hook
+  reports that the reply reused it.
 - **The bench measures the recall's doubt**: per message, the top fact's score,
   its lead on the second and the rank of the missed facts. It predicts the
   misses (AUC 0.68-0.83) but as a filter it does worse than K=2: a measure only,

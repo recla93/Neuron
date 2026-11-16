@@ -1690,21 +1690,17 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         if _cur.foreign_language(f["text"]):     # kept: a fact is never lost for its language
             _fact_notes.append(f"#{rep['id']} stored; write facts in English, the memory's pivot "
                                "language, whatever the chat language")
-    # ADR-015 D8: a fact was used when the last pre_turn showed it and this
-    # turn writes about one of its concepts, or names it by #id. One use per
-    # fact per turn. The profile (user/habit) is never in the served set.
+    # ADR-015 D8: a fact was used when a fact of this turn names it by #id (a
+    # note), or replaces it (add_fact). Until 2026-11-16 sharing a CONCEPT with
+    # a shown fact counted too: 50 of 81 confirmed live facts had only that.
+    # The implicit signal now comes from the reply, read by GM's Stop hook
+    # (memhook.used_facts -> confirm).
     _used: set = set()
-    _named = {c for fid in _turn_ids for c in g.facts[fid]["concepts"]}
-    for fid in getattr(g, "_facts_served", set()):
-        f = g.facts.get(fid)
-        if f and fid not in _turn_ids and set(f["concepts"]) & _named:
-            _used.add(fid)
     for fid in _turn_ids:
         _used.update(c for c in re.findall(r"#([0-9a-f]{8})\b", g.facts[fid]["text"])
                      if c not in _turn_ids and c in g.facts)
     for fid in _used:
         g.confirm_fact(fid)
-    g._facts_served = set()
 
     # ADR-015 §3.2: a fact gets its vector when it is written (~120 ms each),
     # so the next recall finds it even while a cold cache warms in the
@@ -2456,7 +2452,6 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     _seen.add(f["id"])
                     _hits.append((f, 0.0, kw))
     _hits = [h for h in _hits if h[0]["id"] not in _seen_ids]   # the no-vector path above
-    g_pt._facts_served = {h[0]["id"] for h in _hits}   # D8: not the profile, always shown
     if _hits:
         parts_pt.append("facts: " + " | ".join(
             f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}"

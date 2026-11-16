@@ -379,7 +379,6 @@ class Graph:
     # which is the feedback `confirm` asks for and the model never sends.
     # In-memory only, like `_confirm_at`: a restart costs one missed signal.
     _served_last: set = field(default_factory=set)
-    _facts_served: set = field(default_factory=set)   # fact ids the last pre_turn showed (D8)
     # Save mode for the next write:
     #   _needs_full_write  — upsert EVERY in-memory row (not just the dirty delta),
     #     additively (no deletes). Needed when the store may be missing rows we
