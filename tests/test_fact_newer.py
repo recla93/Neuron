@@ -104,3 +104,20 @@ def test_the_fact_the_message_quotes_beats_a_slightly_closer_one():
     assert _ids(se._search_facts(q, g, 1, 0.40, 0.0, 0.15, embed=_embed(vecs), lex=0.15)) == [a]
     facts = [g.facts[a], g.facts[b], g.facts[c]]
     assert se._lexical("memory", facts)[a] < 0.2 and se._lexical(q, facts)[a] == 1.0
+
+
+def test_a_facts_own_use_rate_only_adds_and_only_when_asked():
+    """ADR-021: a fact used in half of its showings passes a slightly closer one
+    when the caller is in the experiment's arm (use > 0). Never shown, shown
+    once, shown and never used: no bonus and no penalty — unused is not useless."""
+    g = Graph()
+    a = g.add_fact("fact", "ATXT first", ["x"], 1)["id"]
+    b = g.add_fact("fact", "BTXT second", ["x"], 2)["id"]
+    c = g.add_fact("fact", "CTXT third", ["x"], 3)["id"]
+    vecs = {"ATXT": (0.60, 0.80, 0.0), "BTXT": (0.62, math.sqrt(1 - 0.62 ** 2), 0.0), "CTXT": (0.61, math.sqrt(1 - 0.61 ** 2), 0.0)}
+    g.facts[a].update(shown=4, confirmed=2)
+    g.facts[c].update(shown=6, confirmed=0)
+    assert _ids(se._search_facts("q", g, 3, 0.40, 0.0, 0.15, embed=_embed(vecs))) == [b, c, a]
+    assert _ids(se._search_facts("q", g, 3, 0.40, 0.0, 0.15, embed=_embed(vecs), use=0.10)) == [a, b, c]
+    g.facts[a].update(shown=1, confirmed=1)
+    assert se._use_rate(g.facts[a]) == 0.0 and se._use_rate(g.facts[c]) == 0.0

@@ -134,6 +134,11 @@ FACT_MIN_SCORE   = _config.env_float("NEURON_FACT_MIN_SCORE", 0.40)
 FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
 # Wording shared with the message (search._lexical), 2026-11-16: see _search_facts.
 FACT_LEX_BONUS   = _config.env_float("NEURON_FACT_LEX_BONUS", 0.15)
+# ADR-021, OFF by default: a bonus for a fact's own use rate, applied only to the
+# sessions Gray Matter puts in the experiment's arm (pre_turn `arm`). Turn it on
+# (start: 0.10) once facts have a few weeks of shown/used counts; the ledger
+# compares the two halves.
+FACT_USE_BONUS   = _config.env_float("NEURON_FACT_USE_BONUS", 0.0)
 # ADR-015 D7.1: user/habit facts on the first call of a session, newest first.
 # shortcut: a fixed cap drops the oldest past it; 600 dropped 2 of 4 live
 # (one long `user` fact, 2026-11-08), 4 now take ~850. Rank by `confirmed`
@@ -2061,13 +2066,13 @@ def _client_tag(by=None) -> str:
 
 
 def _fact_hits(query: str, g, k: int, floor: float, delta: float,
-               newer: bool = False, exclude=frozenset()) -> list:
+               newer: bool = False, exclude=frozenset(), use: float = 0.0) -> list:
     """search._search_facts with the recall bonus. A replaced embedding (tests)
     is used for the query and the facts alike, never mixed with the model's."""
     return _search._search_facts(
         query, g, k, floor, FACT_NAMED_BONUS, delta,
         embed=None if _get_embedding is _search._get_embedding else _get_embedding,
-        newer=newer, exclude=exclude, lex=FACT_LEX_BONUS)
+        newer=newer, exclude=exclude, lex=FACT_LEX_BONUS, use=use)
 
 
 async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
@@ -2439,7 +2444,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _seen_ids |= {f["id"] for f in _profile}
     try:
         _hits = _fact_hits(_fact_q, g_pt, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA,
-                           newer=True, exclude=_seen_ids)
+                           newer=True, exclude=_seen_ids,
+                           use=FACT_USE_BONUS if arguments.get("arm") else 0.0)
     except Exception as _e:  # noqa: BLE001 — no embedder: the graph still answers
         # Without vectors the old window: the newest facts of the top nodes.
         log.debug("fact recall by vector skipped: %s", _e)

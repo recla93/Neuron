@@ -1,6 +1,7 @@
 # Changelog — Neuron
 
-## Unreleased
+## 6.12.0 (2026-11-16)
+With Gray Matter 1.10.0 and NeuRAG 1.9.1.
 - **Recall shows at most 2 facts instead of 3** (`NEURON_FACT_RECALL_K`). On the
   bench (set v2 and both English sets, both read modes) it finds the same facts
   and shows 1 to 3 fewer wrong ones; in the hook read mode precision goes from
@@ -31,6 +32,11 @@
   another session is used again 30% of the time, one never used 11%, while its
   similarity to the message predicts nothing (AUC 0.50). Nothing ranks on it
   yet. `confirm` takes `shown=[ids]`; a new version carries its predecessor's.
+- **An experiment switch for the use rate, off by default**
+  (`NEURON_FACT_USE_BONUS`, 0). A fact's own use rate can add to its score,
+  only for the half of the sessions Gray Matter marks (`pre_turn` `arm`), so
+  the ledger can compare the two halves on real use. It never lowers a fact:
+  unused is not useless. Leave it at 0 until facts have weeks of counts.
 - **The bench measures the recall's doubt**: per message, the top fact's score,
   its lead on the second and the rank of the missed facts. It predicts the
   misses (AUC 0.68-0.83) but as a filter it does worse than K=2: a measure only,

@@ -475,10 +475,20 @@ def _lexical(query: str, facts: list) -> dict:
             for fid, ks in keys.items()}
 
 
+def _use_rate(f: dict) -> float:
+    """ADR-021: the share of a fact's showings in which it was used, 0 until it
+    has been shown twice. It only ever ADDS to a score: a fact that was not used
+    is not less useful, it just has no proof yet (the user's rule, 2026-11-16;
+    and on the real showings dropping unused facts gained nothing)."""
+    shown = f.get("shown", 0)
+    return min(1.0, f.get("confirmed", 0) / shown) if shown >= 2 else 0.0
+
+
 def _search_facts(query: str, graph, k: int, min_score: float,
                   named_bonus: float, delta: float = 1.0,
                   embed=None, newer: bool = False,
-                  exclude=frozenset(), lex: float = 0.0) -> list[tuple[dict, float, str]]:
+                  exclude=frozenset(), lex: float = 0.0,
+                  use: float = 0.0) -> list[tuple[dict, float, str]]:
     """ADR-015 D7: the facts that answer a message, not the nodes near it.
 
     Score = cosine(message, `concepts. sentence`) + ``named_bonus`` when the
@@ -503,6 +513,10 @@ def _search_facts(query: str, graph, k: int, min_score: float,
     ones (17 -> 19 of 33), unexpected facts per message 0.73 -> 0.59-0.64. From
     0.25 up it starts trading one expected fact for another (m16 k4 in, m12 k5 out).
 
+    ``use`` (ADR-021): weight of the fact's own use rate (_use_rate). 0 unless
+    the caller is in the experiment's arm: no bench can measure it, only the
+    split of real sessions the ledger reports.
+
     ``embed``: one function for the query AND every fact (no cache), when the
     caller's embedding is not this module's: a test pins the rule with fixed
     vectors, and they must never be compared with the model's."""
@@ -525,7 +539,7 @@ def _search_facts(query: str, graph, k: int, min_score: float,
             continue
         named = [c for c in f["concepts"] if _names(c, words)]
         score = (sum(a * b for a, b in zip(q, v)) + (named_bonus if named else 0.0)
-                 + lex * worded.get(f["id"], 0.0))
+                 + lex * worded.get(f["id"], 0.0) + use * _use_rate(f))
         if score >= min_score:
             out.append((f, round(score, 4),
                         named[0] if named else (f["concepts"][0] if f["concepts"] else "")))
