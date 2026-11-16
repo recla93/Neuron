@@ -673,6 +673,15 @@ class Graph:
             return {}
         return self.add_fact("fact", text, [keyword], turn)
 
+    def notes_on(self, fid: str, n: int = 2) -> list[str]:
+        """Ids of the active facts that cite ``#fid`` in their text, newest
+        first: a comment or a dispute left on a fact WITHOUT replacing it
+        (`supersedes` replaces). No column: the citation is the link."""
+        tag = f"#{fid}"
+        hits = [f for f in self.facts.values()
+                if f["status"] == "active" and f["id"] != fid and tag in f["text"]]
+        return [f["id"] for f in sorted(hits, key=lambda f: f["turn"] or 0, reverse=True)[:n]]
+
     def confirm_fact(self, fid: str, delta: int = 1) -> bool:
         """ADR-015 D8: count one use of a fact (negative = a refute, floored at
         0). The signal lives on the fact, not on the node it is indexed under."""

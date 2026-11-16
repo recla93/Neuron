@@ -1,5 +1,32 @@
 # Changelog — Neuron
 
+## Unreleased
+- **Recall shows at most 2 facts instead of 3** (`NEURON_FACT_RECALL_K`). On the
+  bench (set v2 and both English sets, both read modes) it finds the same facts
+  and shows 1 to 3 fewer wrong ones; in the hook read mode precision goes from
+  50% to 53% (v2) and from 47% to 52% (English).
+- **Recall also weighs the wording shared with the message**
+  (`NEURON_FACT_LEX_BONUS`, 0.15). The vector misses the fact a message only
+  quotes: "serve un install.ps1 -Force" left the fact about `install.ps1 -Force`
+  sixth. Each message word found in a fact weighs as much as it is rare among
+  the active facts. On the three bench sets, with K=2: no expected fact lost, 2
+  more found on the English sets (17 → 19 of 33), unexpected facts per message
+  from 0.73 to 0.59 (v2) and from 0.73-0.77 to 0.64 (English). It does not reach
+  the far facts: of the 15 missed on v2, 7 rank past tenth, and most are state
+  questions that want the latest `progress`.
+- **Notes on facts.** A fact that cites another's `#id` is a note on it: a
+  comment or a dispute that does not replace it. Recall shows it next to the
+  fact it is about (`#id ↳#id`), about 6 tokens. No new column and no new
+  parameter: the citation is the link.
+- **Every fact records who wrote it.** `source` holds the client
+  (`claude-code`, `opencode`, …) instead of `model`, which was the same for 300
+  facts out of 319. Gray Matter passes it (`by`); standalone, Neuron reads it
+  from its own handshake.
+- **The bench measures the recall's doubt**: per message, the top fact's score,
+  its lead on the second and the rank of the missed facts. It predicts the
+  misses (AUC 0.68-0.83) but as a filter it does worse than K=2: a measure only,
+  for now.
+
 ## 6.11.0 (2026-11-15)
 - **Il richiamo porta l'ultima parola su un argomento.** Un fatto aggiornato
   senza `supersedes` somigliava alla domanda più del suo aggiornamento (0,91

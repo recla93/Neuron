@@ -127,10 +127,13 @@ SEMANTIC_DEDUP_THRESHOLD = 0.90
 # separates cleanly: right fact 0.37-0.64, best wrong one <= 0.20.
 VEC_FALLBACK_DELTA = 0.20   # vector-fallback node kept if within this of the best
 FACT_DELTA = _config.env_float("NEURON_FACT_DELTA", 0.15)   # a fact is kept within this of the best
-# ADR-015 D7, tuned on bench/recall.json v1 (see search._search_facts)
-FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 3)
+# ADR-015 D7, tuned on bench/recall.json v1 (see search._search_facts). K 3 -> 2
+# on 2026-11-15: on v2 and both English sets, same facts found, 1-3 fewer wrong.
+FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 2)
 FACT_MIN_SCORE   = _config.env_float("NEURON_FACT_MIN_SCORE", 0.40)
 FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
+# Wording shared with the message (search._lexical), 2026-11-16: see _search_facts.
+FACT_LEX_BONUS   = _config.env_float("NEURON_FACT_LEX_BONUS", 0.15)
 # ADR-015 D7.1: user/habit facts on the first call of a session, newest first.
 # shortcut: a fixed cap drops the oldest past it; 600 dropped 2 of 4 live
 # (one long `user` fact, 2026-11-08), 4 now take ~850. Rank by `confirmed`
@@ -654,7 +657,9 @@ def _all_tools() -> list[Tool]:
                                          "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work)"},
                                 "text": {"type": "string",
                                          "description": f"One sentence with its why, ideally under {EPISODE_MAX_CHARS} chars. "
-                                                        "ENGLISH ONLY, whatever the chat language: the memory's pivot language."},
+                                                        "ENGLISH ONLY, whatever the chat language: the memory's pivot language. "
+                                                        "To comment or dispute a fact without replacing it, cite its #id: "
+                                                        "recall then shows your note next to it (↳#id)."},
                                 "concepts": {"type": "array", "items": {"type": "string"},
                                              "description": "1-5 concept nouns that index the fact, in English"},
                                 "supersedes": {"type": "string",
@@ -1654,6 +1659,9 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _fact_report: list[str] = []
     _fresh: list[str] = []          # new facts that replace nothing: D6 checks them
     _turn_ids: set = set()          # every fact this turn stored or restated (D8)
+    # Who wrote it: the MCP client (GM passes it as `by`; standalone, our own
+    # handshake). Until 2026-11-16 every fact said "model": 300 of 319 live.
+    _author = _client_tag(arguments.get("by")) or "model"
     _fact_lost: dict = {}
     for f in _facts_in:
         cs = []
@@ -1665,7 +1673,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         # A fact whose concepts all fell to curation is still indexed: under the
         # turn's keywords, so it stays findable.
         rep = g.add_fact(f["kind"], f["text"], cs or list(keywords), turn,
-                         supersedes=f["supersedes"], gist=f.get("gist", ""))
+                         supersedes=f["supersedes"], gist=f.get("gist", ""), source=_author)
         if not rep:
             continue
         g_kind = g.facts[rep["id"]]["kind"]
@@ -2046,6 +2054,16 @@ def _profile_facts(g, cap: int) -> list:
     return out
 
 
+def _client_tag(by=None) -> str:
+    """The writing client as a short tag ("claude-code", "opencode"), "" if unknown."""
+    if not by:
+        try:
+            by = app.request_context.session.client_params.clientInfo.name
+        except Exception:  # noqa: BLE001 — no request context (tests, CLI): unknown
+            by = ""
+    return re.sub(r"[^a-z0-9._-]+", "-", str(by or "").lower()).strip("-")[:40]
+
+
 def _fact_hits(query: str, g, k: int, floor: float, delta: float,
                newer: bool = False, exclude=frozenset()) -> list:
     """search._search_facts with the recall bonus. A replaced embedding (tests)
@@ -2053,7 +2071,7 @@ def _fact_hits(query: str, g, k: int, floor: float, delta: float,
     return _search._search_facts(
         query, g, k, floor, FACT_NAMED_BONUS, delta,
         embed=None if _get_embedding is _search._get_embedding else _get_embedding,
-        newer=newer, exclude=exclude)
+        newer=newer, exclude=exclude, lex=FACT_LEX_BONUS)
 
 
 async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
@@ -2441,7 +2459,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     g_pt._facts_served = {h[0]["id"] for h in _hits}   # D8: not the profile, always shown
     if _hits:
         parts_pt.append("facts: " + " | ".join(
-            f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}" for f, _sc, kw in _hits))
+            f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}"
+            + "".join(f" ↳#{n}" for n in g_pt.notes_on(f["id"])) for f, _sc, kw in _hits))
     if lks:
         parts_pt.append("links:" + "|".join(
             f"{lk.source}-[{lk.weight[0]}]->{lk.target}" for lk in lks[:6]

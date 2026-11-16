@@ -88,3 +88,19 @@ def test_the_update_goes_before_every_earlier_fact_on_its_subject():
     assert sum(x * y for x, y in zip(vecs["ATXT"], NEW)) < se.NEWER_MIN_SIM
     hits = se._search_facts("where?", g, 3, 0.40, 0.20, 0.15, embed=_embed(vecs), newer=True)
     assert _ids(hits)[0] == n and set(_ids(hits)) == {a, b, n}
+
+
+def test_the_fact_the_message_quotes_beats_a_slightly_closer_one():
+    """bench v2 m16: "serve un install.ps1 -Force" left the fact about
+    `install.ps1 -Force` 6th. Equal vectors, so only the wording decides; a word
+    every fact has ("memory") weighs little, and lex=0 keeps the old order."""
+    g = Graph()
+    a = g.add_fact("fact", "ATXT memory needs install.ps1 -Force after a code change", ["venv"], 1)["id"]
+    b = g.add_fact("fact", "BTXT memory is copied into the venv by the wheel", ["venv"], 2)["id"]
+    c = g.add_fact("fact", "CTXT memory of the daemon survives a restart", ["daemon"], 3)["id"]
+    vecs = {"ATXT": (0.60, 0.80, 0.0), "BTXT": (0.62, math.sqrt(1 - 0.62 ** 2), 0.0), "CTXT": (0.61, math.sqrt(1 - 0.61 ** 2), 0.0)}
+    q = "memory: do we still need an install.ps1 -Force?"
+    assert _ids(se._search_facts(q, g, 1, 0.40, 0.0, 0.15, embed=_embed(vecs))) == [b]
+    assert _ids(se._search_facts(q, g, 1, 0.40, 0.0, 0.15, embed=_embed(vecs), lex=0.15)) == [a]
+    facts = [g.facts[a], g.facts[b], g.facts[c]]
+    assert se._lexical("memory", facts)[a] < 0.2 and se._lexical(q, facts)[a] == 1.0

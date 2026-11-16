@@ -236,3 +236,21 @@ def test_a_fact_shown_in_the_session_does_not_come_back(tmp_path, monkeypatch):
     assert f"#{habit['id']}" not in again and f"#{fix['id']}" not in again, again
 
 
+
+
+def test_a_note_on_a_fact_is_shown_next_to_it_and_facts_carry_their_author(tmp_path, monkeypatch):
+    """2026-11-16: a fact that cites another's #id is a note on it (a comment or
+    a dispute, not a replacement): recall points at it. And `source` says which
+    client wrote a fact — it said "model" for 300 of 319 live facts."""
+    g, call = _setup(tmp_path, monkeypatch, {"turso": [1.0, 0.0, 0.0]})
+    call("store_turn", {"by": "Claude Code", "facts": [
+        {"kind": "decision", "text": "turso runs embedded on every client", "concepts": ["turso"]}]})
+    fid = next(iter(g.facts))
+    assert g.facts[fid]["source"] == "claude-code"
+    call("store_turn", {"facts": [
+        {"kind": "fact", "text": f"Disputed #{fid}: kimi still runs on sqlite3", "concepts": ["kimi"]}]})
+    note = next(i for i in g.facts if i != fid)
+    assert g.facts[note]["source"] == "model"          # no `by`, no handshake
+    assert g.notes_on(fid) == [note] and g.notes_on(note) == []
+    out = call("pre_turn", {"topic": "turso embedded"})
+    assert f"#{fid} ↳#{note}" in out, out

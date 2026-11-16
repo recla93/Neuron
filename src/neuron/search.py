@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -447,10 +448,37 @@ def _names(concept: str, words: set[str]) -> bool:
         for w in _words(concept) if len(w) >= 2)
 
 
+def _lex_keys(text: str) -> set[str]:
+    """Words of 3+ characters, plus the 5-letter stem of the longer ones
+    (install / installer / installano share ``insta*``). Bare numbers are out."""
+    ws = {w for w in _words(text) if len(w) >= 3 and not w.isdigit()}
+    return ws | {w[:5] + "*" for w in ws if len(w) >= 5}
+
+
+def _lexical(query: str, facts: list) -> dict:
+    """fact id -> 0..1: how much of the message's own rare wording a fact carries.
+
+    The vector misses the fact a message only QUOTES: "serve un install.ps1
+    -Force" ranked the fact about `install.ps1 -Force` 6th (bench v2, m16). Each
+    message word found in a fact weighs its IDF over the active facts, so a word
+    every fact has ("neuron" in this graph) weighs almost nothing; three words
+    that a single fact has are a full score."""
+    keys = {f["id"]: _lex_keys(_fact_text(f)) for f in facts}
+    has = lambda t, ks: t in ks or (len(t) >= 5 and t[:5] + "*" in ks)  # noqa: E731
+    n, idf = len(facts), {}
+    for t in (w for w in _words(query) if len(w) >= 3 and not w.isdigit()):
+        df = sum(1 for ks in keys.values() if has(t, ks))
+        if df:
+            idf[t] = math.log(1 + n / df)
+    full = 3 * math.log(1 + n)
+    return {fid: min(1.0, sum(v for t, v in idf.items() if has(t, ks)) / full)
+            for fid, ks in keys.items()}
+
+
 def _search_facts(query: str, graph, k: int, min_score: float,
                   named_bonus: float, delta: float = 1.0,
                   embed=None, newer: bool = False,
-                  exclude=frozenset()) -> list[tuple[dict, float, str]]:
+                  exclude=frozenset(), lex: float = 0.0) -> list[tuple[dict, float, str]]:
     """ADR-015 D7: the facts that answer a message, not the nodes near it.
 
     Score = cosine(message, `concepts. sentence`) + ``named_bonus`` when the
@@ -469,6 +497,12 @@ def _search_facts(query: str, graph, k: int, min_score: float,
     Returns ``(fact, score, concept)`` best first; ``concept`` is the first one
     the message names, else the fact's first.
 
+    ``lex`` (2026-11-16): weight of the wording shared with the message
+    (_lexical), added before the floor and the cut. At 0.15, K=2, on bench v2
+    and both English sets: no expected fact lost, 2 more found on the English
+    ones (17 -> 19 of 33), unexpected facts per message 0.73 -> 0.59-0.64. From
+    0.25 up it starts trading one expected fact for another (m16 k4 in, m12 k5 out).
+
     ``embed``: one function for the query AND every fact (no cache), when the
     caller's embedding is not this module's: a test pins the rule with fixed
     vectors, and they must never be compared with the model's."""
@@ -483,13 +517,15 @@ def _search_facts(query: str, graph, k: int, min_score: float,
         q = embed(query)
         vec = lambda f: embed(_fact_text(f))  # noqa: E731
     words = _words(query)
+    worded = _lexical(query, active) if lex else {}
     out = []
     for f in active:
         v = vec(f)
         if v is None:          # still warming
             continue
         named = [c for c in f["concepts"] if _names(c, words)]
-        score = sum(a * b for a, b in zip(q, v)) + (named_bonus if named else 0.0)
+        score = (sum(a * b for a, b in zip(q, v)) + (named_bonus if named else 0.0)
+                 + lex * worded.get(f["id"], 0.0))
         if score >= min_score:
             out.append((f, round(score, 4),
                         named[0] if named else (f["concepts"][0] if f["concepts"] else "")))

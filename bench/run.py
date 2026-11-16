@@ -90,6 +90,28 @@ async def _flash(S, text: str, facts: list) -> str:
     return next(iter(hit)) if hit else ""
 
 
+def doubt(S, g, args: dict, missed: list[dict] = ()) -> dict:
+    """Doubt signals (Neuron idea #df457f4a), measured before anything acts on
+    them: the best fact's score and its lead on the second. Same query and
+    scoring as pre_turn's fact recall, without the floor and the cut.
+    ``missed_rank``: where each missed fact sits in that full ranking — near the
+    cut, a wider search would bring it; far down, it would not."""
+    q = " ".join([str(args.get("topic", ""))] + [str(k) for k in args.get("keywords", [])]).strip()
+    hits = S._fact_hits(q, g, 10**6, -9.0, 99.0)
+    sc = [s for _f, s, _k in hits]
+    pos = {sig(f["text"]): i + 1 for i, (f, _s, _k) in enumerate(hits)}
+    top1 = sc[0] if sc else 0.0
+    return {"top1": top1, "margin": round(top1 - (sc[1] if len(sc) > 1 else 0.0), 4),
+            "missed_rank": [pos.get(sig(f["text"])) for f in missed]}
+
+
+def auc(low: list[float], high: list[float]) -> "float | None":
+    """P(a message that missed a fact has a lower signal than one that did not):
+    0.5 is no signal, 1.0 a signal that separates them perfectly."""
+    pairs = [(a < b) + 0.5 * (a == b) for a in low for b in high]
+    return round(sum(pairs) / len(pairs), 2) if pairs else None
+
+
 async def run_mode(mode: str, data: dict) -> dict:
     from neuron import server as S
     from neuron.registry import GraphRegistry
@@ -112,7 +134,8 @@ async def run_mode(mode: str, data: dict) -> dict:
 
     rows, found, expected, full, noise, chars, flashes = [], 0, 0, 0, 0, 0, 0
     for m in data["messages"]:
-        ans = await _call(S, "pre_turn", await _query_args(S, mode, m["text"]))
+        qa = await _query_args(S, mode, m["text"])
+        ans = await _call(S, "pre_turn", qa)
         got = shown(ans, facts)
         exp = set(m["expect"])
         found += len(got & exp)
@@ -123,22 +146,29 @@ async def run_mode(mode: str, data: dict) -> dict:
         fl = await _flash(S, m["text"], facts)
         flashes += bool(fl)
         rows.append({"id": m["id"], "found": sorted(got & exp), "missed": sorted(exp - got),
-                     "noise": sorted(got - exp), "flash": fl, "answer": ans})
+                     "noise": sorted(got - exp), "flash": fl,
+                     **doubt(S, g, qa, [f for f in facts if f["id"] in exp - got]), "answer": ans})
     off = off_flash = 0
     for o in data["off_topic"]:
-        ans = await _call(S, "pre_turn", await _query_args(S, mode, o["text"]))
+        qa = await _query_args(S, mode, o["text"])
+        ans = await _call(S, "pre_turn", qa)
         got = shown(ans, facts)
         off += len(got)
         fl = await _flash(S, o["text"], facts)
         off_flash += bool(fl)
         rows.append({"id": o["id"], "found": [], "missed": [], "noise": sorted(got),
-                     "flash": fl, "answer": ans})
+                     "flash": fl, **doubt(S, g, qa), "answer": ans})
     n = len(data["messages"])
+    on = rows[:n]
+    miss = [r for r in on if r["missed"]]
+    full_rows = [r for r in on if not r["missed"]]
+    doubt_auc = {s: auc([r[s] for r in miss], [r[s] for r in full_rows]) for s in ("top1", "margin")}
     return {"mode": mode, "stored": stored, "facts": len(facts),
             "recall": round(found / expected, 3), "found": found, "expected": expected,
             "full": full, "messages": n, "noise": round(noise / n, 2),
             "off_topic": off, "chars": round(chars / n),
-            "flashes": flashes, "off_topic_flashes": off_flash, "rows": rows}
+            "flashes": flashes, "off_topic_flashes": off_flash,
+            "doubt_auc": doubt_auc, "doubt_groups": [len(miss), len(full_rows)], "rows": rows}
 
 
 def main() -> int:
@@ -161,10 +191,12 @@ def main() -> int:
               f"full {r['full']}/{r['messages']}  noise {r['noise']}/msg  "
               f"off_topic {r['off_topic']}  chars {r['chars']}/msg  "
               f"flash {r['flashes']}/{r['messages']} (off-topic {r['off_topic_flashes']})")
+        print(f"   doubt AUC (missed {r['doubt_groups'][0]} vs complete {r['doubt_groups'][1]}): "
+              f"top1 {r['doubt_auc']['top1']}  margin {r['doubt_auc']['margin']}  (0.5 = no signal)")
         for row in r["rows"]:
             print(f"  {row['id']:4} found {','.join(row['found']) or '-':12} "
                   f"missed {','.join(row['missed']) or '-':12} noise {','.join(row['noise']) or '-':12} "
-                  f"flash {row['flash'] or '-'}")
+                  f"flash {row['flash'] or '-':4} top1 {row['top1']:.2f} margin {row['margin']:.2f}")
             if a.verbose:
                 print("       " + row["answer"].replace("\n", "\n       "))
     return 0
