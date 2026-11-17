@@ -23,7 +23,8 @@
   the average recall shrinks slightly (976 -> 962 characters per message),
   since those facts now show their gist there too.
 - **A recalled fact written two or more days ago shows its day** after its id
-  (`#91f04dfe (14/11)`), unless what is shown already opens with a date
+  (`#91f04dfe (14/11)`; `(14/11/2026)` from another year, also over a
+  day the text gives without its year), unless what is shown already opens with a date
   (`NEURON_FACT_DATE_DAYS`, 2; not in the profile: rules do not age). Four
   real state changes in neutral wording, both orders, one fresh Haiku per
   case: with the day 8/8 right, without it 5/8, and 1/4 when the newer fact

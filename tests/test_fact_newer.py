@@ -165,3 +165,10 @@ def test_an_old_fact_shows_its_day_unless_it_already_says_it():
     assert fact_age(dict(old, text="14/11 the gate runs the smoke."), now) == ""     # already dated
     assert fact_age(dict(old, gist="2026-11-14: gate on a copy"), now) == ""         # the gist is what shows
     assert fact_age(dict(old, created_at=""), now) == ""
+    # a year later a bare day would read as this year's: the year is added,
+    # even over a day the text already gives without one
+    later = time.mktime(time.strptime("2027-03-02 09:00", "%Y-%m-%d %H:%M"))
+    assert fact_age(old, later) == " (14/11/2026)"
+    assert fact_age(dict(old, text="14/11 the gate runs the smoke."), later) == " (14/11/2026)"
+    assert fact_age(dict(old, text="14/11/2026 the gate runs the smoke."), later) == ""
+    assert fact_age(dict(old, gist="2026-11-14: gate on a copy"), later) == ""

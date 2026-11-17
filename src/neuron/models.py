@@ -100,14 +100,21 @@ _SHOWN_DATE = re.compile(r"\b(\d{1,2}/\d{1,2}(/\d{2,4})?|20\d\d-\d\d-\d\d)\b")
 
 def fact_age(f: dict, now: "float | None" = None) -> str:
     """The day the fact was written, as ' (14/11)', when that day is at least
-    FACT_DATE_DAYS days back; '' otherwise."""
+    FACT_DATE_DAYS days back; ' (14/11/2026)' when it is not this year, since
+    a bare day reads as this year's. '' otherwise."""
     try:
         t = time.mktime(time.strptime(str(f.get("created_at", ""))[:10], "%Y-%m-%d"))
     except ValueError:
         return ""
-    if ((now or time.time()) - t) / 86400 < FACT_DATE_DAYS or _SHOWN_DATE.search(fact_shown(f)[:40]):
+    now = now or time.time()
+    if (now - t) / 86400 < FACT_DATE_DAYS:
         return ""
-    return time.strftime(" (%d/%m)", time.localtime(t))
+    this_year = time.localtime(t).tm_year == time.localtime(now).tm_year
+    shown = _SHOWN_DATE.search(fact_shown(f)[:40])
+    # a date in the text is enough when it carries the year, or when the fact is this year's
+    if shown and (this_year or shown.group(2) or "-" in shown.group(1)):
+        return ""
+    return time.strftime(" (%d/%m)" if this_year else " (%d/%m/%Y)", time.localtime(t))
 
 
 # How many of a node's newest facts pre_turn considers. A read window: nothing
