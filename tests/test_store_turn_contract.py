@@ -334,6 +334,21 @@ def test_a_procedure_needs_the_outcome_that_proved_it(_isolated):
                     "Rerun pip twice when the wheel cache is stale.": "fact"}, mine
 
 
+def test_restating_a_fact_with_a_gist_fills_it_in_place(_isolated):
+    """A fact without a gist gets one when restated word for word: same id, so
+    its turn and its place in the profile do not move (superseding would)."""
+    text = "The user tests installers live before any release."
+    first = _call("store_turn", {"facts": [{"kind": "habit", "text": text, "concepts": ["release"]}]})
+    again = _call("store_turn", {"facts": [{"kind": "habit", "text": text, "concepts": ["release"],
+                                            "gist": "live installer test before release"}]})
+    assert "(already stored), gist added" in again, again
+    g = S._g.get()
+    mine = [f for f in g.facts.values() if f["text"] == text and f["status"] == "active"]
+    assert len(mine) == 1 and mine[0]["gist"] == "live installer test before release", mine
+    assert mine[0]["id"] in first   # same fact, not a new one
+    third = _call("store_turn", {"facts": [{"kind": "habit", "text": text, "gist": "other"}]})
+    assert "gist added" not in third and mine[0]["gist"] == "live installer test before release"
+
 def test_a_turn_without_facts_says_so(_isolated):
     out = _call("store_turn", {"topic": "pranzo con Ada", "keywords": ["ada", "pranzo"]})
     assert "facts: 0 saved" in out, out
@@ -406,3 +421,16 @@ def test_a_fact_without_kind_or_concepts_goes_under_the_turn(_isolated):
     assert "facts: 2 saved" in out, out
     f = next(f for f in S._g.get().facts.values() if f["text"].startswith("un fatto senza"))
     assert f["kind"] == "fact" and f["concepts"] == ["pyturso"], f
+
+
+def test_the_profile_puts_the_habits_before_the_user_facts():
+    """The oldest rule still beats the newest user fact for a place in the
+    profile; within each kind the newest comes first."""
+    from neuron.models import Graph
+    g = Graph()
+    old_rule = g.add_fact("habit", "Never commit before a real usage test.", ["commit"], 1)["id"]
+    new_rule = g.add_fact("habit", "Chat in Italian, repo in English.", ["language"], 9)["id"]
+    users = [g.add_fact("user", f"The user fact number {i} about work.", ["user"], 10 + i)["id"] for i in range(3)]
+    ids = [f["id"] for f in S._profile_facts(g, 10_000)]
+    assert ids == [new_rule, old_rule, users[2], users[1], users[0]], ids
+    assert [f["id"] for f in S._profile_facts(g, 120)] == [new_rule, old_rule]

@@ -360,7 +360,7 @@ class Graph:
     _new_concepts:  set  = field(default_factory=set)    # (fact_id, keyword) to INSERT
     _moved_concepts: set = field(default_factory=set)    # (fact_id, old keyword) to DELETE
     _fact_status:   set  = field(default_factory=set)    # fact ids whose status changed
-    _fact_conf:     set  = field(default_factory=set)    # fact ids whose `confirmed` changed
+    _fact_conf:     set  = field(default_factory=set)    # fact ids whose confirmed/shown/gist changed
     # Archived nodes (merged near-duplicates / dropped orphans) — recoverable,
     # flushed to the _graveyard table on save, then cleared. (E1.2/E1.3)
     _graveyard: list = field(default_factory=list)
@@ -577,6 +577,14 @@ class Graph:
                      if f["status"] == "active" and f["text"] == text), None)
         if twin:
             report.update(id=twin["id"], duplicate=True)
+            # Restating a fact with a gist fills a missing one in place: its id,
+            # turn and place in the profile stay (superseding would move them).
+            g = " ".join(str(gist or "").split())[:GIST_MAX_CHARS]
+            if g and not twin.get("gist"):
+                twin["gist"] = g
+                self._fact_conf.add(twin["id"])
+                self._dirty = True
+                report["gist_added"] = True
             for kw in concepts:
                 if kw not in twin["concepts"]:
                     twin["concepts"].append(kw)
@@ -1798,8 +1806,9 @@ class Graph:
                              [(self.facts[fid]["status"], context, fid)
                               for fid in self._fact_status if fid in self.facts])
         if self._fact_conf:
-            conn.executemany("UPDATE facts SET confirmed=?, shown=? WHERE context=? AND id=?",
-                             [(self.facts[fid].get("confirmed", 0), self.facts[fid].get("shown", 0), context, fid)
+            conn.executemany("UPDATE facts SET confirmed=?, shown=?, gist=? WHERE context=? AND id=?",
+                             [(self.facts[fid].get("confirmed", 0), self.facts[fid].get("shown", 0),
+                               self.facts[fid].get("gist", ""), context, fid)
                               for fid in self._fact_conf if fid in self.facts])
 
     def _save_reconcile(self, conn, context: str, *, write_vectors: bool = True) -> None:

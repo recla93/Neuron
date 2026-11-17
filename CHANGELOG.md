@@ -13,6 +13,13 @@
   three recall sets unchanged. On 209 real messages over a copy of the real
   memory, judged blind: 5 better, 1 worse.
 - The bench stops when a set fact is stored under another kind than the set's.
+- **The session-start profile puts the rules first**: `habit` facts, then
+  `user` facts, newest first in each. Newest first alone kept the oldest rules
+  out of every session.
+- **Restating a fact word for word with a gist fills a missing gist in place**
+  (same id, same place in the profile). With gists on all 22 live profile
+  facts, 9 fit in the 1000-character profile instead of 6, all six rules
+  among them.
 
 ## 6.12.0 (2026-11-16)
 With Gray Matter 1.10.0 and NeuRAG 1.9.1.

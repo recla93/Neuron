@@ -1709,6 +1709,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             _fresh.append(rep["id"])
         _fact_report.append(f"#{rep['id']} {g_kind}"
                             + (" (already stored)" if rep.get("duplicate") else "")
+                            + (", gist added" if rep.get("gist_added") else "")
                             + (f" supersedes #{rep['superseded']}" if rep.get("superseded") else ""))
         if "truncated" in rep:
             _fact_lost["truncated"] = rep["truncated"]
@@ -2065,11 +2066,13 @@ def _dormant_facts(g, near: str, threshold: int, top_n: int, exclude: set) -> st
 
 
 def _profile_facts(g, cap: int) -> list:
-    """Active user/habit facts, newest first, as many as fit in `cap` chars."""
+    """Active user/habit facts, as many as fit in `cap` chars: the habits (how
+    to work, valid in every turn) first, then the user facts, newest first in
+    each. Newest first alone kept the oldest rules out for good (2026-11-17)."""
     out, used = [], 0
     for f in sorted((f for f in g.facts.values()
                      if f["status"] == "active" and f["kind"] in ("user", "habit")),
-                    key=lambda f: f["turn"] or 0, reverse=True):
+                    key=lambda f: (f["kind"] == "habit", f["turn"] or 0), reverse=True):
         used += len(fact_shown(f)) + 20      # "[habit] ... #12345678 | "
         if used > cap:
             break
