@@ -9,6 +9,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import sqlite3
 import struct
 import time
@@ -88,6 +89,27 @@ def fact_shown(f: dict) -> str:
     """What a fact costs in context: its gist when it has one (a trailing `+`
     says the full text is there: pre_turn(topic="#id")), else its text."""
     return f"{f['gist']} +" if f.get("gist") else f["text"]
+
+
+# Fable's need 5 (PLAN-2026-11-16): a fact with no date reads as true today. A
+# recalled fact older than this many days shows its day after its id, unless
+# what is shown already opens with a date (about half of the live facts do).
+FACT_DATE_DAYS = _env_int("NEURON_FACT_DATE_DAYS", 2)
+_SHOWN_DATE = re.compile(r"\b(\d{1,2}/\d{1,2}(/\d{2,4})?|20\d\d-\d\d-\d\d)\b")
+
+
+def fact_age(f: dict, now: "float | None" = None) -> str:
+    """The day the fact was written, as ' (14/11)', when that day is at least
+    FACT_DATE_DAYS days back; '' otherwise."""
+    try:
+        t = time.mktime(time.strptime(str(f.get("created_at", ""))[:10], "%Y-%m-%d"))
+    except ValueError:
+        return ""
+    if ((now or time.time()) - t) / 86400 < FACT_DATE_DAYS or _SHOWN_DATE.search(fact_shown(f)[:40]):
+        return ""
+    return time.strftime(" (%d/%m)", time.localtime(t))
+
+
 # How many of a node's newest facts pre_turn considers. A read window: nothing
 # past it is dropped from the store.
 EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)

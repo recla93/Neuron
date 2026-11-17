@@ -151,3 +151,17 @@ def test_one_word_of_a_concept_does_not_earn_the_procedure_bonus():
     assert _ids(hits) == [a, p]
     hits = se._search_facts("the test suite is slow", g, 2, 0.40, 0.0, 1.0, embed=_embed(vecs), proc=0.20)
     assert _ids(hits) == [p, a]
+
+
+def test_an_old_fact_shows_its_day_unless_it_already_says_it():
+    """Fable's need 5: a recalled fact written days ago carries its day; a fresh
+    one, or one whose shown text opens with a date, does not."""
+    import time
+    from neuron.models import fact_age
+    now = time.mktime(time.strptime("2026-11-17 21:00", "%Y-%m-%d %H:%M"))
+    old = {"created_at": "2026-11-14T10:00:00", "text": "The gate runs the smoke on a copy.", "gist": ""}
+    assert fact_age(old, now) == " (14/11)"
+    assert fact_age(dict(old, created_at="2026-11-16T10:00:00"), now) == ""          # yesterday
+    assert fact_age(dict(old, text="14/11 the gate runs the smoke."), now) == ""     # already dated
+    assert fact_age(dict(old, gist="2026-11-14: gate on a copy"), now) == ""         # the gist is what shows
+    assert fact_age(dict(old, created_at=""), now) == ""

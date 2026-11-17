@@ -52,7 +52,7 @@ from mcp.types import Tool, TextContent, Resource
 # ---------------------------------------------------------------------------
 
 from neuron.models import (
-    Node, Link, Graph, compute_health, fact_shown,
+    Node, Link, Graph, compute_health, fact_shown, fact_age,
     Weight, LinkType, Domain, Sentiment, Intent,
     WEIGHT_ORDER, TANGENTIAL_EXPIRY_TURNS,
     SALIENCE_DECAY_THRESHOLD, SALIENCE_DECAY_AMOUNT,
@@ -2491,7 +2491,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _hits = [h for h in _hits if h[0]["id"] not in _seen_ids]   # the no-vector path above
     if _hits:
         parts_pt.append("facts: " + " | ".join(
-            f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}"
+            f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}{fact_age(f)}"
             + "".join(f" ↳#{n}" for n in g_pt.notes_on(f["id"])) for f, _sc, kw in _hits))
     if lks:
         parts_pt.append("links:" + "|".join(
