@@ -1,0 +1,537 @@
+{
+ "version": 1,
+ "adr": "work/design/ADR-022-PROCEDURE-FACTS.md, step 1",
+ "what": "Task set for procedure recall (Neuron 7). The memory of recall_en_all.json plus seven procedure facts (q*), true in the repo on 2026-11-17. Messages are real user task requests from the project transcripts. Baseline: the procedures are stored as kind habit; with ADR-022 D1 the same set runs with kind procedure.",
+ "rules": {
+  "facts": "Veri alla data della memoria (2026-11-08), verificabili nel repo (CHANGELOG, work/audit, work/design) o detti dall'utente in chat. kind e' uno dei sette tipi dell'ADR-015 D3. concepts sono quelli che il modello sceglierebbe scrivendo il fatto. I fatti che nessun messaggio si aspetta sono distrattori: servono a far contare il ranking.",
+  "messages": "Testo vero dell'utente, dai transcript del progetto, accorciato solo dove indicato con '...'. Molti sono anteriori alla memoria: la domanda e' cosa porterebbe il richiamo se arrivassero oggi.",
+  "expect": "Only procedure facts: the steps without which the task would be rebuilt from the docs. Judged by reading the message, never widened after a miss.",
+  "off_topic": "Inventati, dichiaratamente: nessun fatto della memoria li riguarda. Ogni fatto mostrato qui e' rumore.",
+  "signature": "Un fatto conta come mostrato se i primi 40 caratteri del suo testo compaiono nella risposta. Devono essere unici: tests/test_bench_recall_set.py lo controlla.",
+  "stale": "v2 (2026-11-10): coppie vecchio -> nuovo sullo stesso argomento, vere nella storia del progetto (s1 e s3 superati da s2 e s4, senza supersedes). Il vecchio somiglia di piu' al messaggio: si aspetta il nuovo. Il vecchio mostrato accanto al nuovo e' contesto, e conta come rumore.",
+  "kind": "The q* facts carry kind habit in this version (the baseline). Switching them to procedure is the measured change, not a new set."
+ },
+ "facts": [
+  {
+   "id": "u1",
+   "kind": "user",
+   "concepts": [
+    "user",
+    "gray-matter"
+   ],
+   "text": "The user develops Gray Matter, Neuron and NeuRAG alone, writes in Italian and works on two PCs: one's local memory is not on the other."
+  },
+  {
+   "id": "u2",
+   "kind": "habit",
+   "concepts": [
+    "ci",
+    "push"
+   ],
+   "text": "After a push the user checks CI: do not watch or rerun it, just say what was pushed."
+  },
+  {
+   "id": "u3",
+   "kind": "habit",
+   "concepts": [
+    "plan",
+    "costs"
+   ],
+   "text": "Before implementing, the user wants the plan with pros, cons and measured gains: no code before the decision."
+  },
+  {
+   "id": "u4",
+   "kind": "habit",
+   "concepts": [
+    "test",
+    "user"
+   ],
+   "text": "After a fix the user wants a real-user test, interactive on the installers and the GUI, not just a green test suite."
+  },
+  {
+   "id": "d1",
+   "kind": "decision",
+   "concepts": [
+    "standalone",
+    "install"
+   ],
+   "text": "The three tools are standalone: Neuron and NeuRAG install and work without GM; GM is optional but recommended, as gateway and bridge."
+  },
+  {
+   "id": "d2",
+   "kind": "decision",
+   "concepts": [
+    "turso",
+    "cloud"
+   ],
+   "text": "All three tools use Turso, locally too through pyturso; Turso cloud is optional and sqlite3 stays only as an automatic fallback."
+  },
+  {
+   "id": "d3",
+   "kind": "decision",
+   "concepts": [
+    "neuron",
+    "facts",
+    "memory"
+   ],
+   "text": "ADR-015 (8/11): Neuron stores typed, append-only facts, concepts are only the index; node evictions and merges must no longer delete facts."
+  },
+  {
+   "id": "d4",
+   "kind": "decision",
+   "concepts": [
+    "memhook",
+    "ipc",
+    "flash"
+   ],
+   "text": "ADR-014 D3b: the UserPromptSubmit hook makes a single IPC request to the GM daemon, which builds Neuron context, KB pointer and flash."
+  },
+  {
+   "id": "d5",
+   "kind": "decision",
+   "concepts": [
+    "kb",
+    "bridge",
+    "threshold"
+   ],
+   "text": "The recall's KB pointer is vector-based with a 0.55 threshold: search by name pointed at whole folders and minted noise bridges like flash-audit."
+  },
+  {
+   "id": "p1",
+   "kind": "progress",
+   "concepts": [
+    "release",
+    "ci"
+   ],
+   "text": "Release 1.7.0 published on 6/11: gray_matter 1.7.0, neuron 6.9.0, neurag 1.7.1, commit 672bf01, CI green, installed with install.ps1 -Force."
+  },
+  {
+   "id": "p2",
+   "kind": "progress",
+   "concepts": [
+    "memhook",
+    "push",
+    "commit"
+   ],
+   "text": "As of 8/11 commit b29a186 (the install wires the memhook) is on main but not pushed, and the recall change in gray_matter/server.py is not committed."
+  },
+  {
+   "id": "p3",
+   "kind": "progress",
+   "concepts": [
+    "backup",
+    "memory"
+   ],
+   "text": "As of 8/11 GM's memory exists only on the main PC: graphs 24 MB and NeuRAG 65 MB, backups on the same disk, no external copy."
+  },
+  {
+   "id": "x1",
+   "kind": "fix",
+   "concepts": [
+    "pyturso",
+    "wal",
+    "test"
+   ],
+   "text": "Neuron and neurag tests failed with a locked WAL and disk I/O error: system Python had pyturso 0.6.1 instead of the 0.8.3 pin. Fix: pip install the wheel in neuron/vendor."
+  },
+  {
+   "id": "x2",
+   "kind": "fix",
+   "concepts": [
+    "f32blob",
+    "ranking",
+    "neurag"
+   ],
+   "text": "NeuRAG's SQL vector ranking never ran: f32blob does not exist in pyturso and the except swallowed the error. Fix 1.3.2: vector_distance_cos already takes the blob."
+  },
+  {
+   "id": "x3",
+   "kind": "fix",
+   "concepts": [
+    "worker",
+    "wal",
+    "restart"
+   ],
+   "text": "Turns lost on restart: a killed worker left its last write in the WAL. Fix GM 1.3.0: clean shutdown via pipe, checkpoint every 8 mutations."
+  },
+  {
+   "id": "x4",
+   "kind": "fix",
+   "concepts": [
+    "processes",
+    "python",
+    "worker"
+   ],
+   "text": "Many python.exe running: the venv one is a CPython redirector and the real interpreter is its child, so each worker counts twice; _reap_orphans closes the orphans recorded in pids."
+  },
+  {
+   "id": "x5",
+   "kind": "fix",
+   "concepts": [
+    "consolidate",
+    "graveyard"
+   ],
+   "text": "On 12/9 consolidate with drop_orphans archived 255 nodes out of 296; now drop_orphans is False by default and a drop above 20% of the nodes is refused."
+  },
+  {
+   "id": "k1",
+   "kind": "fact",
+   "concepts": [
+    "graphs",
+    "backup",
+    "paths"
+   ],
+   "text": "Neuron's graphs live in %LOCALAPPDATA%\\GrayMatterEnvironment\\neuron\\graphs, the KB in ...\\neurag, the daily backups in ...\\backups."
+  },
+  {
+   "id": "k2",
+   "kind": "fact",
+   "concepts": [
+    "test",
+    "suite",
+    "mockdeps"
+   ],
+   "text": "The three test suites run in three processes: neuron/tests/_mockdeps.py injects fake mcp and fastembed that contaminate the other suites."
+  },
+  {
+   "id": "k3",
+   "kind": "fact",
+   "concepts": [
+    "mirror",
+    "repo",
+    "privacy"
+   ],
+   "text": "The Mirror workflow publishes the repo: graphs, KB, Claude Code memory and other personal data must never be committed."
+  },
+  {
+   "id": "k4",
+   "kind": "fact",
+   "concepts": [
+    "install",
+    "venv",
+    "client"
+   ],
+   "text": "After a code change you must reinstall (install.ps1 -Force or Repair in the GUI) and restart the client: the MCP server runs from a copy in the venv."
+  },
+  {
+   "id": "k5",
+   "kind": "fact",
+   "concepts": [
+    "pyturso",
+    "wheel",
+    "install"
+   ],
+   "text": "pyturso has no win_amd64 wheel on PyPI: the release builds an abi3 wheel and install.ps1 takes it from vendor/ with --find-links; the pin is exact on purpose."
+  },
+  {
+   "id": "k6",
+   "kind": "fact",
+   "concepts": [
+    "memhook",
+    "latency",
+    "daemon"
+   ],
+   "text": "The hook's first recall after a restart lasts as long as the timeout (2.49 s of 2.5): the first message may get no memory; warm about 560 ms."
+  },
+  {
+   "id": "k7",
+   "kind": "fact",
+   "concepts": [
+    "memhook",
+    "settings",
+    "hook"
+   ],
+   "text": "The memhook is wired in ~/.claude/settings.json: recall on UserPromptSubmit, save in dry-run on Stop, both run with python -I."
+  },
+  {
+   "id": "i1",
+   "kind": "idea",
+   "concepts": [
+    "events",
+    "stimuli",
+    "flash"
+   ],
+   "text": "User's idea (5/8): intercept events aspect-style to fire stimuli and flashes straight from the DB instead of via MCP."
+  },
+  {
+   "id": "i2",
+   "kind": "idea",
+   "concepts": [
+    "gui",
+    "token",
+    "knowledge"
+   ],
+   "text": "User's idea (30/7): set from the GUI how much knowledge and how many stimuli are injected, to save tokens without filling the context."
+  },
+  {
+   "id": "z1",
+   "kind": "fact",
+   "concepts": [
+    "embedding",
+    "model"
+   ],
+   "text": "The default embedding is paraphrase-multilingual-MiniLM-L12-v2 at 384 dimensions: changing it requires re-embedding the whole store."
+  },
+  {
+   "id": "z2",
+   "kind": "fact",
+   "concepts": [
+    "extract",
+    "tokenizer"
+   ],
+   "text": "Neuron extract's tokenizer splits on the apostrophe: dell'albero becomes dell, and 472 stopwords do not stop Italian greetings and verbs."
+  },
+  {
+   "id": "z3",
+   "kind": "decision",
+   "concepts": [
+    "owner",
+    "space",
+    "multiuser"
+   ],
+   "text": "ADR-013: a row's owner and space are written at INSERT and never change, even if others update it later."
+  },
+  {
+   "id": "z4",
+   "kind": "fact",
+   "concepts": [
+    "graph",
+    "cap",
+    "nodes"
+   ],
+   "text": "The ai graph hit the MAX_NODES cap of 500 on 4/11: since then every new concept evicts the one with the lowest salience."
+  },
+  {
+   "id": "s1",
+   "kind": "fact",
+   "concepts": [
+    "hook",
+    "kimi",
+    "codex"
+   ],
+   "text": "Hook coverage per client: Kimi Code has SessionStart and UserPromptSubmit but no Stop, Codex only SessionStart from the cowork plugin, OpenCode an experimental plugin on the system prompt."
+  },
+  {
+   "id": "s3",
+   "kind": "fact",
+   "concepts": [
+    "episodes",
+    "neuron"
+   ],
+   "text": "Neuron keeps at most 5 episodes per node: at the sixth, the oldest is deleted (EPISODES_PER_NODE)."
+  },
+  {
+   "id": "s2",
+   "kind": "progress",
+   "concepts": [
+    "hook",
+    "kimi",
+    "codex",
+    "opencode"
+   ],
+   "text": "Multi-client hooks done: Kimi Code has Stop too (exit 2), Codex has UserPromptSubmit and Stop in hooks.json, OpenCode a folder plugin with recall and save check."
+  },
+  {
+   "id": "s4",
+   "kind": "decision",
+   "concepts": [
+    "episodes",
+    "neuron",
+    "facts"
+   ],
+   "text": "ADR-015: facts are append-only and never deleted, an update goes through supersedes; EPISODES_PER_NODE only limits how many facts pre_turn shows."
+  },
+  {
+   "id": "q1",
+   "kind": "habit",
+   "concepts": [
+    "install",
+    "reinstall"
+   ],
+   "text": "Procedure, reinstall the live suite: set GM_HOME to the suite folder and GM_YES=1, start gray_matter/install.ps1 -Force -Client detected outside the MSIX container (Win32_Process Create), check that the log ends with INSTALL COMPLETE, then restart the clients."
+  },
+  {
+   "id": "q2",
+   "kind": "habit",
+   "concepts": [
+    "release",
+    "tag",
+    "version"
+   ],
+   "text": "Procedure, release a tool: bump the version in __init__.py, pyproject.toml, both README badges and the CHANGELOG in one commit, run the version tests, then tag <folder>-vX.Y.Z and push main and the tag."
+  },
+  {
+   "id": "q3",
+   "kind": "habit",
+   "concepts": [
+    "gate",
+    "push"
+   ],
+   "text": "Procedure, before any push: run python tools/gate.py (deps check, the three suites in separate processes, the recall bench, a fresh isolated smoke, about 10 minutes); a skipped step counts as a failed gate."
+  },
+  {
+   "id": "q4",
+   "kind": "habit",
+   "concepts": [
+    "commit",
+    "test"
+   ],
+   "text": "Procedure, before a commit: install the change, try it in real use, then commit in the umbrella repo (never on the mirrors), ending the message with a plain-text Co-authored with Claude line."
+  },
+  {
+   "id": "q5",
+   "kind": "habit",
+   "concepts": [
+    "bench",
+    "recall"
+   ],
+   "text": "Procedure, measure a recall change: run neuron/bench/run.py --mode message on recall.json, recall_en_all.json and recall_en_text.json; accept it only if no set loses an expected fact or gains noise."
+  },
+  {
+   "id": "q6",
+   "kind": "habit",
+   "concepts": [
+    "isolated instance",
+    "smoke"
+   ],
+   "text": "Procedure, try anything that writes: python tools/isolated.py up, then run -- <command> (the smoke is tools/smoke.py), then down --purge; never on the real memory."
+  },
+  {
+   "id": "q7",
+   "kind": "habit",
+   "concepts": [
+    "rename",
+    "dependency"
+   ],
+   "text": "Procedure, before renaming or removing a tool, option, env var or shipped file: python tools/deps.py <name> lists every user in code, hooks, tests, scripts and docs."
+  }
+ ],
+ "messages": [
+  {
+   "id": "m1",
+   "text": "Install prima, test a runtime e poi commit",
+   "expect": [
+    "q1",
+    "q4"
+   ]
+  },
+  {
+   "id": "m2",
+   "text": "reinstall it so I can test it live",
+   "expect": [
+    "q1"
+   ]
+  },
+  {
+   "id": "m3",
+   "text": "Come mai non vanno i reinstall?",
+   "expect": [
+    "q1"
+   ]
+  },
+  {
+   "id": "m4",
+   "text": "bumpa le versioni e crea i tag",
+   "expect": [
+    "q2"
+   ]
+  },
+  {
+   "id": "m5",
+   "text": "Pensi che possiamo andare in release allo stato attuale?",
+   "expect": [
+    "q2",
+    "q3"
+   ]
+  },
+  {
+   "id": "m6",
+   "text": "committa tutto e pusha, controllo io la CI. Consigli di bumpare tags?",
+   "expect": [
+    "q3",
+    "q4"
+   ]
+  },
+  {
+   "id": "m7",
+   "text": "si, fixa e pusha: la CI la controllo io",
+   "expect": [
+    "q3"
+   ]
+  },
+  {
+   "id": "m8",
+   "text": "commit this and push",
+   "expect": [
+    "q3",
+    "q4"
+   ]
+  },
+  {
+   "id": "m9",
+   "text": "Prima il gate unico",
+   "expect": [
+    "q3"
+   ]
+  },
+  {
+   "id": "m10",
+   "text": "Sì, smoke scrittura",
+   "expect": [
+    "q6"
+   ]
+  },
+  {
+   "id": "m11",
+   "text": "Controlla la ver. installata, andiamo di istanza isolata e poi aggiorniamo anche l'altra se indietro",
+   "expect": [
+    "q6",
+    "q1"
+   ]
+  },
+  {
+   "id": "m12",
+   "text": "Dobbiamo eliminare prima di subito neuron5 come slug. Ora siamo solo Neuron e la versione (es. \"Synapse\") la scriviamo solo nella GUI, GitHub, docs. ...",
+   "expect": [
+    "q7"
+   ]
+  },
+  {
+   "id": "m13",
+   "text": "prima fai test d'uso, poi committiamo e passiamo al resto. D'ora in poi non si commita se non prima si prova. ...",
+   "expect": [
+    "q4"
+   ]
+  },
+  {
+   "id": "m14",
+   "text": "Ciao patatone, puoi fare un check dello stato attuale e verificare se siamo pronti per una release? 6.11.0 per Neuron. ...",
+   "expect": [
+    "q2",
+    "q3"
+   ]
+  }
+ ],
+ "off_topic": [
+  {
+   "id": "o1",
+   "text": "ricetta della carbonara con guanciale"
+  },
+  {
+   "id": "o2",
+   "text": "che tempo farà domani a Milano?"
+  },
+  {
+   "id": "o3",
+   "text": "traduci in inglese: la riunione è spostata a giovedì pomeriggio"
+  },
+  {
+   "id": "o4",
+   "text": "consigliami un romanzo di fantascienza da leggere in vacanza"
+  },
+  {
+   "id": "o5",
+   "text": "quanti grammi di farina servono per una pizza margherita?"
+  }
+ ]
+}
