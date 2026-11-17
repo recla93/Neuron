@@ -448,6 +448,13 @@ def _names(concept: str, words: set[str]) -> bool:
         for w in _words(concept) if len(w) >= 2)
 
 
+def _names_whole(concept: str, words: set[str]) -> bool:
+    """Every word of ``concept`` is named, not one of them: the procedure bonus
+    on real messages (2026-11-17) fired on "test" for `test suite` and on "user"
+    for `computer-use`, and pushed a profiling procedure into 11 of 209 turns."""
+    return all(_names(w, words) for w in _words(concept) if len(w) >= 2)
+
+
 def _lex_keys(text: str) -> set[str]:
     """Words of 3+ characters, plus the 5-letter stem of the longer ones
     (install / installer / installano share ``insta*``). Bare numbers are out."""
@@ -488,7 +495,7 @@ def _search_facts(query: str, graph, k: int, min_score: float,
                   named_bonus: float, delta: float = 1.0,
                   embed=None, newer: bool = False,
                   exclude=frozenset(), lex: float = 0.0,
-                  use: float = 0.0) -> list[tuple[dict, float, str]]:
+                  use: float = 0.0, proc: float = 0.0) -> list[tuple[dict, float, str]]:
     """ADR-015 D7: the facts that answer a message, not the nodes near it.
 
     Score = cosine(message, `concepts. sentence`) + ``named_bonus`` when the
@@ -517,6 +524,15 @@ def _search_facts(query: str, graph, k: int, min_score: float,
     the caller is in the experiment's arm: no bench can measure it, only the
     split of real sessions the ledger reports.
 
+    ``proc`` (ADR-022 D2): added to a ``procedure`` fact when the message names
+    one of its concepts whole (_names_whole), on top of ``named_bonus``. A
+    procedure is wanted when the task is named, and it lost to the progress and
+    habit facts sharing the same concept ("commit and push" brought the release
+    history, not the gate). On bench/recall_proc.json, K=2: 9/20 -> 12/20
+    expected found, noise 1.0 -> 0.5 per message, off-topic 0; the same from
+    0.20 to 0.30 (a plateau), less below 0.15. On 209 real messages over a copy
+    of the real memory, judged blind: 5 better, 1 worse (ADR-022).
+
     ``embed``: one function for the query AND every fact (no cache), when the
     caller's embedding is not this module's: a test pins the rule with fixed
     vectors, and they must never be compared with the model's."""
@@ -539,7 +555,8 @@ def _search_facts(query: str, graph, k: int, min_score: float,
             continue
         named = [c for c in f["concepts"] if _names(c, words)]
         score = (sum(a * b for a, b in zip(q, v)) + (named_bonus if named else 0.0)
-                 + lex * worded.get(f["id"], 0.0) + use * _use_rate(f))
+                 + lex * worded.get(f["id"], 0.0) + use * _use_rate(f)
+                 + (proc if f["kind"] == "procedure" and any(_names_whole(c, words) for c in named) else 0.0))
         if score >= min_score:
             out.append((f, round(score, 4),
                         named[0] if named else (f["concepts"][0] if f["concepts"] else "")))

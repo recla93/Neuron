@@ -317,6 +317,23 @@ def test_a_call_with_only_facts_saves_typed_facts(_isolated):
     assert mine == {"habit": ["ci", "push"], "fix": ["pyturso", "wal"]}, mine
 
 
+def test_a_procedure_needs_the_outcome_that_proved_it(_isolated):
+    """ADR-022 D3: with `evidence` a procedure is stored as one, the evidence kept
+    in its text; without it the fact is still stored, as `fact`, with a note."""
+    out = _call("store_turn", {"facts": [
+        {"kind": "procedure", "text": "Gate first: run python tools/gate.py before a push.",
+         "concepts": ["gate"], "evidence": "gate passed on 2026-11-17"},
+        {"kind": "procedure", "text": "Rerun pip twice when the wheel cache is stale.",
+         "concepts": ["pip"], "evidence": "  "},
+    ]})
+    assert "procedure without evidence" in out, out
+    g = S._g.get()
+    mine = {f["text"]: f["kind"] for f in g.facts.values()
+            if f["text"].startswith(("Gate first", "Rerun pip twice"))}
+    assert mine == {"Gate first: run python tools/gate.py before a push. Proven by: gate passed on 2026-11-17": "procedure",
+                    "Rerun pip twice when the wheel cache is stale.": "fact"}, mine
+
+
 def test_a_turn_without_facts_says_so(_isolated):
     out = _call("store_turn", {"topic": "pranzo con Ada", "keywords": ["ada", "pranzo"]})
     assert "facts: 0 saved" in out, out

@@ -1,7 +1,7 @@
 {
- "version": 1,
+ "version": 3,
  "adr": "work/design/ADR-022-PROCEDURE-FACTS.md, step 1",
- "what": "Task set for procedure recall (Neuron 7). The memory of recall_en_all.json plus seven procedure facts (q*), true in the repo on 2026-11-17. Messages are real user task requests from the project transcripts. Baseline: the procedures are stored as kind habit; with ADR-022 D1 the same set runs with kind procedure.",
+ "what": "Task set for procedure recall (Neuron 7). The memory of recall_en_all.json plus seven procedure facts (q*), true in the repo on 2026-11-17. Messages are real user task requests from the project transcripts. v2: the procedures carry kind procedure; the habit baseline is in rules.kind and in ADR-022.",
  "rules": {
   "facts": "Veri alla data della memoria (2026-11-08), verificabili nel repo (CHANGELOG, work/audit, work/design) o detti dall'utente in chat. kind e' uno dei sette tipi dell'ADR-015 D3. concepts sono quelli che il modello sceglierebbe scrivendo il fatto. I fatti che nessun messaggio si aspetta sono distrattori: servono a far contare il ranking.",
   "messages": "Testo vero dell'utente, dai transcript del progetto, accorciato solo dove indicato con '...'. Molti sono anteriori alla memoria: la domanda e' cosa porterebbe il richiamo se arrivassero oggi.",
@@ -9,7 +9,7 @@
   "off_topic": "Inventati, dichiaratamente: nessun fatto della memoria li riguarda. Ogni fatto mostrato qui e' rumore.",
   "signature": "Un fatto conta come mostrato se i primi 40 caratteri del suo testo compaiono nella risposta. Devono essere unici: tests/test_bench_recall_set.py lo controlla.",
   "stale": "v2 (2026-11-10): coppie vecchio -> nuovo sullo stesso argomento, vere nella storia del progetto (s1 e s3 superati da s2 e s4, senza supersedes). Il vecchio somiglia di piu' al messaggio: si aspetta il nuovo. Il vecchio mostrato accanto al nuovo e' contesto, e conta come rumore.",
-  "kind": "The q* facts carry kind habit in this version (the baseline). Switching them to procedure is the measured change, not a new set."
+  "kind": "v1 (2026-11-17) stored the q* facts as habit: the baseline, 9/20 expected found, full 6/14, noise 1.0. v2 stores them as procedure (ADR-022 D1), the kind they are. v3 (same day) gives each procedure its evidence: since ADR-022 D3 a procedure without one is stored as fact."
  },
  "facts": [
   {
@@ -343,67 +343,74 @@
   },
   {
    "id": "q1",
-   "kind": "habit",
+   "kind": "procedure",
    "concepts": [
     "install",
     "reinstall"
    ],
-   "text": "Procedure, reinstall the live suite: set GM_HOME to the suite folder and GM_YES=1, start gray_matter/install.ps1 -Force -Client detected outside the MSIX container (Win32_Process Create), check that the log ends with INSTALL COMPLETE, then restart the clients."
+   "text": "Procedure, reinstall the live suite: set GM_HOME to the suite folder and GM_YES=1, start gray_matter/install.ps1 -Force -Client detected outside the MSIX container (Win32_Process Create), check that the log ends with INSTALL COMPLETE, then restart the clients.",
+   "evidence": "install of 2026-11-16 completed with GM_HOME set (ENVIRONMENT.md section 4)"
   },
   {
    "id": "q2",
-   "kind": "habit",
+   "kind": "procedure",
    "concepts": [
     "release",
     "tag",
     "version"
    ],
-   "text": "Procedure, release a tool: bump the version in __init__.py, pyproject.toml, both README badges and the CHANGELOG in one commit, run the version tests, then tag <folder>-vX.Y.Z and push main and the tag."
+   "text": "Procedure, release a tool: bump the version in __init__.py, pyproject.toml, both README badges and the CHANGELOG in one commit, run the version tests, then tag <folder>-vX.Y.Z and push main and the tag.",
+   "evidence": "releases of 2026-11-16 (neuron/docs/RELEASING.md)"
   },
   {
    "id": "q3",
-   "kind": "habit",
+   "kind": "procedure",
    "concepts": [
     "gate",
     "push"
    ],
-   "text": "Procedure, before any push: run python tools/gate.py (deps check, the three suites in separate processes, the recall bench, a fresh isolated smoke, about 10 minutes); a skipped step counts as a failed gate."
+   "text": "Procedure, before any push: run python tools/gate.py (deps check, the three suites in separate processes, the recall bench, a fresh isolated smoke, about 10 minutes); a skipped step counts as a failed gate.",
+   "evidence": "gate passed before the release of 2026-11-16 (tools/gate.py)"
   },
   {
    "id": "q4",
-   "kind": "habit",
+   "kind": "procedure",
    "concepts": [
     "commit",
     "test"
    ],
-   "text": "Procedure, before a commit: install the change, try it in real use, then commit in the umbrella repo (never on the mirrors), ending the message with a plain-text Co-authored with Claude line."
+   "text": "Procedure, before a commit: install the change, try it in real use, then commit in the umbrella repo (never on the mirrors), ending the message with a plain-text Co-authored with Claude line.",
+   "evidence": "user correction of 2026-11-16: no commit before a real usage test"
   },
   {
    "id": "q5",
-   "kind": "habit",
+   "kind": "procedure",
    "concepts": [
     "bench",
     "recall"
    ],
-   "text": "Procedure, measure a recall change: run neuron/bench/run.py --mode message on recall.json, recall_en_all.json and recall_en_text.json; accept it only if no set loses an expected fact or gains noise."
+   "text": "Procedure, measure a recall change: run neuron/bench/run.py --mode message on recall.json, recall_en_all.json and recall_en_text.json; accept it only if no set loses an expected fact or gains noise.",
+   "evidence": "bench runs of 2026-11-16 on the three sets (ADR index, rule 1)"
   },
   {
    "id": "q6",
-   "kind": "habit",
+   "kind": "procedure",
    "concepts": [
     "isolated instance",
     "smoke"
    ],
-   "text": "Procedure, try anything that writes: python tools/isolated.py up, then run -- <command> (the smoke is tools/smoke.py), then down --purge; never on the real memory."
+   "text": "Procedure, try anything that writes: python tools/isolated.py up, then run -- <command> (the smoke is tools/smoke.py), then down --purge; never on the real memory.",
+   "evidence": "isolated smoke 12/12 on 2026-11-16 (tools/isolated.py)"
   },
   {
    "id": "q7",
-   "kind": "habit",
+   "kind": "procedure",
    "concepts": [
     "rename",
     "dependency"
    ],
-   "text": "Procedure, before renaming or removing a tool, option, env var or shipped file: python tools/deps.py <name> lists every user in code, hooks, tests, scripts and docs."
+   "text": "Procedure, before renaming or removing a tool, option, env var or shipped file: python tools/deps.py <name> lists every user in code, hooks, tests, scripts and docs.",
+   "evidence": "deps check in the gate since 2026-11-14 (ENVIRONMENT.md section 5)"
   }
  ],
  "messages": [

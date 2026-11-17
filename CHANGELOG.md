@@ -1,5 +1,19 @@
 # Changelog — Neuron
 
+## Unreleased
+- **A fact kind `procedure`** (ADR-022, Neuron 7): the steps of a task, in
+  order. Recalled by task, never in the session-start profile. `store_turn`
+  takes it only with `evidence`, the outcome that proved it (a passed gate or
+  smoke, a user correction, a commit); without it the fact is stored as `fact`
+  with a note. The evidence is kept at the end of the text ("Proven by: ...").
+- **A procedure gains in recall when the message names one of its concepts
+  whole** (`NEURON_FACT_PROC_BONUS`, 0.20; every word of the concept, so
+  "test" does not name `test suite`). Task bench `bench/recall_proc.json`:
+  9/20 -> 12/20 expected found, noise 1.0 -> 0.5 per message, off-topic 0; the
+  three recall sets unchanged. On 209 real messages over a copy of the real
+  memory, judged blind: 5 better, 1 worse.
+- The bench stops when a set fact is stored under another kind than the set's.
+
 ## 6.12.0 (2026-11-16)
 With Gray Matter 1.10.0 and NeuRAG 1.9.1.
 - **Recall shows at most 2 facts instead of 3** (`NEURON_FACT_RECALL_K`). On the

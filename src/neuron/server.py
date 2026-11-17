@@ -139,6 +139,8 @@ FACT_LEX_BONUS   = _config.env_float("NEURON_FACT_LEX_BONUS", 0.15)
 # (start: 0.10) once facts have a few weeks of shown/used counts; the ledger
 # compares the two halves.
 FACT_USE_BONUS   = _config.env_float("NEURON_FACT_USE_BONUS", 0.0)
+# ADR-022 D2: a procedure whose task the message names (search._search_facts `proc`).
+FACT_PROC_BONUS  = _config.env_float("NEURON_FACT_PROC_BONUS", 0.20)
 # ADR-015 D7.1: user/habit facts on the first call of a session, newest first.
 # shortcut: a fixed cap drops the oldest past it; 600 dropped 2 of 4 live
 # (one long `user` fact, 2026-11-08), 4 now take ~850. Rank by `confirmed`
@@ -658,8 +660,8 @@ def _all_tools() -> list[Tool]:
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string",   # literal: tests read the schema from source; = models.FACT_KINDS
-                                         "enum": ["progress", "decision", "fix", "fact", "idea", "user", "habit"],
-                                         "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work)"},
+                                         "enum": ["progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure"],
+                                         "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work) | procedure (steps of a task, in order, proven by an outcome)"},
                                 "text": {"type": "string",
                                          "description": f"One sentence with its why, ideally under {EPISODE_MAX_CHARS} chars. "
                                                         "ENGLISH ONLY, whatever the chat language: the memory's pivot language. "
@@ -673,6 +675,10 @@ def _all_tools() -> list[Tool]:
                                          "description": "Optional: the fact for a machine, ENGLISH ONLY, terse, max ~100 chars, e.g. "
                                                         "'fix: daemon log locked on purge -> retry rmtree 30s'. "
                                                         "Recall shows it instead of the text."},
+                                "evidence": {"type": "string",
+                                             "description": "Required for kind procedure: the outcome that proved the steps "
+                                                            "(gate passed, smoke passed, user correction, commit id). "
+                                                            "Without it the fact is stored as kind fact."},
                             },
                             # Only `text`: the MCP SDK validates against this
                             # schema BEFORE the handler, so one fact without
@@ -1464,6 +1470,9 @@ def _semantic_twin(g, kw: str):
     return None
 
 
+EVIDENCE_MAX_CHARS = 160   # one outcome, not a log
+
+
 def _parse_facts(arguments: dict, notes: list) -> list[dict]:
     """The facts of a turn (ADR-015): `facts` as sent, plus the legacy `episode`
     as one fact of kind `fact` on every keyword (concepts None). A malformed
@@ -1495,7 +1504,20 @@ def _parse_facts(arguments: dict, notes: list) -> list[dict]:
             else:
                 notes.append(f"dropped concept {c!r}: use letters, digits, spaces, -_.:+")
         cs = ok
-        out.append({"kind": kind, "text": str(item["text"]).strip(), "concepts": cs[:5],
+        text = str(item["text"]).strip()
+        # ADR-022 D3: a procedure exists because an outcome proved it; a test once
+        # wrote a false habit (2026-11-10), and a false procedure teaches the error.
+        # Presence and form are checked, no model judges it. Kept in the text, so
+        # whoever reads the procedure sees what proved it.
+        if kind == "procedure":
+            ev = " ".join(str(item.get("evidence") or "").split())[:EVIDENCE_MAX_CHARS]
+            if len(ev) < 4:
+                notes.append("procedure without evidence → stored as 'fact': pass `evidence`, "
+                             "the outcome that proved it (gate passed, smoke passed, user correction, commit)")
+                kind = "fact"
+            else:
+                text = f"{text.rstrip('.')}. Proven by: {ev}"
+        out.append({"kind": kind, "text": text, "concepts": cs[:5],
                     "supersedes": item.get("supersedes"), "gist": str(item.get("gist") or "")})
     if len(raw) > MAX_FACTS_PER_TURN:
         notes.append(f"kept the first {MAX_FACTS_PER_TURN} facts of {len(raw)}")
@@ -2072,7 +2094,7 @@ def _fact_hits(query: str, g, k: int, floor: float, delta: float,
     return _search._search_facts(
         query, g, k, floor, FACT_NAMED_BONUS, delta,
         embed=None if _get_embedding is _search._get_embedding else _get_embedding,
-        newer=newer, exclude=exclude, lex=FACT_LEX_BONUS, use=use)
+        newer=newer, exclude=exclude, lex=FACT_LEX_BONUS, use=use, proc=FACT_PROC_BONUS)
 
 
 async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:

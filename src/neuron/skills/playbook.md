@@ -154,7 +154,17 @@ neuron_store_turn(facts=[
    "concepts": ["ci"]}
 ])
 ```
-Kinds: `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit`.
+Kinds: `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit`, `procedure`
+(the steps of a task, in order, once an outcome proved them: pass `evidence`,
+or it is stored as `fact`).
+A procedure holds every step of its task, the shared ones too (the gate in the
+release procedure): it is recalled alone, and a cited `#id` shows only the id.
+Its concepts name the task (`websearch`, `release`), never the tool or client
+alone (`opencode`): a procedure gains in recall when the message names a whole
+concept, and a tool's name is in every message about that tool.
+`habit` or `procedure`? Would it help in a session where that task never comes
+up? Yes: a `habit` (a rule, preference or prohibition, shown at every session
+start). No: a `procedure` (how to do that one task, recalled when it is named).
 Concepts are 1-5 nouns that index the fact; they become the turn's keywords.
 Facts are never evicted. An update is a new fact that replaces the old one:
 pass `supersedes="<id>"`, the `#id` that `pre_turn` shows next to each fact.

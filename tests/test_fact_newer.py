@@ -121,3 +121,33 @@ def test_a_facts_own_use_rate_only_adds_and_only_when_asked():
     assert _ids(se._search_facts("q", g, 3, 0.40, 0.0, 0.15, embed=_embed(vecs), use=0.10)) == [a, b, c]
     g.facts[a].update(shown=1, confirmed=1)
     assert se._use_rate(g.facts[a]) == 0.0 and se._use_rate(g.facts[c]) == 0.0
+
+
+def test_a_procedure_wins_when_the_message_names_its_task():
+    """ADR-022 D2, bench recall_proc m8 "commit this and push": the gate procedure
+    lost to a progress fact on the same concept. Only a named procedure gains;
+    a procedure the message does not name, and other kinds, do not."""
+    g = Graph()
+    p = g.add_fact("progress", "PTXT commit b29a186 is on main but not pushed", ["push"], 1)["id"]
+    q = g.add_fact("procedure", "QTXT before any push run python tools/gate.py", ["gate", "push"], 2)["id"]
+    r = g.add_fact("procedure", "RTXT release: bump, tag and push the tag", ["release"], 3)["id"]
+    vecs = {"PTXT": (0.62, math.sqrt(1 - 0.62 ** 2), 0.0), "QTXT": (0.55, math.sqrt(1 - 0.55 ** 2), 0.0),
+            "RTXT": (0.61, math.sqrt(1 - 0.61 ** 2), 0.0)}
+    q_ = "commit this and push"
+    assert _ids(se._search_facts(q_, g, 1, 0.40, 0.20, 1.0, embed=_embed(vecs))) == [p]
+    assert _ids(se._search_facts(q_, g, 3, 0.40, 0.20, 1.0, embed=_embed(vecs), proc=0.20)) == [q, p, r]
+    assert g.facts[q]["kind"] == "procedure"           # stored as given, not folded into `fact`
+
+
+def test_one_word_of_a_concept_does_not_earn_the_procedure_bonus():
+    """Real messages, 2026-11-17: "test" named `test suite` and "user" named
+    `computer-use`, and a profiling procedure rode into 11 of 209 turns. The
+    bonus needs every word of the concept; the plain named bonus is unchanged."""
+    g = Graph()
+    a = g.add_fact("fact", "ATXT a fact about tests", ["install"], 1)["id"]
+    p = g.add_fact("procedure", "PTXT profile one file with cProfile", ["test suite"], 2)["id"]
+    vecs = {"ATXT": (0.62, math.sqrt(1 - 0.62 ** 2), 0.0), "PTXT": (0.60, 0.80, 0.0)}
+    hits = se._search_facts("hai fatto i test?", g, 2, 0.40, 0.0, 1.0, embed=_embed(vecs), proc=0.20)
+    assert _ids(hits) == [a, p]
+    hits = se._search_facts("the test suite is slow", g, 2, 0.40, 0.0, 1.0, embed=_embed(vecs), proc=0.20)
+    assert _ids(hits) == [p, a]

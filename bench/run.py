@@ -121,7 +121,8 @@ async def run_mode(mode: str, data: dict) -> dict:
     facts = data["facts"]
     for f in facts:   # one turn per fact, the ADR-015 call: facts only
         await _call(S, "store_turn", {"facts": [
-            {"kind": f["kind"], "text": f["text"], "concepts": f["concepts"]}]})
+            {"kind": f["kind"], "text": f["text"], "concepts": f["concepts"],
+             **({"evidence": f["evidence"]} if f.get("evidence") else {})}]})
     g = S._g.get()
     # Past 64 new texts the recall vectors are built in a background thread, and
     # until then the vector search returns nothing. Measure a warm daemon.
@@ -130,7 +131,15 @@ async def run_mode(mode: str, data: dict) -> dict:
     while _search._recall_warming:
         await asyncio.sleep(0.1)
     kept = {e["text"] for eps in g.episodes.values() for e in eps}
-    stored = sum(1 for f in facts if f["text"] in kept)
+    # a procedure's text gains its evidence when stored (ADR-022 D3)
+    stored = sum(1 for f in facts if any(k.startswith(f["text"].rstrip(".")) for k in kept))
+    # A set fact stored under another kind measures something else: on 2026-11-17
+    # D3 turned the set's procedures into `fact` and the bench quietly fell back.
+    by_text = {gf["text"]: gf["kind"] for gf in g.facts.values()}
+    wrong = [f["id"] for f in facts if not any(t.startswith(f["text"].rstrip(".")) and k == f["kind"]
+                                               for t, k in by_text.items())]
+    if wrong:
+        raise SystemExit(f"bench: stored under another kind than the set's: {wrong}")
 
     rows, found, expected, full, noise, chars, flashes = [], 0, 0, 0, 0, 0, 0
     for m in data["messages"]:

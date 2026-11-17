@@ -7,7 +7,7 @@ import json
 import pathlib
 
 SET = pathlib.Path(__file__).resolve().parents[1] / "bench" / "recall.json"
-KINDS = {"progress", "decision", "fix", "fact", "idea", "user", "habit"}   # ADR-015 D3
+KINDS = {"progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure"}   # ADR-015 D3
 SIG = 40   # bench/run.py SIG
 
 

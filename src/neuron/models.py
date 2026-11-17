@@ -72,7 +72,7 @@ SLEEP_IDLE_SECONDS       = _env_int("NEURON_SLEEP_IDLE_SECONDS", 1800)     # 30 
 # append-only: an update is a new fact that supersedes the old one, and no
 # eviction, merge or orphan drop of a node deletes a fact (until 6.9 all four
 # did, with the per-node cap of 5).
-FACT_KINDS = ("progress", "decision", "fix", "fact", "idea", "user", "habit")
+FACT_KINDS = ("progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure")
 # Advisory length the writer aims at: what governs an injection is pre_turn's
 # budget, so a fact past it is kept whole.
 EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 400)
