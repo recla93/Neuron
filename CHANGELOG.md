@@ -19,7 +19,11 @@
 - **Restating a fact word for word with a gist fills a missing gist in place**
   (same id, same place in the profile). With gists on all 22 live profile
   facts, 9 fit in the 1000-character profile instead of 6, all six rules
-  among them.
+  among them. The profile grows from 846 to 999 characters (about 40 tokens);
+  the average recall shrinks slightly (976 -> 962 characters per message),
+  since those facts now show their gist there too.
+- A turn that only restates stored facts (to fill their gists) creates no
+  same-turn links: 16 restatements had tied 81 unrelated concepts together.
 
 ## 6.12.0 (2026-11-16)
 With Gray Matter 1.10.0 and NeuRAG 1.9.1.

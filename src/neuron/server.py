@@ -1690,6 +1690,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # handshake). Until 2026-11-16 every fact said "model": 300 of 319 live.
     _author = _client_tag(arguments.get("by")) or "model"
     _fact_lost: dict = {}
+    _n_restated = 0                 # facts already stored word for word
     for f in _facts_in:
         cs = []
         for c in (f["concepts"] if f["concepts"] is not None else keywords):
@@ -1703,6 +1704,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                          supersedes=f["supersedes"], gist=f.get("gist", ""), source=_author)
         if not rep:
             continue
+        _n_restated += bool(rep.get("duplicate"))
         g_kind = g.facts[rep["id"]]["kind"]
         _turn_ids.add(rep["id"])
         if not (rep.get("duplicate") or rep.get("superseded") or f["supersedes"]):
@@ -1772,7 +1774,11 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         if tgt:
             tgt.salience += WEIGHT_ORDER.get(lk.weight, 2)
             g.mark_node_dirty(tgt.keyword)
-    _co_links = g.link_cooccurring(keywords, turn)   # after the explicit ones: they win
+    # after the explicit ones: they win. A turn that only restates stored facts
+    # (filling their gists) links nothing: 16 restatements on 2026-11-17 tied
+    # 81 unrelated concepts together.
+    _co_links = (0 if _facts_in and _n_restated == len(_facts_in)
+                 else g.link_cooccurring(keywords, turn))
 
     g.last_sentiment = sentiment
     g.last_topic = topic

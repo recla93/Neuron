@@ -349,6 +349,21 @@ def test_restating_a_fact_with_a_gist_fills_it_in_place(_isolated):
     third = _call("store_turn", {"facts": [{"kind": "habit", "text": text, "gist": "other"}]})
     assert "gist added" not in third and mine[0]["gist"] == "live installer test before release"
 
+
+def test_a_turn_that_only_restates_facts_links_nothing(_isolated):
+    """Two stored facts on unrelated concepts, restated together to fill their
+    gists: no same-turn link between their concepts."""
+    a = "The user works from a laptop until the graphics card arrives."
+    b = "Bridges are created automatically and stay editable in the GUI."
+    _call("store_turn", {"facts": [{"kind": "user", "text": a, "concepts": ["laptop"]}]})
+    _call("store_turn", {"facts": [{"kind": "user", "text": b, "concepts": ["bridge"]}]})
+    out = _call("store_turn", {"facts": [
+        {"kind": "user", "text": a, "concepts": ["laptop"], "gist": "laptop until the GPU"},
+        {"kind": "user", "text": b, "concepts": ["bridge"], "gist": "auto bridges, editable"}]})
+    assert "same-turn" not in out, out
+    g = S._g.get()
+    assert not [lk for lk in g.links if {lk.source, lk.target} == {"laptop", "bridge"}]
+
 def test_a_turn_without_facts_says_so(_isolated):
     out = _call("store_turn", {"topic": "pranzo con Ada", "keywords": ["ada", "pranzo"]})
     assert "facts: 0 saved" in out, out
