@@ -191,7 +191,7 @@ def main() -> int:
     data = load(pathlib.Path(a.set))
     results = [asyncio.run(run_mode(m, data)) for m in (a.mode or MODES)]
     if a.json:
-        print(json.dumps({"set_version": data["version"], "results": results},
+        print(json.dumps({"set": pathlib.Path(a.set).name, "set_version": data["version"], "results": results},
                          ensure_ascii=False, indent=1))
         return 0
     for r in results:

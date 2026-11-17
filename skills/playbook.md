@@ -165,6 +165,11 @@ concept, and a tool's name is in every message about that tool.
 `habit` or `procedure`? Would it help in a session where that task never comes
 up? Yes: a `habit` (a rule, preference or prohibition, shown at every session
 start). No: a `procedure` (how to do that one task, recalled when it is named).
+A date in a fact carries its year (`14/11/2026`, not `14/11`): a bare day
+reads as this year's once the year has turned.
+An attempt that failed is worth a fact too: a `decision` whose gist starts with
+`tried:` and holds the number that closed it (`tried: X -> 1/13, dropped`), so
+the next model does not propose it again.
 Concepts are 1-5 nouns that index the fact; they become the turn's keywords.
 Facts are never evicted. An update is a new fact that replaces the old one:
 pass `supersedes="<id>"`, the `#id` that `pre_turn` shows next to each fact.
