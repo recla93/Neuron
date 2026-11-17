@@ -162,6 +162,9 @@ release procedure): it is recalled alone, and a cited `#id` shows only the id.
 Its concepts name the task (`websearch`, `release`), never the tool or client
 alone (`opencode`): a procedure gains in recall when the message names a whole
 concept, and a tool's name is in every message about that tool.
+A procedure's text states the general condition and the steps ("when web search
+fails, for any reason, in any client: ..."); the one case that proved it goes in
+`evidence`. Written as one client's incident, it reads as valid for that case only.
 `habit` or `procedure`? Would it help in a session where that task never comes
 up? Yes: a `habit` (a rule, preference or prohibition, shown at every session
 start). No: a `procedure` (how to do that one task, recalled when it is named).
