@@ -664,9 +664,7 @@ def _all_tools() -> list[Tool]:
                                          "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work) | procedure (steps of a task, in order, proven by an outcome)"},
                                 "text": {"type": "string",
                                          "description": f"One sentence with its why, ideally under {EPISODE_MAX_CHARS} chars. "
-                                                        "ENGLISH ONLY, whatever the chat language: the memory's pivot language. "
-                                                        "To comment or dispute a fact without replacing it, cite its #id: "
-                                                        "recall then shows your note next to it (↳#id)."},
+                                                        "ENGLISH ONLY, whatever the chat language: the memory's pivot language."},
                                 "concepts": {"type": "array", "items": {"type": "string"},
                                              "description": "1-5 concept nouns that index the fact, in English"},
                                 "supersedes": {"type": "string",
@@ -679,6 +677,14 @@ def _all_tools() -> list[Tool]:
                                              "description": "Required for kind procedure: the outcome that proved the steps "
                                                             "(gate passed, smoke passed, user correction, commit id). "
                                                             "Without it the fact is stored as kind fact."},
+                                "link": {"type": "object",
+                                         "description": "Optional: how this fact relates to an earlier one. "
+                                                        "disputes = it corrects that fact (recall shows it beside it, ↳#id); "
+                                                        "solves / failed_for = a solution that worked / did not, for that "
+                                                        "procedure (recall lists it under the procedure).",
+                                         "properties": {"type": {"type": "string", "enum": ["disputes", "solves", "failed_for"]},
+                                                        "to": {"type": "string", "description": "the earlier fact's id"}},
+                                         "required": ["type", "to"]},
                             },
                             # Only `text`: the MCP SDK validates against this
                             # schema BEFORE the handler, so one fact without
@@ -1517,8 +1523,15 @@ def _parse_facts(arguments: dict, notes: list) -> list[dict]:
                 kind = "fact"
             else:
                 text = f"{text.rstrip('.')}. Proven by: {ev}"
+                # The form a fresh model acted on right (2026-11-18 A/B): the
+                # general condition first, then steps and alternatives.
+                if not re.match(r"(when|if)\b", text, re.I):
+                    notes.append("procedure: open with the general condition ('When <symptom>: "
+                                 "<steps>. If <what you see>: <alternative> (proven/untried)')")
+        link = item.get("link") if isinstance(item.get("link"), dict) else None
         out.append({"kind": kind, "text": text, "concepts": cs[:5],
-                    "supersedes": item.get("supersedes"), "gist": str(item.get("gist") or "")})
+                    "supersedes": item.get("supersedes"), "gist": str(item.get("gist") or ""),
+                    "link": link})
     if len(raw) > MAX_FACTS_PER_TURN:
         notes.append(f"kept the first {MAX_FACTS_PER_TURN} facts of {len(raw)}")
     ep = str(arguments.get("episode", "") or "").strip()
@@ -1691,6 +1704,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _author = _client_tag(arguments.get("by")) or "model"
     _fact_lost: dict = {}
     _n_restated = 0                 # facts already stored word for word
+    _used: set = set()              # facts this turn used (ADR-015 D8, below)
     for f in _facts_in:
         cs = []
         for c in (f["concepts"] if f["concepts"] is not None else keywords):
@@ -1717,6 +1731,14 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             _fact_lost["truncated"] = rep["truncated"]
         if "supersedes_unknown" in rep:
             _fact_notes.append(f"supersedes '{rep['supersedes_unknown']}': no active fact with that id")
+        if f.get("link"):
+            why = g.add_fact_link(rep["id"], f["link"].get("to", ""), str(f["link"].get("type", "")))
+            _fact_report[-1] += (f", {f['link'].get('type')} #{str(f['link'].get('to', '')).lstrip('#')}"
+                                 if not why else "")
+            if why:
+                _fact_notes.append(f"#{rep['id']} stored, not linked: {why}")
+            else:
+                _used.add(str(f["link"]["to"]).lstrip("#"))   # linking to a fact is using it
         if _cur.foreign_language(f["text"]):     # kept: a fact is never lost for its language
             _fact_notes.append(f"#{rep['id']} stored; write facts in English, the memory's pivot "
                                "language, whatever the chat language")
@@ -1725,7 +1747,6 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # a shown fact counted too: 50 of 81 confirmed live facts had only that.
     # The implicit signal now comes from the reply, read by GM's Stop hook
     # (memhook.used_facts -> confirm).
-    _used: set = set()
     for fid in _turn_ids:
         _used.update(c for c in re.findall(r"#([0-9a-f]{8})\b", g.facts[fid]["text"])
                      if c not in _turn_ids and c in g.facts)
@@ -2084,6 +2105,32 @@ def _profile_facts(g, cap: int) -> list:
             break
         out.append(f)
     return out
+
+
+NOTE_SHOWN_CHARS = 160
+
+
+def _said(f) -> str:
+    """A linked fact, inline: what it says, on one line. ' | ' would split
+    the recall line where GM trims it."""
+    return " ".join(fact_shown(f).split()).replace(" | ", " / ")[:NOTE_SHOWN_CHARS]
+
+
+def _fact_line(g, f, kw: str) -> str:
+    """One recalled fact, with what is linked to it (2026-11-18):
+    - a correction (`disputes`) beside it with what it says: the bare id made a
+      fresh model follow the disputed fact 2 times in 2, its gist 4 in 4;
+    - under a procedure, its solutions: worked first, then untried (an idea),
+      then the ones that failed, so a model does not retry those."""
+    line = f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}{fact_age(f)}"
+    line += "".join(f" ↳#{n['id']}: {_said(n)}" for n, _k in g.linked_to(f["id"], ("disputes",), 2))
+    if f["kind"] == "procedure":
+        sols = g.linked_to(f["id"], ("solves", "failed_for"), 4)
+        rank = lambda s: 2 if s[1] == "failed_for" else 1 if s[0]["kind"] == "idea" else 0
+        for i, (s, k) in enumerate(sorted(sols, key=rank), 1):
+            state = "failed" if k == "failed_for" else "untried" if s["kind"] == "idea" else "proven"
+            line += f" · {i}) {'✗ ' if state == 'failed' else ''}{_said(s)} [{state} #{s['id']}]"
+    return line
 
 
 def _client_tag(by=None) -> str:
@@ -2490,9 +2537,13 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                     _hits.append((f, 0.0, kw))
     _hits = [h for h in _hits if h[0]["id"] not in _seen_ids]   # the no-vector path above
     if _hits:
+        # A solution recalled with its procedure is listed under it, a correction
+        # beside the fact it corrects: not twice (~150 chars each, 2026-11-18).
+        _under = {s["id"] for f, _sc, _kw in _hits
+                  for s, _k in (g_pt.linked_to(f["id"], ("solves", "failed_for"), 4) if f["kind"] == "procedure" else [])
+                  + g_pt.linked_to(f["id"], ("disputes",), 2)}
         parts_pt.append("facts: " + " | ".join(
-            f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}{fact_age(f)}"
-            + "".join(f" ↳#{n}" for n in g_pt.notes_on(f["id"])) for f, _sc, kw in _hits))
+            _fact_line(g_pt, f, kw) for f, _sc, kw in _hits if f["id"] not in _under))
     if lks:
         parts_pt.append("links:" + "|".join(
             f"{lk.source}-[{lk.weight[0]}]->{lk.target}" for lk in lks[:6]

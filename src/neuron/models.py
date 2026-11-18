@@ -74,6 +74,11 @@ SLEEP_IDLE_SECONDS       = _env_int("NEURON_SLEEP_IDLE_SECONDS", 1800)     # 30 
 # eviction, merge or orphan drop of a node deletes a fact (until 6.9 all four
 # did, with the per-node cap of 5).
 FACT_KINDS = ("progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure")
+# Typed edges between facts (2026-11-18). A note found by "#id" in a text could
+# not tell a correction from a mention: 24 of 191 real recalls showed progress
+# facts as "notes". disputes: src corrects dst. solves / failed_for: src is a
+# solution that worked / did not for the procedure dst.
+FACT_LINK_TYPES = ("disputes", "solves", "failed_for")
 # Advisory length the writer aims at: what governs an injection is pre_turn's
 # budget, so a fact past it is kept whole.
 EPISODE_MAX_CHARS = _env_int("NEURON_EPISODE_MAX_CHARS", 400)
@@ -87,8 +92,11 @@ GIST_MAX_CHARS = _env_int("NEURON_GIST_MAX_CHARS", 120)
 
 def fact_shown(f: dict) -> str:
     """What a fact costs in context: its gist when it has one (a trailing `+`
-    says the full text is there: pre_turn(topic="#id")), else its text."""
-    return f"{f['gist']} +" if f.get("gist") else f["text"]
+    says the full text is there: pre_turn(topic="#id")), else its text.
+    A procedure always shows its text: its steps and conditions are the point,
+    and on 7 failure scenarios (2026-11-18) a gisted procedure led a fresh model
+    to the wrong action 3 times in 4 where the full one did not."""
+    return f"{f['gist']} +" if f.get("gist") and f.get("kind") != "procedure" else f["text"]
 
 
 # Fable's need 5 (PLAN-2026-11-16): a fact with no date reads as true today. A
@@ -390,6 +398,8 @@ class Graph:
     _moved_concepts: set = field(default_factory=set)    # (fact_id, old keyword) to DELETE
     _fact_status:   set  = field(default_factory=set)    # fact ids whose status changed
     _fact_conf:     set  = field(default_factory=set)    # fact ids whose confirmed/shown/gist changed
+    fact_links:     set  = field(default_factory=set)    # (src, dst, type), append-only
+    _new_fact_links: set = field(default_factory=set)    # rows to INSERT
     # Archived nodes (merged near-duplicates / dropped orphans) — recoverable,
     # flushed to the _graveyard table on save, then cleared. (E1.2/E1.3)
     _graveyard: list = field(default_factory=list)
@@ -572,6 +582,7 @@ class Graph:
         self._moved_concepts.clear()
         self._fact_status.clear()
         self._fact_conf.clear()
+        self._new_fact_links.clear()
 
     def _snapshot_salience(self) -> None:
         """Record current salience/trust per node as the baseline for the next
@@ -711,14 +722,25 @@ class Graph:
             return {}
         return self.add_fact("fact", text, [keyword], turn)
 
-    def notes_on(self, fid: str, n: int = 2) -> list[str]:
-        """Ids of the active facts that cite ``#fid`` in their text, newest
-        first: a comment or a dispute left on a fact WITHOUT replacing it
-        (`supersedes` replaces). No column: the citation is the link."""
-        tag = f"#{fid}"
-        hits = [f for f in self.facts.values()
-                if f["status"] == "active" and f["id"] != fid and tag in f["text"]]
-        return [f["id"] for f in sorted(hits, key=lambda f: f["turn"] or 0, reverse=True)[:n]]
+    def add_fact_link(self, src: str, dst: str, kind: str) -> str:
+        """A typed edge between two facts; "" when stored, else why not."""
+        src, dst = str(src).lstrip("#"), str(dst).lstrip("#")
+        if kind not in FACT_LINK_TYPES:
+            return f"unknown link type {kind!r}: use {', '.join(FACT_LINK_TYPES)}"
+        if src == dst or src not in self.facts or dst not in self.facts:
+            return f"no fact #{dst} to link to" if dst not in self.facts else "a fact cannot link to itself"
+        if (src, dst, kind) not in self.fact_links:
+            self.fact_links.add((src, dst, kind))
+            self._new_fact_links.add((src, dst, kind))
+            self._dirty = True
+        return ""
+
+    def linked_to(self, dst: str, kinds, n: int = 3) -> list:
+        """(fact, type) of the ACTIVE facts linking to ``dst`` with one of
+        ``kinds``, newest first."""
+        hits = [(self.facts[s], k) for s, d, k in self.fact_links
+                if d == dst and k in kinds and self.facts.get(s, {}).get("status") == "active"]
+        return sorted(hits, key=lambda h: h[0]["turn"] or 0, reverse=True)[:n]
 
     def note_shown(self, fid: str, n: int = 1) -> bool:
         """ADR-021 D1: count a showing of a fact by the recall. With `confirmed`
@@ -1562,6 +1584,12 @@ class Graph:
                 keyword TEXT NOT NULL,
                 PRIMARY KEY (context, fact_id, keyword));
             CREATE INDEX IF NOT EXISTS idx_fact_concepts_kw ON fact_concepts(context, keyword);
+            CREATE TABLE IF NOT EXISTS fact_links (
+                context TEXT NOT NULL DEFAULT 'default',
+                src     TEXT NOT NULL,
+                dst     TEXT NOT NULL,
+                type    TEXT NOT NULL,
+                PRIMARY KEY (context, src, dst, type));
             CREATE INDEX IF NOT EXISTS idx_links_source ON links(source);
             CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
             CREATE INDEX IF NOT EXISTS idx_links_turn   ON links(created_turn);
@@ -1830,6 +1858,10 @@ class Graph:
         if self._new_concepts:
             conn.executemany(_CONCEPT_INSERT,
                              [(context, fid, kw) for fid, kw in self._new_concepts])
+        flinks = self.fact_links if full else self._new_fact_links
+        if flinks:
+            conn.executemany("INSERT OR IGNORE INTO fact_links (context, src, dst, type) VALUES (?,?,?,?)",
+                             [(context, s, d, k) for s, d, k in flinks])
         if self._fact_status:
             conn.executemany("UPDATE facts SET status=? WHERE context=? AND id=?",
                              [(self.facts[fid]["status"], context, fid)
@@ -2077,6 +2109,11 @@ class Graph:
                         self.facts[fid]["concepts"].append(kw)
             except Exception as e:
                 log.debug("fact load skipped (table may be absent): %s", e)
+            try:   # absent from a store not yet saved by this version
+                self.fact_links = {(s, d, k) for s, d, k in conn.execute(
+                    "SELECT src, dst, type FROM fact_links WHERE context=?", (context,))}
+            except Exception as e:
+                log.debug("fact link load skipped (table may be absent): %s", e)
             legacy: list = []
             try:
                 if has_context:

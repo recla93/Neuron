@@ -230,6 +230,8 @@ def test_a_fact_without_gist_is_shown_as_before():
     assert fact_shown({"text": "full text", "gist": ""}) == "full text"
     assert fact_shown({"text": "full text"}) == "full text"
     assert fact_shown({"text": "full text", "gist": "short"}) == "short +"
+    # a procedure's steps are the point: never cut to its gist
+    assert fact_shown({"kind": "procedure", "text": "When X: do A, then B.", "gist": "X: A"}) == "When X: do A, then B."
 
 
 def test_an_old_store_without_the_gist_column_loads_and_is_upgraded(tmp_path):

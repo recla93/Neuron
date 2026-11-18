@@ -327,6 +327,11 @@ def test_a_procedure_needs_the_outcome_that_proved_it(_isolated):
          "concepts": ["pip"], "evidence": "  "},
     ]})
     assert "procedure without evidence" in out, out
+    assert "open with the general condition" in out, out      # "Gate first: ..." states no condition
+    ok = _call("store_turn", {"facts": [
+        {"kind": "procedure", "text": "When the wheel cache is stale: rerun pip with --no-cache-dir.",
+         "concepts": ["pip"], "evidence": "install passed on 2026-11-18"}]})
+    assert "general condition" not in ok, ok
     g = S._g.get()
     mine = {f["text"]: f["kind"] for f in g.facts.values()
             if f["text"].startswith(("Gate first", "Rerun pip twice"))}

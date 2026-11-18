@@ -158,13 +158,15 @@ Kinds: `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit`, `procedur
 (the steps of a task, in order, once an outcome proved them: pass `evidence`,
 or it is stored as `fact`).
 A procedure holds every step of its task, the shared ones too (the gate in the
-release procedure): it is recalled alone, and a cited `#id` shows only the id.
+release procedure): it is recalled alone.
 Its concepts name the task (`websearch`, `release`), never the tool or client
 alone (`opencode`): a procedure gains in recall when the message names a whole
 concept, and a tool's name is in every message about that tool.
-A procedure's text states the general condition and the steps ("when web search
-fails, for any reason, in any client: ..."); the one case that proved it goes in
-`evidence`. Written as one client's incident, it reads as valid for that case only.
+A procedure's text opens with the general condition, then the steps, then the
+alternatives by what you see, each marked proven or untried: "When web search
+fails (any client, any error): 1) ...; 2) .... If DuckDuckGo returns a captcha:
+... (untried)." The one case that proved it goes in `evidence`. Written as one
+client's incident, it reads as valid for that case only.
 `habit` or `procedure`? Would it help in a session where that task never comes
 up? Yes: a `habit` (a rule, preference or prohibition, shown at every session
 start). No: a `procedure` (how to do that one task, recalled when it is named).
@@ -173,6 +175,11 @@ reads as this year's once the year has turned.
 An attempt that failed is worth a fact too: a `decision` whose gist starts with
 `tried:` and holds the number that closed it (`tried: X -> 1/13, dropped`), so
 the next model does not propose it again.
+A fact can point to an earlier one with `link: {type, to}`: `disputes` (it
+corrects that fact; recall shows it beside it), `solves` / `failed_for` (a
+solution that worked / did not, for a procedure; recall lists it under the
+procedure, failed ones marked, so nobody retries them). A citation of `#id` in
+the text is only a mention.
 Concepts are 1-5 nouns that index the fact; they become the turn's keywords.
 Facts are never evicted. An update is a new fact that replaces the old one:
 pass `supersedes="<id>"`, the `#id` that `pre_turn` shows next to each fact.

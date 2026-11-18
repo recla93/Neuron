@@ -1,6 +1,24 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Typed links between facts** (`fact_links`, append-only like
+  `fact_concepts`): `store_turn` takes `link: {type, to}` per fact, with
+  `disputes` (it corrects that fact), `solves` and `failed_for` (a solution
+  that worked / did not, for a procedure). A link to an unknown id is refused
+  with a note; the fact is kept. Recall shows a correction beside the fact it
+  corrects, and lists a procedure's solutions under it: worked first, untried
+  (kind `idea`) next, failed last and marked, each with its id; a linked fact
+  is not shown a second time on its own. A citation of `#id` in a text is now
+  only a mention: on 186 real messages the "notes" it produced (24 recalls,
+  mostly progress logs citing an id) are gone. Of the live citations one was a
+  real correction, migrated as a `disputes` link.
+- **A procedure is always shown in full**, never as its gist, and a correction
+  shows what it says, not only its id. Seven failure scenarios, two fresh Haiku
+  runs each: the right next action 9/14 with the old rendering, 14/14 with the
+  new one (a gist written on one error code made the model retry the failing
+  tool; a bare `↳#id` made it follow the corrected fact).
+- `store_turn` notes a procedure that does not open with its general
+  condition ("When <symptom>: <steps>. If <what you see>: ...").
 - **A fact kind `procedure`** (ADR-022, Neuron 7): the steps of a task, in
   order. Recalled by task, never in the session-start profile. `store_turn`
   takes it only with `evidence`, the outcome that proved it (a passed gate or

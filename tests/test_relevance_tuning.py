@@ -239,8 +239,9 @@ def test_a_fact_shown_in_the_session_does_not_come_back(tmp_path, monkeypatch):
 
 
 def test_a_note_on_a_fact_is_shown_next_to_it_and_facts_carry_their_author(tmp_path, monkeypatch):
-    """2026-11-16: a fact that cites another's #id is a note on it (a comment or
-    a dispute, not a replacement): recall points at it. And `source` says which
+    """A fact linked with `disputes` is a note on another (a correction, not a
+    replacement): recall shows it beside it (2026-11-18: typed; a citation of
+    #id in the text is only a mention). And `source` says which
     client wrote a fact — it said "model" for 300 of 319 live facts."""
     g, call = _setup(tmp_path, monkeypatch, {"turso": [1.0, 0.0, 0.0]})
     call("store_turn", {"by": "Claude Code", "facts": [
@@ -248,9 +249,48 @@ def test_a_note_on_a_fact_is_shown_next_to_it_and_facts_carry_their_author(tmp_p
     fid = next(iter(g.facts))
     assert g.facts[fid]["source"] == "claude-code"
     call("store_turn", {"facts": [
-        {"kind": "fact", "text": f"Disputed #{fid}: kimi still runs on sqlite3", "concepts": ["kimi"]}]})
-    note = next(i for i in g.facts if i != fid)
+        {"kind": "fact", "text": f"Progress on #{fid}: still being measured", "concepts": ["kimi"]},
+        {"kind": "fix", "text": "kimi still runs on sqlite3", "concepts": ["kimi"],
+         "link": {"type": "disputes", "to": fid}}]})
+    mention = next(i for i, f in g.facts.items() if f["text"].startswith("Progress on"))
+    note = next(i for i, f in g.facts.items() if f["text"].startswith("kimi still"))
     assert g.facts[note]["source"] == "model"          # no `by`, no handshake
-    assert g.notes_on(fid) == [note] and g.notes_on(note) == []
     out = call("pre_turn", {"topic": "turso embedded"})
-    assert f"#{fid} ↳#{note}" in out, out
+    # a correction shows beside the fact with what it says; a mere mention of #id does not
+    assert f"#{fid} ↳#{note}: kimi still runs on sqlite3" in out, out
+    assert f"↳#{mention}" not in out, out
+
+
+def test_a_procedure_lists_its_solutions_and_the_links_survive_a_reload(tmp_path, monkeypatch):
+    """2026-11-18: solutions linked to a procedure come under it, worked first,
+    failed last and marked, and are not shown twice. A bad link is refused
+    with a note, the fact kept. The links are rows in `fact_links`."""
+    g, call = _setup(tmp_path, monkeypatch, {"search": [1.0, 0.0, 0.0]})
+    call("store_turn", {"facts": [{"kind": "procedure", "concepts": ["websearch"],
+        "text": "When web search fails: fall back to another source.", "evidence": "used 14/11"}]})
+    pid = next(iter(g.facts))
+    out = call("store_turn", {"facts": [
+        {"kind": "fact", "text": "retry websearch: search keeps failing", "concepts": ["websearch"],
+         "link": {"type": "failed_for", "to": pid}},
+        {"kind": "fix", "text": "webfetch duckduckgo html: search works", "concepts": ["websearch"],
+         "link": {"type": "solves", "to": "#" + pid}},
+        {"kind": "idea", "text": "official docs url: search untested", "concepts": ["websearch"],
+         "link": {"type": "solves", "to": pid}},
+        {"kind": "fact", "text": "a link to nowhere", "concepts": ["websearch"],
+         "link": {"type": "solves", "to": "deadbeef"}}]})
+    assert "not linked: no fact #deadbeef" in out, out
+    rec = call("pre_turn", {"topic": "web search fails"})
+    line = next(l for l in rec.splitlines() if "[procedure]" in l)
+    order = [line.index(s) for s in ("1) webfetch duckduckgo", "2) official docs", "3) ✗ retry websearch")]
+    assert order == sorted(order), line
+    assert "[failed #" in line and "[untried #" in line and "[proven #" in line, line
+    assert rec.count("retry websearch") == 1, rec          # not twice
+    S._g.save()
+    import sqlite3
+    from neuron.models import Graph
+    db = next(tmp_path.glob("graph_*.db"))
+    rows = sqlite3.connect(db).execute("SELECT type FROM fact_links").fetchall()
+    assert sorted(r[0] for r in rows) == ["failed_for", "solves", "solves"], rows
+    again = Graph()
+    again.load_sqlite(str(db), context="default")
+    assert again.fact_links == g.fact_links, (again.fact_links, g.fact_links)
