@@ -1731,6 +1731,14 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             _fact_lost["truncated"] = rep["truncated"]
         if "supersedes_unknown" in rep:
             _fact_notes.append(f"supersedes '{rep['supersedes_unknown']}': no active fact with that id")
+        if g_kind == "progress" and HANDOFF in g.facts[rep["id"]]["concepts"] and not rep.get("duplicate"):
+            # One handoff is the current state: a new one retires the others,
+            # so "where we stopped" never reads an old one (2026-11-18).
+            olds = [o["id"] for o in g.facts.values() if o["kind"] == "progress" and o["status"] == "active"
+                    and HANDOFF in o["concepts"] and o["id"] != rep["id"]]
+            done = [o for o in olds if g.retire(o, rep["id"], mark=False)]
+            if done:
+                _fact_report[-1] += f", retires handoff {' '.join('#' + o for o in done)}"
         if f.get("link"):
             why = g.add_fact_link(rep["id"], f["link"].get("to", ""), str(f["link"].get("type", "")))
             _fact_report[-1] += (f", {f['link'].get('type')} #{str(f['link'].get('to', '')).lstrip('#')}"
@@ -2094,6 +2102,7 @@ def _dormant_facts(g, near: str, threshold: int, top_n: int, exclude: set) -> st
 
 LAST_STOP_N = 2
 LAST_STOP_WINDOW = 12
+HANDOFF = "handoff"          # the concept of the progress fact that states where the work stands
 
 
 def _last_stop(g, message: str, exclude=frozenset()) -> list:
@@ -2103,12 +2112,18 @@ def _last_stop(g, message: str, exclude=frozenset()) -> list:
     were we with Neuron?"). On the 6 real session openers, each on its day's
     memory: the state on 4 of 4 state questions (the recall alone: 0 of 4), at
     the cost of ~2 unneeded lines on the 2 other openers. ADR-020 D1 had been
-    dropped on bench noise; the bench had no real openers."""
-    recent = sorted((f for f in g.facts.values() if f["status"] == "active" and f["kind"] == "progress"
-                     and f["id"] not in exclude), key=lambda f: f["created_at"], reverse=True)[:LAST_STOP_WINDOW]
+    dropped on bench noise; the bench had no real openers.
+    First the current handoff (a progress fact on concept `handoff`, written at
+    the end of a block of work): in a real OpenCode session the two newest
+    progress facts were the day's last small steps, one already stale, and the
+    model explored ~10 tool calls anyway (2026-11-18)."""
+    active = sorted((f for f in g.facts.values() if f["status"] == "active" and f["kind"] == "progress"
+                     and f["id"] not in exclude), key=lambda f: f["created_at"], reverse=True)
+    hand = [f for f in active if HANDOFF in f["concepts"]][:1]
+    recent = [f for f in active[:LAST_STOP_WINDOW] if f not in hand]
     words = _search._words(message or "")
     named = [f for f in recent if any(_search._names_whole(c, words) for c in f["concepts"])]
-    return (named + [f for f in recent if f not in named])[:LAST_STOP_N]
+    return (hand + named + [f for f in recent if f not in named])[:LAST_STOP_N]
 
 
 def _profile_facts(g, cap: int) -> list:

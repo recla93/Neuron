@@ -180,6 +180,10 @@ corrects that fact; recall shows it beside it), `solves` / `failed_for` (a
 solution that worked / did not, for a procedure; recall lists it under the
 procedure, failed ones marked, so nobody retries them). A citation of `#id` in
 the text is only a mention.
+At the end of a block of work (a goal reached, the user stopping, before a
+long pause), store one `progress` fact with the concept `handoff`: where the
+work stands, what is not ready, what comes next. A new handoff retires the
+previous ones, and the next session opens with it (`last:`).
 Concepts are 1-5 nouns that index the fact; they become the turn's keywords.
 Facts are never evicted. An update is a new fact that replaces the old one:
 pass `supersedes="<id>"`, the `#id` that `pre_turn` shows next to each fact.

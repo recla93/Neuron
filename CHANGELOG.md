@@ -1,6 +1,15 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **A handoff opens the next session.** A `progress` fact on the concept
+  `handoff` (written at the end of a block of work, playbook rule) retires the
+  previous active handoffs, so one is current, and takes the first slot of
+  `last:`. In a real OpenCode session the two newest progress facts had been
+  the day's last small steps, one already stale, and the model answered "where
+  were we?" from a two-day-old plan; with the handoff it quoted it and answered
+  with the current state (unpushed commits, what is not ready, what is next).
+  It still checked the repo with ~9 tool calls: the line steers, it does not
+  replace a model's own verification.
 - **Session start says where the work stopped** (Fable's need 2): the first
   recall of a session carries a `last:` segment, the 2 newest active `progress`
   facts (of the newest 12; those on a concept the message names first), each

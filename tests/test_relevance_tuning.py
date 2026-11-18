@@ -229,6 +229,22 @@ def test_session_start_says_where_the_work_stopped(tmp_path, monkeypatch):
     assert "last:" not in call("pre_turn", {"topic": "dove eravamo con neuron?"}), "only at session start"
 
 
+def test_a_handoff_retires_the_previous_one_and_opens_the_next_session(tmp_path, monkeypatch):
+    """2026-11-18: the newest progress facts were the day's small steps; the
+    session opens with the current handoff instead, and only one is current."""
+    g, call = _setup(tmp_path, monkeypatch, {})
+    call("store_turn", {"facts": [{"kind": "progress", "text": "Handoff A: bench pending.", "concepts": ["handoff"]}]})
+    a = next(i for i, f in g.facts.items() if f["text"].startswith("Handoff A"))
+    out = call("store_turn", {"facts": [{"kind": "progress", "text": "Handoff B: bench done, release not ready.",
+                                         "concepts": ["handoff", "release"]}]})
+    b = next(i for i, f in g.facts.items() if f["text"].startswith("Handoff B"))
+    assert g.facts[a]["status"] == "superseded" and f"retires handoff #{a}" in out, out
+    call("store_turn", {"facts": [{"kind": "progress", "text": "Small step after the handoff.", "concepts": ["misc"]}]})
+    last = call("pre_turn", {"topic": "ciao", "profile": True}).split("last: ", 1)[1]
+    assert last.startswith("[progress] Handoff B"), last
+    assert "Small step after the handoff." in last and "Handoff A" not in last, last
+
+
 def test_profile_respects_its_cap_and_is_not_repeated_as_a_fact(tmp_path, monkeypatch):
     g, call = _setup(tmp_path, monkeypatch, {"commit": [1.0, 0.0, 0.0]})
     _node(g, "commit")

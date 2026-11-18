@@ -648,24 +648,32 @@ class Graph:
                 self._index_one(kw, fact)
             report["id"] = fid
         if supersedes:
-            old = self.facts.get(str(supersedes).lstrip("#"))
-            if old and old["status"] == "active" and old["id"] != report["id"]:
-                old["status"] = "superseded"
-                self._fact_status.add(old["id"])
-                # D8: superseded means used — the new version carries the
-                # old one's confirmations, plus this one.
-                self.confirm_fact(report["id"], old.get("confirmed", 0) + 1)
-                # ...and its showings, plus the one this use came from: used/shown stays a rate.
-                self.note_shown(report["id"], old.get("shown", 0) + 1)
-                for kw in old["concepts"]:
-                    self.episodes[kw] = [e for e in self.episodes.get(kw, []) if e["id"] != old["id"]]
-                if not twin:
-                    self.facts[report["id"]]["supersedes"] = old["id"]
-                report["superseded"] = old["id"]
+            if self.retire(str(supersedes).lstrip("#"), report["id"], mark=not twin):
+                report["superseded"] = str(supersedes).lstrip("#")
             else:
                 report["supersedes_unknown"] = str(supersedes)
         self._dirty = True
         return report
+
+    def retire(self, old_id: str, by_id: str, mark: bool = True) -> bool:
+        """Mark the active fact ``old_id`` superseded by ``by_id``. False when
+        there is no such active fact (or it is ``by_id`` itself)."""
+        old = self.facts.get(old_id)
+        if not old or old["status"] != "active" or old_id == by_id or by_id not in self.facts:
+            return False
+        old["status"] = "superseded"
+        self._fact_status.add(old_id)
+        # D8: superseded means used — the new version carries the
+        # old one's confirmations, plus this one.
+        self.confirm_fact(by_id, old.get("confirmed", 0) + 1)
+        # ...and its showings, plus the one this use came from: used/shown stays a rate.
+        self.note_shown(by_id, old.get("shown", 0) + 1)
+        for kw in old["concepts"]:
+            self.episodes[kw] = [e for e in self.episodes.get(kw, []) if e["id"] != old_id]
+        if mark and not self.facts[by_id].get("supersedes"):
+            self.facts[by_id]["supersedes"] = old_id
+        self._dirty = True
+        return True
 
     def _index_one(self, kw: str, fact: dict) -> None:
         eps = self.episodes.setdefault(kw, [])
