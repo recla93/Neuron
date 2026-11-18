@@ -210,6 +210,25 @@ def test_profile_brings_user_and_habit_facts_on_any_message(tmp_path, monkeypatc
     assert "profile:" not in call("pre_turn", {"topic": "carbonara recipe"})
 
 
+def test_session_start_says_where_the_work_stopped(tmp_path, monkeypatch):
+    """Fable's need 2 (2026-11-18): the session's first call carries the newest
+    progress facts, dated; those on a concept the message names come first.
+    Not on later calls, not repeated among the facts."""
+    g, call = _setup(tmp_path, monkeypatch, {})
+    _node(g, "neuron")
+    old = g.add_fact("progress", "Neuron 7 bench done.", ["neuron"], 1)
+    g.add_fact("progress", "mocoder icon fixed.", ["mocoder"], 2)
+    g.add_fact("progress", "mocoder tests green.", ["mocoder"], 3)
+    for i, f in enumerate(sorted(g.facts.values(), key=lambda f: f["turn"])):   # 15/11, 16/11, 17/11
+        f["created_at"] = f"2026-11-1{5 + i}T10:00:00"
+    out = call("pre_turn", {"topic": "dove eravamo con neuron?", "profile": True})
+    last = out.split("last: ", 1)[1]
+    assert last.startswith(f"[progress] Neuron 7 bench done. #{old['id']} (15/11)"), out   # named first, dated
+    assert "mocoder tests green" in last and "mocoder icon" not in last, out              # then the newest; 2 in all
+    assert out.count(f"#{old['id']}") == 1, out
+    assert "last:" not in call("pre_turn", {"topic": "dove eravamo con neuron?"}), "only at session start"
+
+
 def test_profile_respects_its_cap_and_is_not_repeated_as_a_fact(tmp_path, monkeypatch):
     g, call = _setup(tmp_path, monkeypatch, {"commit": [1.0, 0.0, 0.0]})
     _node(g, "commit")

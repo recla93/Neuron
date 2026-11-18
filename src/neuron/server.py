@@ -2092,6 +2092,25 @@ def _dormant_facts(g, near: str, threshold: int, top_n: int, exclude: set) -> st
         f"  [{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}" for f, kw in rows[:top_n]])
 
 
+LAST_STOP_N = 2
+LAST_STOP_WINDOW = 12
+
+
+def _last_stop(g, message: str, exclude=frozenset()) -> list:
+    """Where the work stopped (Fable's need 2, 2026-11-18): the newest active
+    `progress` facts, shown once at session start. Among the newest
+    LAST_STOP_WINDOW, those whose concept the message names come first ("where
+    were we with Neuron?"). On the 6 real session openers, each on its day's
+    memory: the state on 4 of 4 state questions (the recall alone: 0 of 4), at
+    the cost of ~2 unneeded lines on the 2 other openers. ADR-020 D1 had been
+    dropped on bench noise; the bench had no real openers."""
+    recent = sorted((f for f in g.facts.values() if f["status"] == "active" and f["kind"] == "progress"
+                     and f["id"] not in exclude), key=lambda f: f["created_at"], reverse=True)[:LAST_STOP_WINDOW]
+    words = _search._words(message or "")
+    named = [f for f in recent if any(_search._names_whole(c, words) for c in f["concepts"])]
+    return (named + [f for f in recent if f not in named])[:LAST_STOP_N]
+
+
 def _profile_facts(g, cap: int) -> list:
     """Active user/habit facts, as many as fit in `cap` chars: the habits (how
     to work, valid in every turn) first, then the user facts, newest first in
@@ -2520,6 +2539,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _profile = [f for f in (_profile_facts(g_pt, PROFILE_MAX_CHARS) if arguments.get("profile") else [])
                 if f["id"] not in _seen_ids]
     _seen_ids |= {f["id"] for f in _profile}
+    _last = _last_stop(g_pt, _fact_q, _seen_ids) if arguments.get("profile") else []
+    _seen_ids |= {f["id"] for f in _last}
     try:
         _hits = _fact_hits(_fact_q, g_pt, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA,
                            newer=True, exclude=_seen_ids,
@@ -2678,12 +2699,18 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # budget resta quello di sempre ma si applica al contesto, che e' la
     # parte che puo' crescere.
     ctx_out_pt = _fit(ctx_text_pt, char_budget_pt)
+    if _last:      # like the profile: once per session, outside the context budget
+        ctx_out_pt = "last: " + " | ".join(
+            # always its day: "where we stopped" is a question of when
+            f"[{f['kind']}] {fact_shown(f)} #{f['id']} ({f['created_at'][8:10]}/{f['created_at'][5:7]})"
+            for f in _last) + (
+            f" | {ctx_out_pt}" if parts_pt else "")
     if _profile:   # its own cap, outside the context budget: never cut by it
         ctx_out_pt = "profile: " + " | ".join(
             f"[{f['kind']}] {fact_shown(f)} #{f['id']}" for f in _profile) + (
-            f" | {ctx_out_pt}" if parts_pt else "")
+            f" | {ctx_out_pt}" if parts_pt or _last else "")
     out_pt = "\n".join([status_line, *warns_pt,
-                        _as_data(ctx_out_pt) if parts_pt or _profile else ctx_out_pt])
+                        _as_data(ctx_out_pt) if parts_pt or _profile or _last else ctx_out_pt])
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
     # The 🧠 stimulus (live and pre-staged) was parked on 2026-11-14: without a

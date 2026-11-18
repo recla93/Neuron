@@ -1,6 +1,15 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Session start says where the work stopped** (Fable's need 2): the first
+  recall of a session carries a `last:` segment, the 2 newest active `progress`
+  facts (of the newest 12; those on a concept the message names first), each
+  with its day, once, outside the context budget, not repeated among the
+  facts. On the 6 real session openers, each replayed on its day's memory: the
+  state on 4 of 4 state questions ("where were we with Neuron?", "check the
+  state"), 0 of 4 with the recall alone; ~2 unneeded lines (~250 chars, once a
+  session) on the 2 other openers. ADR-020 D1 had been dropped on bench noise:
+  the bench held no real openers.
 - **Typed links between facts** (`fact_links`, append-only like
   `fact_concepts`): `store_turn` takes `link: {type, to}` per fact, with
   `disputes` (it corrects that fact), `solves` and `failed_for` (a solution
