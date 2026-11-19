@@ -27,9 +27,10 @@ the full IDE is not needed. From inside `neuron/vendor/`:
 python -m pip wheel "pyturso==0.8.3" --no-deps --no-binary pyturso -w .
 ```
 
-Any Python >= 3.10 builds the same abi3 wheel. The
-`build-pyturso-win` job in the release workflow rebuilds it on every tag push and
-attaches it to the Release.
+Any Python >= 3.10 builds the same abi3 wheel. The release workflow
+(`release-neuron.yml`) attaches THIS file to the Release; it no longer compiles
+one (2026-11-19: a newer rustc on the runner stopped compiling turso_core 0.8.3).
+Pin a Rust version that works if a local build fails the same way.
 
-When you bump the `pyturso` pin, change it in **both** `pyproject.toml`
-(the `pyturso==` pin) and the `build-pyturso-win` job in `release.yml`, then rebuild.
+When you bump the `pyturso` pin in `pyproject.toml`, rebuild the wheel here and
+commit it with the pin: the release fails when the two disagree.
