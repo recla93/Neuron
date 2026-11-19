@@ -1,6 +1,15 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Concepts named in the same turn are no longer tied for good.** Their link
+  is born tangential: it expires after a few turns in which neither concept is
+  used, and becomes medium only when the pair comes back together. They were
+  2131 of 2233 links, mostly never repeated, and Neuron rendered them inside
+  the recall budget that the hook then dropped: a replay of 1359 real messages
+  without them lost no fact and gained 13, shown in full. The three recall
+  benches keep every number, with 4-6% fewer characters. The 1464
+  never-repeated links of the live memory were removed once, through Neuron's
+  own save path with the daemon stopped.
 - **A handoff opens the next session.** A `progress` fact on the concept
   `handoff` (written at the end of a block of work, playbook rule) retires the
   previous active handoffs, so one is current, and takes the first slot of

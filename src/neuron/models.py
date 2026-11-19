@@ -880,12 +880,16 @@ class Graph:
         0 links. Then a query landing on `focus` never reached `primeng`, stored
         in the same turn and carrying the fact.
 
-        Medium, not tangential: tangential links expire after a few idle turns,
-        which would undo exactly the bug-solved-once case; and store_turn
-        already promotes a same-domain tangential link to medium — keywords of
-        one turn share their domain. No salience bonus: being named together is
-        paid by the mention itself. Repeats grow stronger through
-        `reinforce_coactivation`. Returns how many links were added."""
+        Tangential (2026-11-19, medium before): a pair named together once is
+        a coincidence, not a link. It expires after TANGENTIAL_EXPIRY_TURNS
+        turns in which neither concept is used, and `reinforce_coactivation`
+        promotes it to medium when the pair comes back together. Recall finds
+        facts directly since ADR-015, so the node walk this was written for no
+        longer needs every pair; and the links were 2131 of 2233, rendered
+        inside the recall budget and dropped by the hook: a replay of 1359 real
+        messages without them lost no fact and gained 13, shown in full. No
+        salience bonus: being named together is paid by the mention itself.
+        Returns how many links were added."""
         kws = []
         for k in keywords:
             n = self._norm(k)
@@ -898,7 +902,7 @@ class Graph:
                 if frozenset((a, b)) in linked:
                     continue
                 self.add_link(Link(source=a, target=b, link_type="deepening",
-                                   weight="medium", rationale="same turn",
+                                   weight="tangential", rationale="same turn",
                                    created_turn=turn, last_active_turn=turn))
                 linked.add(frozenset((a, b)))
                 added += 1

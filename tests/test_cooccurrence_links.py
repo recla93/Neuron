@@ -32,15 +32,28 @@ def test_every_pair_once_and_an_existing_link_wins():
     pairs = {frozenset((lk.source, lk.target)) for lk in g.links}
     assert len(pairs) == len(g.links) == 6, "una coppia, un link"
     new = [lk for lk in g.links if lk.rationale == "same turn"]
-    assert all((lk.weight, lk.link_type) == ("medium", "deepening") for lk in new)
+    assert all((lk.weight, lk.link_type) == ("tangential", "deepening") for lk in new)
     assert g.link_cooccurring(["primeng", "focus"], turn=2) == 0
 
 
-def test_a_same_turn_link_survives_idle_turns():
-    """Tangential would expire after a few idle turns — the bug solved once,
-    and asked about months later, is exactly the case this exists for."""
+def test_a_same_turn_pair_named_once_expires():
+    """2026-11-19: once is a coincidence. 2131 of 2233 live links were same-turn,
+    1453 never repeated, and they filled the recall budget the facts needed."""
     g = _graph("primeng", "focus")
     g.link_cooccurring(["primeng", "focus"], turn=1)
+    for _ in range(50):
+        g.turn_count += 1
+        g.increment_inactivity(set())
+    g.prune_tangential()
+    assert g.links == []
+
+
+def test_a_same_turn_pair_that_comes_back_stays():
+    g = _graph("primeng", "focus")
+    g.link_cooccurring(["primeng", "focus"], turn=1)
+    for turn in (1, 3, 5):                      # the cooldown counts one every 2 turns
+        g.reinforce_coactivation(["primeng", "focus"], turn=turn)
+    assert g.links[0].weight == "medium"
     for _ in range(50):
         g.turn_count += 1
         g.increment_inactivity(set())
