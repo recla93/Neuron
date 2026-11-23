@@ -99,7 +99,7 @@ def fact_shown(f: dict) -> str:
     return f"{f['gist']} +" if f.get("gist") and f.get("kind") != "procedure" else f["text"]
 
 
-# Fable's need 5 (PLAN-2026-11-16): a fact with no date reads as true today. A
+# Fable's need 5 (work/history/PLAN-2026-11-16): a fact with no date reads as true today. A
 # recalled fact older than this many days shows its day after its id, unless
 # what is shown already opens with a date (about half of the live facts do).
 FACT_DATE_DAYS = _env_int("NEURON_FACT_DATE_DAYS", 2)
