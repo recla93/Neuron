@@ -2,8 +2,8 @@
 //
 // Two jobs, every turn: the handshake in the system prompt (independent of
 // whether the host surfaces the MCP `instructions` field), and the memory loop
-// Claude Code gets from its hooks -- recall before the answer, a save check
-// after it (gray_matter/memhook.py, which this plugin runs).
+// Claude Code gets from its hooks -- recall before the answer, a recall on a
+// failed tool, a save check after it (gray_matter/memhook.py, which this plugin runs).
 //
 // SHAPE (measured on OpenCode 2.2.6, 2026-11-10): ONE default export serving
 // both plugin APIs, as @dietrichgebert/ponytail does. V2 calls `setup(ctx)`
@@ -181,17 +181,31 @@ function runMemhook(python, mode, payload, ms = 4000) {
 // the event stream, read by the context hook and at the end of the turn.
 function memoryLoop(python) {
   const turns = new Map();
-  const turn = (sid) => turns.get(sid) || turns.set(sid, { prompt: "", recall: null, steps: 0, chars: 0 }).get(sid);
+  const turn = (sid) => turns.get(sid) || turns.set(sid, { prompt: "", recall: null, steps: 0, chars: 0, calls: new Map(), failures: [] }).get(sid);
   return {
     message(sid, text) {
       const t = turn(sid);
-      Object.assign(t, { prompt: text || "", steps: 0, chars: 0, recall: null });
+      Object.assign(t, { prompt: text || "", steps: 0, chars: 0, recall: null, calls: new Map(), failures: [] });
       // The memhook also tells the daemon an ack needs no save check.
       t.recall = runMemhook(python, "recall", { prompt: t.prompt, session_id: sid });
     },
     step(sid) { turn(sid).steps++; },
     text(sid, s) { turn(sid).chars += (s || "").length; },
-    async recalled(sid) { return (await turns.get(sid)?.recall) || ""; },
+    // P3.11: a failed tool gets its own recall, shown on the NEXT model call of
+    // the same turn -- the 402 of 2026-11-17 waited for the next user message.
+    called(sid, id, name, input) { turn(sid).calls.set(id, { name: name || "", input: input || {} }); },
+    failed(sid, id, error) {
+      const t = turn(sid), c = t.calls.get(id) || { name: "", input: {} };
+      t.failures.push(runMemhook(python, "failure", {
+        session_id: sid, tool_name: c.name, tool_input: c.input,
+        error: typeof error === "string" ? error : error?.message || "" }));
+    },
+    async recalled(sid) {
+      const t = turns.get(sid);
+      if (!t) return "";
+      const fails = (await Promise.all(t.failures.splice(0))).filter(Boolean);
+      return [(await t.recall) || "", ...fails].filter(Boolean).join("\n\n");
+    },
     // The reminder to send, or "": the daemon saw every store_turn of the turn.
     async ended(sid) {
       const t = turns.get(sid);
@@ -253,6 +267,8 @@ export default {
         if (e?.type === "session.inbox.enqueued" && d.item?.type === "user") loop.message(d.sessionID, d.item.payload?.text);
         else if (e?.type === "session.step.started") loop.step(d.sessionID);
         else if (e?.type === "session.text.ended") loop.text(d.sessionID, d.text);
+        else if (e?.type === "session.tool.called") loop.called(d.sessionID, d.id, d.name ?? d.tool, d.input);
+        else if (e?.type === "session.tool.failed") loop.failed(d.sessionID, d.id, d.error);
         else if (e?.type === "session.execution.succeeded") {
           const reason = await loop.ended(d.sessionID);
           if (reason) await ctx.session.prompt({ sessionID: d.sessionID, text: reason });

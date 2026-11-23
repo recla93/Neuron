@@ -1,6 +1,10 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **The OpenCode plugin recalls on a failed tool.** On `session.tool.failed` it
+  runs Gray Matter's `memhook failure` with the tool, its input and the error,
+  and adds what comes back to the next model call of the same turn, once (see
+  Gray Matter's changelog, P3.11).
 - **Concepts named in the same turn are no longer tied for good.** Their link
   is born tangential: it expires after a few turns in which neither concept is
   used, and becomes medium only when the pair comes back together. They were
