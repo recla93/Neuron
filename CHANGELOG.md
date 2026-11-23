@@ -1,6 +1,13 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **The bench counts procedures shown where none is needed.** A set may carry
+  `quiet`: real messages that need no procedure; `run.py` reports how many
+  procedures they get. On the blind set of 2026-11-23 (141 real messages,
+  labelled by a separate model): 71% of the expected procedures found on the
+  bench memory; on a copy of the real memory, once the gate, commit and
+  recall-measure procedures were stored there too, 6 of 10 found and 10 of 132
+  quiet messages get one (ADR-022).
 - **`INSTALL-AI.md` makes an AI agent ask first**: Neuron + GM or Neuron
   alone, and the embedding model, then the matching non-interactive command.
   Inside the umbrella repo it sends the agent to Gray Matter's, which covers

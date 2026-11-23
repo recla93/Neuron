@@ -21,6 +21,7 @@ What it reports, per mode:
   full      messages with every expected fact
   noise     facts shown that the message did not expect, per message
   off_topic facts shown on the off-topic messages (should be 0)
+  quiet     procedures shown on real messages that need none (sets with `quiet`)
   chars     answer length per message: what each recall costs in context
 
 Runs on the real embedder, in a throwaway graph directory: never touches the
@@ -167,6 +168,17 @@ async def run_mode(mode: str, data: dict) -> dict:
         off_flash += bool(fl)
         rows.append({"id": o["id"], "found": [], "missed": [], "noise": sorted(got),
                      "flash": fl, **doubt(S, g, qa), "answer": ans})
+    # Real messages that need no procedure: the common case. A procedure shown
+    # there is pure cost, and off_topic (invented messages) cannot see it.
+    procs = {f["id"] for f in facts if f["kind"] == "procedure"}
+    quiet = 0
+    for o in data.get("quiet", []):
+        qa = await _query_args(S, mode, o["text"])
+        ans = await _call(S, "pre_turn", qa)
+        got = shown(ans, facts) & procs
+        quiet += len(got)
+        rows.append({"id": o["id"], "found": [], "missed": [], "noise": sorted(got),
+                     "flash": "", **doubt(S, g, qa), "answer": ans})
     n = len(data["messages"])
     on = rows[:n]
     miss = [r for r in on if r["missed"]]
@@ -176,6 +188,7 @@ async def run_mode(mode: str, data: dict) -> dict:
             "recall": round(found / expected, 3), "found": found, "expected": expected,
             "full": full, "messages": n, "noise": round(noise / n, 2),
             "off_topic": off, "chars": round(chars / n),
+            "quiet": len(data.get("quiet", [])), "quiet_procs": quiet,
             "flashes": flashes, "off_topic_flashes": off_flash,
             "doubt_auc": doubt_auc, "doubt_groups": [len(miss), len(full_rows)], "rows": rows}
 
@@ -199,7 +212,8 @@ def main() -> int:
               f"recall {r['recall']:.0%} ({r['found']}/{r['expected']})  "
               f"full {r['full']}/{r['messages']}  noise {r['noise']}/msg  "
               f"off_topic {r['off_topic']}  chars {r['chars']}/msg  "
-              f"flash {r['flashes']}/{r['messages']} (off-topic {r['off_topic_flashes']})")
+              f"flash {r['flashes']}/{r['messages']} (off-topic {r['off_topic_flashes']})"
+              + (f"  quiet: {r['quiet_procs']} procedures on {r['quiet']} msgs" if r["quiet"] else ""))
         print(f"   doubt AUC (missed {r['doubt_groups'][0]} vs complete {r['doubt_groups'][1]}): "
               f"top1 {r['doubt_auc']['top1']}  margin {r['doubt_auc']['margin']}  (0.5 = no signal)")
         for row in r["rows"]:
