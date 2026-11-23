@@ -1,6 +1,14 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **`INSTALL-AI.md` makes an AI agent ask first**: Neuron + GM or Neuron
+  alone, and the embedding model, then the matching non-interactive command.
+  Inside the umbrella repo it sends the agent to Gray Matter's, which covers
+  the whole suite.
+- **`install.ps1` no longer dies under an AI agent.** Its prompts ran
+  `Read-Host` whenever the session was interactive, which an agent's
+  `-NonInteractive` PowerShell is: the prompt threw and ended the install.
+  Same fix as Gray Matter's installer (`Test-CanPrompt`, `Read-Answer`).
 - **The OpenCode plugin recalls on a failed tool.** On `session.tool.failed` it
   runs Gray Matter's `memhook failure` with the tool, its input and the error,
   and adds what comes back to the next model call of the same turn, once (see

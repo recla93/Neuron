@@ -77,7 +77,21 @@ if ($env:GM_OPTIN -eq "0") { $WantGm = $false; $Mode = "standalone" }
 # GM_YES compared to "1", never truthiness-tested: in PowerShell the string "0"
 # is TRUE, so `-not $env:GM_YES` silenced the prompts for whoever set GM_YES=0
 # to ask for them (the sh side reads `[ "${GM_YES:-0}" = "1" ]`).
-$Ask = ([Environment]::UserInteractive -and -not $Force -and ($env:GM_YES -ne "1") -and ($args -notcontains "-Yes"))
+# Test-CanPrompt is the floor under GM_YES: an AI agent's PowerShell runs
+# -NonInteractive (Read-Host throws, and EAP=Stop ends the install) or with
+# stdin redirected (Read-Host reads EOF or hangs). Neither shows in
+# UserInteractive. Same function in gray_matter/ and neurag/install.ps1.
+function Test-CanPrompt {
+    if ([Console]::IsInputRedirected) { return $false }
+    if ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' }) { return $false }
+    return [Environment]::UserInteractive
+}
+# A console-less GUI launch (CreateNoWindow) still gets past Test-CanPrompt and
+# Read-Host throws there: "" is every prompt's default answer.
+function Read-Answer([string]$Prompt) {
+    try { return (Read-Host $Prompt) } catch { return "" }
+}
+$Ask = ((Test-CanPrompt) -and -not $Force -and ($env:GM_YES -ne "1") -and ($args -notcontains "-Yes"))
 
 # Mode selector: click-and-go (Enter = full suite) or explicit --no-gm.
 # Only shows in interactive sessions; non-interactive defaults to gateway.
@@ -92,7 +106,7 @@ function Read-NeuronOnlyMode {
     Write-Host "    [S] Full standalone — Neuron alone, own venv, registers itself in the clients"
     Write-Host "    [G] Get Gray Matter — download GM next to Neuron, then install orchestrated"
     Write-Host ""
-    $a = Read-Host "  Choice [S]"
+    $a = Read-Answer "  Choice [S]"
     return ($a -match '^(g|gm|get|gray|graymatter|gray-matter|orchestrated)$')
 }
 if ($WantGm -and $Ask) {
@@ -101,7 +115,7 @@ if ($WantGm -and $Ask) {
     Write-Host "    [N] Neuron only — standalone, or with GM fetched for you"
     Write-Host "    [D] Details — what you lose without GM"
     Write-Host ""
-    $ans = Read-Host "  Choice [F]"
+    $ans = Read-Answer "  Choice [F]"
     switch -Regex ($ans) {
         '^(n|no|standalone)$' {
             if (Read-NeuronOnlyMode) { $Mode = "gateway" }   # [G]: keep $WantGm, fall through
@@ -119,7 +133,7 @@ if ($WantGm -and $Ask) {
 
             Write-Host ""
 
-            $ans2 = Read-Host "  Install Full suite? [Y/n]"
+            $ans2 = Read-Answer "  Install Full suite? [Y/n]"
 
             if ($ans2 -match '^(n|no)$') {
                 if (Read-NeuronOnlyMode) { $Mode = "gateway" }   # [G]: keep $WantGm, fall through
@@ -245,7 +259,7 @@ function Select-EmbedModel {
     }
     Write-Host ""
     Write-Host "  Changing this later requires re-embedding the whole store."
-    $a = Read-Host "  Choice [1]"
+    $a = Read-Answer "  Choice [1]"
     if ($a -match '^[1-9][0-9]*$' -and [int]$a -le $EmbedModels.Count) { return $EmbedModels[[int]$a - 1] }
     return $EmbedModels[0]
 }
