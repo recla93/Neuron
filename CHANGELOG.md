@@ -1,6 +1,12 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **The `merge` tool moves the facts too.** It rewired links only: the facts of
+  the absorbed concept stayed indexed under a deleted name, and its topic, tags
+  and file references were lost; a node merged with itself was deleted. The tool
+  and `consolidate` now share one merge, which keeps all of them, and the
+  absorbed concept goes to the graveyard. A canonical that does not exist yet
+  makes it a rename.
 - **A concept with no link gets one from its facts.** After each `store_turn`,
   a concept with no link is linked to the concept it shares the most active
   facts with: on the live graph 345 isolated concepts became 148, the rest

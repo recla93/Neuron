@@ -1023,7 +1023,7 @@ def _all_tools() -> list[Tool]:
             name="merge",
             description=(
                 "Merge duplicate or near-duplicate nodes. "
-                "Moves all links from `aliases` into `canonical`, sums salience, then deletes the aliases. "
+                "Moves links, facts and references from `aliases` into `canonical`, sums salience, then deletes the aliases. "
                 "Use after find_candidates reveals near-duplicates (e.g. 'spring boot' / 'Spring Boot' / 'Spring Boot 3.2')."
             ),
             inputSchema={
@@ -2866,34 +2866,13 @@ async def _tool_merge(arguments: dict, ctx: str, g) -> list[TextContent]:
     merged, missing = [], []
     for alias in aliases:
         alias_nd = g.get_node(alias)
+        if alias_nd is canon_nd:   # merged with itself, it would be deleted
+            continue
         if not alias_nd:
             missing.append(alias)
             continue
-        # Transfer salience (+ trust, B2)
-        canon_nd.salience += alias_nd.salience
-        canon_nd.trust = max(canon_nd.trust, alias_nd.trust)
-        # Rewire all links that reference this alias
-        for lk in g.links:
-            if lk.source == alias:
-                lk.source = canonical
-            if lk.target == alias:
-                lk.target = canonical
-        # Remove self-loops
-        g.links = [lk for lk in g.links if lk.source != lk.target]
-        # Remove alias node
-        g.nodes = [nd for nd in g.nodes if nd.keyword != alias]
-        g._rebuild_node_map()
+        g._merge_into(canon_nd, alias_nd, None, g.turn_count, [])
         merged.append(alias)
-
-    # Re-dedup links after rewiring
-    seen: set[tuple] = set()
-    unique_links = []
-    for lk in g.links:
-        key = (lk.source, lk.target, lk.link_type)
-        if key not in seen:
-            seen.add(key)
-            unique_links.append(lk)
-    g.links = unique_links
 
     if merged:
         # merge rewrites node/link identity in bulk (rewired sources/targets,

@@ -1385,10 +1385,16 @@ class Graph:
             self.mark_full_rewrite()
         return report
 
-    def _merge_into(self, survivor: Node, absorbed: Node, sim: float,
+    def _merge_into(self, survivor: Node, absorbed: Node, sim: "float | None",
                     turn: int, report: list[dict]) -> None:
+        """The one merge: consolidate and the `merge` tool (``sim`` None) both end here."""
+        from neuron.project import merge_refs
         survivor.salience += absorbed.salience
         survivor.trust = max(survivor.trust, absorbed.trust)
+        survivor.topic = survivor.topic or absorbed.topic
+        survivor.tags = list(dict.fromkeys((survivor.tags or []) + (absorbed.tags or [])))
+        survivor.entities = list(dict.fromkeys((survivor.entities or []) + (absorbed.entities or [])))
+        survivor.references = merge_refs(survivor.references, absorbed.references)
         a, s = absorbed.keyword, survivor.keyword
         for lk in self.links:
             if lk.source == a:
@@ -1409,12 +1415,13 @@ class Graph:
         self._move_concept(a, s)   # the absorbed node's facts follow it (until 6.9 they were deleted)
         self._graveyard.append({
             "keyword": a, "salience": absorbed.salience, "domain": absorbed.domain,
-            "reason": f"merged into {s} (cos={round(sim, 3)})", "turn": turn,
+            "reason": f"merged into {s}" + ("" if sim is None else f" (cos={round(sim, 3)})"),
+            "turn": turn,
         })
         self.nodes = [n for n in self.nodes if n.keyword != a]
         self._rebuild_node_map()
         self.mark_node_dirty(s)
-        report.append({"kept": s, "absorbed": a, "cos": round(sim, 3)})
+        report.append({"kept": s, "absorbed": a, "cos": None if sim is None else round(sim, 3)})
 
     def _drop_orphans(self, orphan_salience: int, inactive_turns: int,
                       turn: int, report: list[dict],

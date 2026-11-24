@@ -351,6 +351,51 @@ def test_merge_absorbs_alias():
         srv._g = old_g
 
 
+def test_merge_keeps_what_the_alias_carried(tmp_path, monkeypatch):
+    """2026-11-24: the tool rewired links only. The alias's facts stayed indexed
+    under a deleted name, and its topic, tags and file references were lost.
+    A canonical that does not exist is a rename."""
+    pytest.importorskip("mcp")
+    import asyncio
+    import neuron.server as srv
+    from neuron.registry import GraphRegistry
+
+    monkeypatch.setattr(srv, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
+    call = lambda tool, args: asyncio.run(srv.call_tool(tool, args))[0].text
+    call("store_turn", {"topic": "cables", "facts": [
+        {"kind": "fact", "text": "Copper wire carries the signal.", "concepts": ["segnale", "copper"]}]})
+    nd = srv._g.get().get_node("segnale")
+    nd.tags, nd.references = ["hw"], [{"path": "cables.md", "project_id": "", "by": ""}]
+    srv._g.get().mark_node_dirty("segnale")
+    call("merge", {"canonical": "signal", "aliases": ["segnale"]})
+
+    monkeypatch.setattr(srv, "_g", GraphRegistry(graphs_dir=str(tmp_path)))   # as saved
+    g = srv._g.get()
+    (fact,) = g.facts.values()
+    assert sorted(fact["concepts"]) == ["copper", "signal"]
+    assert "segnale" not in g.episodes and len(g.episodes["signal"]) == 1
+    nd = g.get_node("signal")
+    assert nd.topic and nd.tags == ["hw"]
+    assert [r["path"] for r in nd.references] == ["cables.md"]
+    assert g.get_node("segnale") is None
+
+
+def test_merge_of_a_node_with_itself_keeps_it():
+    pytest.importorskip("mcp")
+    import asyncio
+    import neuron.server as srv
+
+    g = _make_graph_with_data()
+    kw, sal = g.nodes[0].keyword, g.nodes[0].salience
+    old_g = srv._g
+    srv._g = _make_registry_with({"default": g}, "default")
+    try:
+        asyncio.run(srv.call_tool("merge", {"canonical": kw, "aliases": [kw]}))
+        assert g.get_node(kw) is not None and g.get_node(kw).salience == sal
+    finally:
+        srv._g = old_g
+
+
 # ---------------------------------------------------------------------------
 # pre_turn -- composite output
 # ---------------------------------------------------------------------------
