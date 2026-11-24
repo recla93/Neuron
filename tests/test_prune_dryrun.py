@@ -10,16 +10,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 def _graph():
     from neuron.models import Graph, Node, Link
     g = Graph(); g.turn_count = 30
-    for kw in ("a", "b"):
+    for kw in ("a", "b", "c"):
         g.add_node(Node(keyword=kw, turn=1, topic="t", domain="d", sentiment="neutral"))
     g.add_link(Link("a", "b", "deepening", "tangential", "", 1, 1, inactive_turns=99))
+    # a and b keep a link through c: a-b is not anyone's last link, so it expires.
+    g.add_link(Link("a", "c", "deepening", "strong", "", 1, 1))
+    g.add_link(Link("b", "c", "deepening", "strong", "", 1, 1))
     return g
 
 
 def test_expired_tangential_is_readonly():
     g = _graph()
     assert len(g.expired_tangential()) == 1
-    assert len(g.links) == 1               # untouched
+    assert len(g.links) == 3               # untouched
 
 
 def test_tool_prune_dry_run():
@@ -38,4 +41,4 @@ def test_tool_prune_dry_run():
         srv._g = old
     data = json.loads(out[0].text)
     assert data["dry_run"] is True and data["would_prune"] == 1
-    assert len(g.links) == 1 and not calls   # niente mutazione, niente save
+    assert len(g.links) == 3 and not calls   # niente mutazione, niente save

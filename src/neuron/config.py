@@ -166,8 +166,8 @@ def set_user_env(**values: str) -> str:
 KNOBS = {
     "max_nodes": (
         "NEURON_MAX_NODES", 1000, 100, 5000,
-        "Concetti per grafo prima che il meno saliente vada in archivio "
-        "(recuperabile con recall). Più alto = si dimentica meno, ma ogni concetto "
+        "Concetti per grafo prima che il meno saliente venga cancellato, con i "
+        "suoi link (i fatti restano). Più alto = si dimentica meno, ma ogni concetto "
         "nuovo costa di più: circa 15 ms a 1000, 0,3 s e 100 MB a 5000. "
         "Vale dal prossimo avvio del server."),
 }

@@ -1,6 +1,13 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **A concept's last link never expires.** Same-turn links are tangential and
+  expired after 5 idle turns: on the live graph 344 of 1000 concepts had no
+  link at all, out of the graph walk. An expired link now goes only while both
+  its ends keep another one (drift links aside).
+- **The `max_nodes` help text no longer promises an archive.** A concept
+  evicted at the cap is deleted with its links (its facts stay); the
+  graveyard only keeps keyword and salience.
 - **"Full suite" in the mode selector is GM + Neuron** (see Gray Matter's
   changelog): NeuRAG is an add-on, `GM_WITH_NEURAG=1` adds it.
 - **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`**

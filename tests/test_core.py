@@ -144,10 +144,13 @@ class TestGraphLinks:
         g.add_link(Link(source="A", target="C", link_type="analogy", weight="tangential",
                         rationale="r", created_turn=1, last_active_turn=1,
                         inactive_turns=TANGENTIAL_EXPIRY_TURNS + 1))
+        # C keeps another link, so A-C is not its last one and may expire.
+        g.add_link(Link(source="C", target="B", link_type="deepening", weight="strong",
+                        rationale="r", created_turn=1, last_active_turn=1))
         removed = g.prune_tangential()
         assert removed == 1
-        assert len(g.links) == 1
-        assert g.links[0].weight == "strong"
+        assert len(g.links) == 2
+        assert all(lk.weight == "strong" for lk in g.links)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

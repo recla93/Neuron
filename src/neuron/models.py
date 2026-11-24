@@ -1068,13 +1068,29 @@ class Graph:
     # ------------------------------------------------------------------
 
     def expired_tangential(self) -> list:
-        """Links che prune_tangential rimuoverebbe ORA (read-only — F4 dry_run)."""
+        """Links che prune_tangential rimuoverebbe ORA (read-only — F4 dry_run).
+
+        A node's LAST link never expires (2026-11-24): expiry left 344 of 1000
+        concepts with no link at all, and a concept with no link is out of the
+        graph walk. An expired link goes only while both its ends keep another
+        one. Drift links (cross-context) are neither protected nor counted."""
+        degree: dict = {}
+        for lk in self.links:
+            if lk.link_type != "drift":
+                for end in (lk.source, lk.target):
+                    degree[end] = degree.get(end, 0) + 1
         out = []
         for lk in self.links:
             # Drift links are the noisiest, so they expire faster (E3.1).
             expiry = DRIFT_EXPIRY_TURNS if lk.link_type == "drift" else TANGENTIAL_EXPIRY_TURNS
-            if lk.weight == "tangential" and lk.inactive_turns > expiry:
-                out.append(lk)
+            if not (lk.weight == "tangential" and lk.inactive_turns > expiry):
+                continue
+            if lk.link_type != "drift":
+                if degree.get(lk.source, 0) < 2 or degree.get(lk.target, 0) < 2:
+                    continue
+                degree[lk.source] -= 1
+                degree[lk.target] -= 1
+            out.append(lk)
         return out
 
     def prune_tangential(self) -> int:
