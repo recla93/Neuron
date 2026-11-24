@@ -1,0 +1,578 @@
+{
+ "version": 1,
+ "adr": "work/history/PLAN-2026-11-16.md, Fable's need 1",
+ "what": "Rejected ideas proposed again in other words. facts: the 30 live facts about rejected or parked ideas (2026-11-24), as stored, in English. messages: for 12 of them, one Italian and one English proposal written without the fact's words. A good recall brings the fact that says the idea was already tried.",
+ "rules": {
+  "messages": "A paraphrase as someone re-proposing the idea would say it, never the fact's keywords."
+ },
+ "facts": [
+  {
+   "id": "16e032b1",
+   "kind": "decision",
+   "concepts": [
+    "thompson sampling",
+    "value-based recall"
+   ],
+   "text": "User parked ADR-021's per-fact Beta posterior and Thompson exploration on 2026-11-17 (useful later); only the use-bonus experiment and the savings line go on.",
+   "gist": "ADR-021 D2/D4 parked by user 2026-11-17; bonus experiment + D5 only"
+  },
+  {
+   "id": "2e5cab2c",
+   "kind": "idea",
+   "concepts": [
+    "bugs",
+    "mocoder",
+    "polish"
+   ],
+   "text": "mocoder audit findings: solution.yaml.*.bak backups leak into student git (gitignore matches only exact solution.yaml); panel claims 'saved to git' even when commit fails (e.g. missing git identity); no timeout/cancel on hung AI calls; Ctrl+Enter while thinking drops the question; failed question stays orphaned in chat.",
+   "gist": "mocoder audit: *.bak leak to git; no AI timeout/cancel; Ctrl+Enter during thinking drops Q"
+  },
+  {
+   "id": "2f3305c1",
+   "kind": "fact",
+   "concepts": [
+    "brainstorm",
+    "focus mode",
+    "usage"
+   ],
+   "text": "14/11 brainstorm usage check: across 53 Claude Code sessions it was called on one real problem (GUI 'Failed to fetch', 2 transcripts), answered 2k chars of old document-name nodes with zero fact ids, and nothing from it was used; the fix came from elsewhere. Focus mode was never active (blackboard has 0 keys).",
+   "gist": "fact: brainstorm used once in 53 Claude Code sessions on 1 problem, 2k chars 0 fact ids, unused"
+  },
+  {
+   "id": "4224f23c",
+   "kind": "decision",
+   "concepts": [
+    "chunk",
+    "knowledge_query",
+    "measurement",
+    "neurag",
+    "section"
+   ],
+   "text": "NeuRAG whole-section return was measured and rejected on 2026-11-15: on 14 detail questions over the real KB copy, answer-in-view stayed 8/14 with section windows (3.7-5.7k chars/query) versus 8/14 for the plain whole chunk (1.4k); knowledge_query now shows the whole chunk instead of 200 chars (was 6/14).",
+   "gist": "neurag: whole section rejected (no gain, 3-4x chars); knowledge_query shows full chunk, answer 6->8/14"
+  },
+  {
+   "id": "495ec6ce",
+   "kind": "decision",
+   "concepts": [
+    "notes",
+    "procedure",
+    "recall"
+   ],
+   "text": "Linking procedures via #id notes does not work: recall shows a note only as the citing fact's id (↳#id), not its text, so release would bring a pointer, not the gate steps; options are self-contained procedures (zero code) or inlining a cited procedure (code).",
+   "gist": "tried: #id notes to chain procedures -> only ↳#id shown, no text; use self-contained procedures"
+  },
+  {
+   "id": "515ac56c",
+   "kind": "fact",
+   "concepts": [
+    "neurag",
+    "parking",
+    "ranking",
+    "threshold"
+   ],
+   "text": "NeuRAG detail-bench misses (2026-11-15) are mostly not ranking: 3 of 6 target parked layer-3 docs in work/history (28% of real KB chunks) that default search never scans, and 1 was fused rank 1 but dropped by _cut_irrelevant at cos 0.347 vs CUT_COS 0.35; only 1 is a true ranking miss.",
+   "gist": "neurag misses: 3 parked L3 history, 1 cut at cos .347<.35, 1 true ranking miss"
+  },
+  {
+   "id": "52b6788a",
+   "kind": "decision",
+   "concepts": [
+    "core",
+    "dead code",
+    "parking document"
+   ],
+   "text": "14/11 model-dependent or unproven features go into one parking document (what, why parked, what model or data it needs, return condition, commit to restore from) and leave the code; commented-out code was rejected because it rots untested and costs readers and LLMs tokens. Focus is now the core of each tool working perfectly.",
+   "gist": "decision: park unproven features in one doc, keep code; no commented-out (rots). Focus: tool cores."
+  },
+  {
+   "id": "55418c19",
+   "kind": "decision",
+   "concepts": [
+    "haiku test",
+    "languages",
+    "memory injection"
+   ],
+   "text": "tried: a reply-language clause in the recalled-memory frame; Haiku replies to 6 real Italian messages stayed Italian 24/24 with and without it, in short and in ~12k-char English contexts, so it was reverted (2026-11-17); the observed drift came from the assistant's own long English work, not the memory frame.",
+   "gist": "tried: language clause in memory frame -> 24/24 IT both arms, reverted"
+  },
+  {
+   "id": "59c53815",
+   "kind": "fact",
+   "concepts": [
+    "ci",
+    "pyturso",
+    "standalone"
+   ],
+   "text": "CI after the 19/11 push of 0b7c323: CI and Mirror passed, Standalone failed because pyturso was built from source on the Windows runner and turso_core did not compile (rustc E0308), an upstream build failure rather than our code.",
+   "gist": "CI 0b7c323: CI+Mirror ok; Standalone FAIL = pyturso source build E0308 (upstream)"
+  },
+  {
+   "id": "5b0e7b91",
+   "kind": "fact",
+   "concepts": [
+    "concept links",
+    "graph hygiene",
+    "same turn"
+   ],
+   "text": "Same-turn concept links on 19/11: 2131 of 2233 links in backend (95%), 1453 never co-activated again; the cause they were blamed for (off-topic 🧠 stimuli) is gone since the stimulus was parked on 14/11, the flash picks facts, and the Claude Code hook already trims links:/nodes:; they still reach the pre_turn tool answer of hook-less clients, node selection, pulse, brainstorm and the GUI graph; a replay against a copy with all of them removed is running.",
+   "gist": "same-turn links 2131/2233, 1453 never reused; stimulus cause gone; replay without them running"
+  },
+  {
+   "id": "5f180a4a",
+   "kind": "decision",
+   "concepts": [
+    "archive",
+    "knowledge_query",
+    "neurag",
+    "threshold"
+   ],
+   "text": "NeuRAG knowledge_query now appends archived (parked) chunks that rank 1st-2nd in a whole-vault search, marked [archive], after unchanged active results; a 'few or weak results' fallback and a lower irrelevance cut were measured and rejected because no score separates archive questions from off-topic ones (2026-11-15).",
+   "gist": "neurag: append archive rows ranking top-2 deep; weak-fallback and lower cut rejected (no separating score)"
+  },
+  {
+   "id": "623ae645",
+   "kind": "idea",
+   "concepts": [
+    "nothing found",
+    "parking",
+    "reminder"
+   ],
+   "text": "Deferred on 2026-11-17, to revisit: an explicit 'facts: none above 0.40 (best x)' line when no fact clears the recall floor (Fable's need 4); baseline and return condition are in work/design/PARCHEGGIO.md 'Measured, not built yet' and in PIANO-EVOLUTIVO; the user asked to be reminded because they will forget it.",
+   "gist": "reminder: 'nothing on this' line parked (PARCHEGGIO.md); user asked to be reminded"
+  },
+  {
+   "id": "63651f4e",
+   "kind": "decision",
+   "concepts": [
+    "habit",
+    "profilo",
+    "replay"
+   ],
+   "text": "tried 2026-11-17: moving task-tied rules out of the profile and relying on recall when the task is named fails on 209 real messages (commit rule 1/13, release rule 6/16, other-session 2/4, dependents 0/4) because progress facts on the same concept win; rules stay in the profile, now ordered habits first with gists, which fits 9 facts instead of 6 including all six habits.",
+   "gist": "tried: task rules out of profile -> recalled 1/13 commit, 6/16 release; keep in profile, habits first + gists = 9 facts"
+  },
+  {
+   "id": "6d711a4c",
+   "kind": "decision",
+   "concepts": [
+    "bench",
+    "doubt",
+    "measurement"
+   ],
+   "text": "Doubt layer parked: not added as a recall filter because K=2 beats it; its possible value as an 'uncertain recall' flag to the model is not measurable by the recall bench and needs the end-to-end A/B first; the bench keeps logging top1/margin/missed_rank for future set versions.",
+   "gist": "decision: doubt layer parked; K=2 beats it; A/B needed"
+  },
+  {
+   "id": "783c6792",
+   "kind": "decision",
+   "concepts": [
+    "experiment",
+    "neurag",
+    "neuroscience"
+   ],
+   "text": "23/11 user decision: test NeuRAG with neuroscience documents instead of the repo; if the recall pointer fires on messages near that subject (and is relevant), NeuRAG stays for knowledge outside the project disk; otherwise NeuRAG is parked and reused for other purposes. Test on an isolated vault, never the real knowledge.db.",
+   "gist": "23/11 decision: test NeuRAG on neuroscience docs in an isolated vault; park it if useless"
+  },
+  {
+   "id": "8036fa81",
+   "kind": "decision",
+   "concepts": [
+    "ablation",
+    "consolidation",
+    "registry"
+   ],
+   "text": "14/11 the user parked Jev and asked to standardize what exists: next work is a registry pass on REGISTRO-FUNZIONALITA, giving each '?' row a number via ablation on a graph copy and switching off or removing what moves nothing.",
+   "gist": "decision: parked Jev; REGISTRO-FUNZIONALITA pass numbers '?' rows via ablation, cut no-movers"
+  },
+  {
+   "id": "a17d222e",
+   "kind": "idea",
+   "concepts": [
+    "format",
+    "measurement",
+    "procedure"
+   ],
+   "text": "Claude's refinement of the issue/solutions format 18/11: store it as structured store_turn fields (issue, context, solutions with status proven/untried/failed and evidence id) and let Neuron render it, so the shape never depends on the writing model; a new solution on the same issue updates the procedure instead of adding a fact; failed attempts listed too; test it against the current When/If format with the same 7-scenario A/B plus scenarios with a failed solution.",
+   "gist": "structured issue/solutions fields rendered by Neuron; failed attempts too; A/B vs When/If"
+  },
+  {
+   "id": "a5592cda",
+   "kind": "fact",
+   "concepts": [
+    "calibration",
+    "gist",
+    "measurement",
+    "online split",
+    "shown counter",
+    "stop hook",
+    "use signal",
+    "value-based recall"
+   ],
+   "text": "ADR-020 D1 (newest progress facts at session start or on the word 'stato') computed on bench v2 rows 2026-11-16: 2-3 expected facts gained for 6 unexpected ones (recall 0.606-0.636, noise 0.59 -> 0.86), which fails the no-regression rule; not adopted as designed. A pointer-only variant (ids and dates, opened on demand) needs a live measure.",
+   "gist": "ADR-020 D1 on bench: +2-3 found for +6 noise -> not adopted; pointer-only variant needs live measure"
+  },
+  {
+   "id": "a742f191",
+   "kind": "decision",
+   "concepts": [
+    "ground truth",
+    "judge",
+    "opener bench"
+   ],
+   "text": "tried: judging last: against the previous session's closing message (19/11) failed as ground truth, because closings are mostly save chatter ('I saved two facts', 'nothing to save'); the opener bench now uses the longest assistant text of the opener turn, the state verified on the repo, and judges only the state-question openers.",
+   "gist": "tried: truth=prev session closing -> save chatter; now truth=verified answer of opener turn"
+  },
+  {
+   "id": "aa9ae352",
+   "kind": "decision",
+   "concepts": [
+    "layers",
+    "pattern recognition",
+    "roadmap"
+   ],
+   "text": "14/11 wrote work/design/PIANO-STRATI-2026-11-14.md: order A I/O contract + B graph robustness, then G0 logging turns with outcome, C meta tidy with ablations, E NeuRAG ingest then F tag bridges, G pattern recognition as procedural layer, H focus; stimulus parked.",
+   "gist": "decision: order A I/O, B graph, G0 log+outcome, C meta, E NeuRAG, F tags, G patterns, H focus"
+  },
+  {
+   "id": "b03ab536",
+   "kind": "fact",
+   "concepts": [
+    "context enrichment",
+    "measurement",
+    "recall",
+    "short messages"
+   ],
+   "text": "Measured 2026-11-16 on real sessions: 57 of 162 turns are short messages (under 8 content words, mostly go-aheads like 'yes, start from A+B'); only 47% of them get any recalled fact against 73-97% of longer ones, and their facts are used most (27%). Enriching a short message with the previous reply (last 200/400 or first 200 characters) doubles the facts shown (56 -> ~107) and finds no additional relevant one (3 -> 3) on a relevance set built from the same turns; on all messages it makes long ones worse (24 -> 21). ADR-020 D3 is not adopted.",
+   "gist": "short msgs = 35% of turns, 47% get a fact; previous-reply enrichment: 2x facts shown, 0 more relevant -> ADR-020 D3 not "
+  },
+  {
+   "id": "b53da055",
+   "kind": "decision",
+   "concepts": [
+    "format",
+    "measurement",
+    "procedure"
+   ],
+   "text": "A/B 2 on 18/11 (9 scenarios incl. failed-solution cases, 2 reps, 8 Haiku subagents with 4-5 independent cases each): When/If prose 18/18 and Issue/context/Solutions 18/18 once two scorer false negatives are fixed; same length (~270-450 chars); so the issue/solutions shape is not more readable for the model, its value is structural (store fields, merge solutions, failed attempts, graph edges).",
+   "gist": "A/B2: When/If 18/18 = Issue/Solutions 18/18; Issue format gains are structural, not readability"
+  },
+  {
+   "id": "c153ba5d",
+   "kind": "idea",
+   "concepts": [
+    "model needs",
+    "negative knowledge",
+    "procedure",
+    "provenance"
+   ],
+   "text": "Asked on 2026-11-16 what would be truly useful to it as a model, the assistant answered from that day's work: (1) negative knowledge with its number, i.e. what was tried, failed and why, so it is not proposed again; (2) where the work stood at the last stop, which it had to pull by hand that morning; (3) procedures with proof that they worked, like the install command it found only in a client memory file; (4) an explicit 'the memory holds nothing on this' instead of silence; (5) for each fact who wrote it, when, and whether anyone disputed it. Fewer decisive facts over more recall.",
+   "gist": "model's own wishlist 16/11: failed attempts with numbers, last-stop state, proven procedures, explicit 'nothing known', "
+  },
+  {
+   "id": "d4c9d3dc",
+   "kind": "fact",
+   "concepts": [
+    "calibration",
+    "measurement",
+    "use signal",
+    "value-based recall"
+   ],
+   "text": "Measured 2026-11-16 on 321 real showings (125 facts, 17 sessions, 55 used): among shown facts the similarity to the message does not predict use (AUC cosine 0.50, logistic fit on cosine/named/lexical/age 0.51 leaving a session out, use rate flat at 16-20% across cosine bands), so ADR-019's calibrated score is closed as measured, not adopted; the fact's own history does predict it (used in another session: 30% used again, never used elsewhere: 11%, AUC 0.66), but only as a positive signal: dropping never-used facts loses uses at the base rate.",
+   "gist": "16/11: similarity does not predict use (AUC .50), per-fact history does (30% vs 11%, AUC .66), positive only; ADR-019 no"
+  },
+  {
+   "id": "d8993bef",
+   "kind": "idea",
+   "concepts": [
+    "bridge",
+    "neurag",
+    "promote",
+    "hover-prima-del-clic",
+    "mic-monitoring",
+    "pannello-vention",
+    "variabili-case-insensitive",
+    "windowfrompoint",
+    "backup",
+    "documents folder",
+    "experiment"
+   ],
+   "text": "23/11 proposal: promotion as a bridge, not a copy. For a proven Neuron fact, find via knowledge_query the NeuRAG DOCUMENT node on the same subject and create the fact->document bridge; copy nothing. Neuron stays the single owner (supersede, disputes, use signal live only there); the bridge is a lazy pointer (one line, excerpts only on request). Copy-promotion rejected: the KB copy diverges when the fact is superseded (denormalization without trigger). Next: measure precision on the 29 stable candidates with a blind judge before any automatic birth.",
+   "gist": "idea: promotion as a fact->document bridge, no copy; measure precision blind first"
+  },
+  {
+   "id": "dafd4a93",
+   "kind": "idea",
+   "concepts": [
+    "bridge",
+    "data flow",
+    "pattern recognition",
+    "promotion"
+   ],
+   "text": "Pattern module data flow (user idea 19/11, shaped): confirmed hypotheses with evidence, domain frames written as text and closed investigation reports go to NeuRAG; work episodes (investigation opened/closed, predictions and outcomes as solves/failed_for, the user's judgments) go to Neuron; rejected hypotheses become tried: facts; raw rows never leave the module; the LLM reaches the data through a module tool exposed by GM that computes and returns one line; bridges link module ids, Neuron facts and NeuRAG chunks; only verified findings are promoted.",
+   "gist": "pattern module -> NeuRAG (confirmed, frames, reports), Neuron (episodes, predictions, tried); raw data stays; LLM via mo"
+  },
+  {
+   "id": "e28177c0",
+   "kind": "decision",
+   "concepts": [
+    "flash",
+    "habit",
+    "profilo"
+   ],
+   "text": "tried (on paper, 2026-11-17): flash or pulse for profile facts adds nothing: flash only takes idea/decision/fix and is for dormant facts among many, pulse is model-called, and profile facts not in the profile already compete in normal recall (35-43 showings over 209 real messages). Chosen instead: profile keeps identity and always-on reply rules; task-tied rules (commit, release, other sessions) may leave it if a replay shows they come back when the task is named.",
+   "gist": "flash/pulse for profile: no gain; split always-on rules vs task-tied rules, verify by replay"
+  },
+  {
+   "id": "f70abed4",
+   "kind": "decision",
+   "concepts": [
+    "bench",
+    "concept naming",
+    "languages",
+    "recall"
+   ],
+   "text": "tried: semantic concept naming (message words/bigrams vs concept vectors, NEURON_FACT_NAMED_SEM) on 19/11: at 0.80 worse on all three recall benches (Italian 18->17/33, noise 0.59->0.77, first off-topic fact; procedures noise 0.50->0.57; English 19->18/33), at 0.90/0.95 no gain anywhere, and the Italian replay-procedure probe stayed at rank 43-47; code reverted. Remaining option: a bilingual concept vocabulary generated once by a cheap model and matched lexically, but only after building a bench of Italian messages against English concepts.",
+   "gist": "tried: semantic concept naming 0.80/0.90/0.95 -> worse or no gain; reverted; next only bilingual vocab + IT/EN bench"
+  },
+  {
+   "id": "d082860c",
+   "kind": "decision",
+   "concepts": [
+    "nearest vector",
+    "isolated concepts",
+    "orphan concepts",
+    "fact anchoring"
+   ],
+   "text": "Rejected 24/11: linking an isolated concept to its nearest neighbour by vector. On 345 isolated live concepts the nearest cosine looked high (median 0.74) but was wrong even at the top (sed -> java at 0.90, backfill -> backup at 0.64), so no threshold separates good from bad; the concept sharing the most facts was adopted instead.",
+   "gist": "tried: link isolated concept to nearest vector -> wrong even at cos 0.90 (sed->java); use shared fact"
+  },
+  {
+   "id": "0ae61f47",
+   "kind": "fact",
+   "concepts": [
+    "fable",
+    "cross-lingual recall",
+    "tried facts",
+    "bench"
+   ],
+   "text": "Fable needs review 24/11: needs 2, 3, 5 done, 4 parked; need 1 (what already failed) is a real gap: only 6 'tried:' decisions, and a rejected idea is recalled only with its own keywords (cos 0.78) while an Italian paraphrase scores 0.21-0.24 and an English one 0.47 against the English fact (MiniLM multilingual). Cross-lingual paraphrase recall is the root, not the tried: format. Proposed: small IT-paraphrase bench (~20 questions on existing facts), then compare bilingual concepts at write time vs multilingual-e5."
+  }
+ ],
+ "messages": [
+  {
+   "id": "t01it",
+   "date": "2026-11-24",
+   "expect": [
+    "d082860c"
+   ],
+   "text": "e se colleghiamo ogni concetto rimasto solo a quello che gli somiglia di più come significato?"
+  },
+  {
+   "id": "t01en",
+   "date": "2026-11-24",
+   "expect": [
+    "d082860c"
+   ],
+   "text": "what if every lonely node got wired to whichever node looks most similar to it?"
+  },
+  {
+   "id": "t02it",
+   "date": "2026-11-24",
+   "expect": [
+    "f70abed4"
+   ],
+   "text": "potremmo fondere i nomi dei concetti quando sono quasi sinonimi"
+  },
+  {
+   "id": "t02en",
+   "date": "2026-11-24",
+   "expect": [
+    "f70abed4"
+   ],
+   "text": "let's merge concept labels that mean almost the same thing"
+  },
+  {
+   "id": "t03it",
+   "date": "2026-11-24",
+   "expect": [
+    "55418c19"
+   ],
+   "text": "aggiungiamo nel testo della memoria iniettata una riga che dica di rispondere in italiano"
+  },
+  {
+   "id": "t03en",
+   "date": "2026-11-24",
+   "expect": [
+    "55418c19"
+   ],
+   "text": "put a line in the injected memory telling the model which language to answer in"
+  },
+  {
+   "id": "t04it",
+   "date": "2026-11-24",
+   "expect": [
+    "63651f4e"
+   ],
+   "text": "togliamo le regole di lavoro dal profilo d'apertura e richiamiamole solo quando servono"
+  },
+  {
+   "id": "t04en",
+   "date": "2026-11-24",
+   "expect": [
+    "63651f4e"
+   ],
+   "text": "move the working rules out of the opening profile and fetch them only when needed"
+  },
+  {
+   "id": "t05it",
+   "date": "2026-11-24",
+   "expect": [
+    "495ec6ce"
+   ],
+   "text": "le procedure potrebbero rimandare l'una all'altra invece di ripetere i passi"
+  },
+  {
+   "id": "t05en",
+   "date": "2026-11-24",
+   "expect": [
+    "495ec6ce"
+   ],
+   "text": "let one procedure refer to another instead of repeating its steps"
+  },
+  {
+   "id": "t06it",
+   "date": "2026-11-24",
+   "expect": [
+    "a742f191"
+   ],
+   "text": "come risposta giusta per le aperture prendiamo come si era chiusa la sessione prima"
+  },
+  {
+   "id": "t06en",
+   "date": "2026-11-24",
+   "expect": [
+    "a742f191"
+   ],
+   "text": "use the way the previous session ended as the correct answer for the opener"
+  },
+  {
+   "id": "t07it",
+   "date": "2026-11-24",
+   "expect": [
+    "4224f23c"
+   ],
+   "text": "restituiamo l'intera sezione del documento invece del singolo pezzo"
+  },
+  {
+   "id": "t07en",
+   "date": "2026-11-24",
+   "expect": [
+    "4224f23c"
+   ],
+   "text": "return the full document section rather than a single chunk"
+  },
+  {
+   "id": "t08it",
+   "date": "2026-11-24",
+   "expect": [
+    "b03ab536"
+   ],
+   "text": "per i messaggi brevi arricchiamo la ricerca con la risposta precedente"
+  },
+  {
+   "id": "t08en",
+   "date": "2026-11-24",
+   "expect": [
+    "b03ab536"
+   ],
+   "text": "for short follow-ups, add the previous answer to the search query"
+  },
+  {
+   "id": "t09it",
+   "date": "2026-11-24",
+   "expect": [
+    "d4c9d3dc"
+   ],
+   "text": "usiamo la somiglianza col messaggio come stima di quanto un fatto verrà usato"
+  },
+  {
+   "id": "t09en",
+   "date": "2026-11-24",
+   "expect": [
+    "d4c9d3dc"
+   ],
+   "text": "treat how similar a fact is to the message as the chance it gets used"
+  },
+  {
+   "id": "t10it",
+   "date": "2026-11-24",
+   "expect": [
+    "e28177c0"
+   ],
+   "text": "il profilo dell'utente potremmo farlo arrivare col flash invece che all'inizio"
+  },
+  {
+   "id": "t10en",
+   "date": "2026-11-24",
+   "expect": [
+    "e28177c0"
+   ],
+   "text": "deliver the user profile through flashes instead of at the start"
+  },
+  {
+   "id": "t11it",
+   "date": "2026-11-24",
+   "expect": [
+    "5f180a4a"
+   ],
+   "text": "abbassiamo la soglia di NeuRAG così restituisce qualcosa anche quando è incerto"
+  },
+  {
+   "id": "t11en",
+   "date": "2026-11-24",
+   "expect": [
+    "5f180a4a"
+   ],
+   "text": "lower NeuRAG's cutoff so it still returns something on weak matches"
+  },
+  {
+   "id": "t12it",
+   "date": "2026-11-24",
+   "expect": [
+    "2f3305c1"
+   ],
+   "text": "rimettiamo in uso il tool brainstorm per generare idee"
+  },
+  {
+   "id": "t12en",
+   "date": "2026-11-24",
+   "expect": [
+    "2f3305c1"
+   ],
+   "text": "bring the brainstorm tool back to generate ideas"
+  }
+ ],
+ "off_topic": [
+  {
+   "id": "o1",
+   "text": "ricetta della carbonara con guanciale"
+  },
+  {
+   "id": "o2",
+   "text": "che tempo farà domani a Milano?"
+  },
+  {
+   "id": "o3",
+   "text": "traduci in inglese: la riunione è spostata a giovedì pomeriggio"
+  },
+  {
+   "id": "o4",
+   "text": "consigliami un romanzo di fantascienza da leggere in vacanza"
+  },
+  {
+   "id": "o5",
+   "text": "quanti grammi di farina servono per una pizza margherita?"
+  }
+ ]
+}

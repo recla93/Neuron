@@ -64,7 +64,9 @@ def load(path: pathlib.Path = SET) -> dict:
 
 
 def shown(answer: str, facts: list[dict]) -> set[str]:
-    return {f["id"] for f in facts if sig(f["text"]) in answer}
+    # A fact with a gist is shown by its gist, not its text (Neuron renders it so).
+    return {f["id"] for f in facts
+            if sig(f["text"]) in answer or (f.get("gist") and sig(f["gist"]) in answer)}
 
 
 async def _call(S, tool: str, args: dict) -> str:
@@ -123,7 +125,8 @@ async def run_mode(mode: str, data: dict) -> dict:
     for f in facts:   # one turn per fact, the ADR-015 call: facts only
         await _call(S, "store_turn", {"facts": [
             {"kind": f["kind"], "text": f["text"], "concepts": f["concepts"],
-             **({"evidence": f["evidence"]} if f.get("evidence") else {})}]})
+             **({"evidence": f["evidence"]} if f.get("evidence") else {}),
+             **({"gist": f["gist"]} if f.get("gist") else {})}]})
     g = S._g.get()
     # Past 64 new texts the recall vectors are built in a background thread, and
     # until then the vector search returns nothing. Measure a warm daemon.
