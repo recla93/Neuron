@@ -73,12 +73,8 @@ def _tunnel_config_path() -> Path:
         from gray_matter.gme import gme_root
         base = gme_root()
     except Exception:  # noqa: BLE001 — GM not installed: mirror its rule
-        if os.name == "nt":
-            root = os.environ.get("LOCALAPPDATA", "")
-        else:
-            root = os.environ.get("XDG_DATA_HOME", "") or str(
-                Path.home() / ".local" / "share")
-        base = Path(root or Path.home()) / "GrayMatterEnvironment"
+        from neuron.config import default_suite, venv_suite
+        base = Path(venv_suite() or default_suite())
     return base / "tunnel.json"
 
 

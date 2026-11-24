@@ -91,6 +91,16 @@ function Test-CanPrompt {
 function Read-Answer([string]$Prompt) {
     try { return (Read-Host $Prompt) } catch { return "" }
 }
+# Option A (2026-11-23): the suite lives in %USERPROFILE%, outside AppData (MSIX
+# clients redirect AppData). An existing suite under %LOCALAPPDATA% is kept
+# while the new place does not exist. Same rule as gray_matter/install.ps1.
+function Get-DefaultSuite {
+    $la = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
+    $old = Join-Path $la "GrayMatterEnvironment"
+    $new = Join-Path $env:USERPROFILE "GrayMatterEnvironment"
+    if (-not (Test-Path $new) -and (Test-Path $old)) { return $old }
+    return $new
+}
 $Ask = ((Test-CanPrompt) -and -not $Force -and ($env:GM_YES -ne "1") -and ($args -notcontains "-Yes"))
 
 # Mode selector: click-and-go (Enter = full suite) or explicit --no-gm.
@@ -362,7 +372,7 @@ function Install-Standalone {
     # continua a essere usata (un venv non e' spostabile).
     $NBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
     $Home_ = if ($env:NEURON_HOME) { $env:NEURON_HOME }
-             else { Join-Path (Join-Path $NBase "GrayMatterEnvironment") "neuron" }
+             else { Join-Path (Get-DefaultSuite) "neuron" }
     $NLegacy = Join-Path $NBase "neuron"
     if ((Test-Path (Join-Path $NLegacy ".venv")) -and -not (Test-Path (Join-Path $Home_ ".venv"))) {
         $Home_ = $NLegacy
@@ -462,8 +472,7 @@ function Install-Standalone {
     # the direct registration, otherwise every client ends up double-registered
     # (gateway entry keeps proxying these same tools) and GM still considers us
     # managed. Requires the wheel above; skipped when GM was never installed.
-    $La = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
-    $Suite = if ($env:GM_HOME) { $env:GM_HOME } else { Join-Path $La "GrayMatterEnvironment" }
+    $Suite = if ($env:GM_HOME) { $env:GM_HOME } else { Get-DefaultSuite }
     $WasGateway = (Test-Path (Join-Path $Suite "graymatter\manifest.json")) -or `
                   (Test-Path (Join-Path $Suite "graymatter\settings.json"))
     if ($WasGateway) {

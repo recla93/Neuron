@@ -98,20 +98,33 @@ def _gme_root() -> Path:
     nuovo. Verificato su installazione reale. Come in gme_root(), un registro
     ESISTENTE vince: si accetta ancora il piatto per le installazioni vecchie.
     """
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA", "")
-    else:
-        base = os.environ.get("XDG_DATA_HOME", "") or os.path.join(
-            os.path.expanduser("~"), ".local", "share")
-    if not base:                       # scrubbed env -> never a relative path
-        base = os.path.expanduser("~")
-    suite = _venv_suite() or Path(base) / "GrayMatterEnvironment"
+    suite = _venv_suite() or _default_suite()
     current = suite / "registry"
     if current.is_dir():
         return current
     if suite.is_dir() and any(suite.glob("*.json")):
         return suite               # registro piatto pre-suite
     return current
+
+
+def _os_base() -> Path:
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA", "")
+    else:
+        base = os.environ.get("XDG_DATA_HOME", "") or os.path.join(
+            os.path.expanduser("~"), ".local", "share")
+    return Path(base or os.path.expanduser("~"))   # scrubbed env -> never relative
+
+
+def _default_suite() -> Path:
+    """Mirror of gray_matter/paths.py:default_suite(): on Windows the suite is
+    %USERPROFILE%\\GrayMatterEnvironment, an existing one under %LOCALAPPDATA%
+    kept while the new place does not exist."""
+    old = _os_base() / "GrayMatterEnvironment"
+    if sys.platform != "win32":
+        return old
+    new = Path(os.path.expanduser("~")) / "GrayMatterEnvironment"
+    return old if (not new.is_dir() and old.is_dir()) else new
 
 
 def _venv_suite():
@@ -160,16 +173,11 @@ def _graphs_dir() -> Path:
     override = os.environ.get("NS_GRAPHS_DIR", "")
     if override:
         return Path(override)
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA", "") or os.path.expanduser("~")
-    else:
-        base = (os.environ.get("XDG_DATA_HOME", "")
-                or os.path.join(os.path.expanduser("~"), ".local", "share"))
     slug = os.environ.get("NEURON_SLUG", "neuron")
     if _venv_suite():
         return _venv_suite() / slug / "graphs"
-    new = Path(base) / "GrayMatterEnvironment" / slug / "graphs"
-    legacy = Path(base) / slug / "graphs"
+    new = _default_suite() / slug / "graphs"
+    legacy = _os_base() / slug / "graphs"
     if not new.is_dir() and legacy.is_dir():
         return legacy
     return new

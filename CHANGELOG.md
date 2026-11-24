@@ -1,6 +1,10 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`**
+  (option A, see Gray Matter's changelog): `config.default_suite()`, the session
+  hook's copies and `install.ps1`; an existing suite under `%LOCALAPPDATA%` is
+  kept. Tests now run with every user folder pointed at a temporary one.
 - **The bench counts procedures shown where none is needed.** A set may carry
   `quiet`: real messages that need no procedure; `run.py` reports how many
   procedures they get. On the blind set of 2026-11-23 (141 real messages,

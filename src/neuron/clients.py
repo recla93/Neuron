@@ -1017,6 +1017,7 @@ def default_server_python(slug: "str | None" = None) -> str:
         py = os.path.join("Scripts", "python.exe")
         cands = [
             os.path.join(home, ".venv", py) if home else "",
+            os.path.join(os.path.expanduser("~"), "GrayMatterEnvironment", slug, ".venv", py),
             os.path.join(base, "GrayMatterEnvironment", slug, ".venv", py),
             os.path.join(base, slug, ".venv", py),                     # pre-suite
             os.path.join(base, "Programs", slug, ".venv", py),         # Programs era

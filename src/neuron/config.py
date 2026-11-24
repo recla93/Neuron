@@ -67,6 +67,18 @@ def _os_base() -> str:
     return base or os.path.expanduser("~")
 
 
+def default_suite() -> str:
+    """Windows: %USERPROFILE%\\GrayMatterEnvironment, an existing suite under
+    %LOCALAPPDATA% kept while the new place does not exist (option A,
+    2026-11-23: AppData is redirected by MSIX clients). Elsewhere unchanged.
+    Keep-in-sync with gray_matter/paths.py:default_suite()."""
+    old = os.path.join(_os_base(), SUITE_DIR)
+    if os.name != "nt":
+        return old
+    new = os.path.join(os.path.expanduser("~"), SUITE_DIR)
+    return old if (not os.path.isdir(new) and os.path.isdir(old)) else new
+
+
 def venv_suite() -> "str | None":
     """The suite the running interpreter was installed into, or None.
 
@@ -101,9 +113,8 @@ def user_data_dir() -> str:
     suite = venv_suite()
     if suite:
         return os.path.join(suite, slug)
-    base = _os_base()
-    new = os.path.join(base, SUITE_DIR, slug)
-    legacy = os.path.join(base, slug)
+    new = os.path.join(default_suite(), slug)
+    legacy = os.path.join(_os_base(), slug)
     if not os.path.isdir(new) and os.path.isdir(legacy):
         return legacy
     return new
