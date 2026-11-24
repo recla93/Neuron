@@ -805,7 +805,17 @@ class Graph:
 
         # cap: evict lowest-salience nodes when over MAX_NODES
         if len(self.nodes) >= MAX_NODES:
-            self.nodes.sort(key=lambda n: n.salience)
+            # Who goes: lowest salience, then no active fact, then fewest links,
+            # then the oldest. Salience alone tied half the graph at 0 and the
+            # stable sort evicted the OLDEST, well-linked or not (2026-11-24).
+            with_fact = {self._norm(c) for f in self.facts.values() if f.get("status") == "active"
+                         for c in f.get("concepts") or []}
+            degree: dict = {}
+            for lk in self.links:
+                for end in (lk.source, lk.target):
+                    degree[end] = degree.get(end, 0) + 1
+            self.nodes.sort(key=lambda n: (n.salience, self._norm(n.keyword) in with_fact,
+                                           degree.get(self._norm(n.keyword), 0), n.turn))
             evict = self.nodes[:max(1, len(self.nodes) - MAX_NODES + 1)]
             evict_kws = {n.keyword for n in evict}
             self.nodes = [n for n in self.nodes if n.keyword not in evict_kws]
@@ -906,6 +916,47 @@ class Graph:
                                    created_turn=turn, last_active_turn=turn))
                 linked.add(frozenset((a, b)))
                 added += 1
+        return added
+
+    def link_isolated_by_facts(self, turn: int) -> int:
+        """Give every concept with no link one link to the concept it shares the
+        most active facts with (ties: the better-connected one). Returns how many.
+
+        2026-11-24: 345 of 1005 live concepts had no link, out of the graph walk;
+        197 share a fact with another concept, a relation the model wrote. The
+        nearest vector was measured and rejected: `sed -> java` at cos 0.90.
+        Tangential like a same-turn pair; as a last link it never expires."""
+        degree: dict = {}
+        for lk in self.links:
+            if lk.link_type != "drift" and lk.source != lk.target:
+                for end in (lk.source, lk.target):
+                    degree[end] = degree.get(end, 0) + 1
+        nodes = {self._norm(nd.keyword) for nd in self.nodes}   # links are normalized, loaded nodes may not be
+        isolated = {k for k in nodes if not degree.get(k)}
+        if not isolated:
+            return 0
+        shared: dict = {}
+        for f in self.facts.values():
+            if f.get("status") != "active":
+                continue
+            cs = [c for c in {self._norm(c) for c in f.get("concepts") or []} if c in nodes]
+            for a in cs:
+                if a in isolated:
+                    for b in cs:
+                        if b != a:
+                            shared.setdefault(a, {})[b] = shared.get(a, {}).get(b, 0) + 1
+        added = 0
+        for a in sorted(shared):
+            if degree.get(a):            # linked by an earlier pick in this pass
+                continue
+            c = shared[a]
+            b = max(sorted(c), key=lambda x: (c[x], degree.get(x, 0)))
+            self.add_link(Link(source=a, target=b, link_type="deepening",
+                               weight="tangential", rationale="same fact",
+                               created_turn=turn, last_active_turn=turn))
+            for end in (a, b):
+                degree[end] = degree.get(end, 0) + 1
+            added += 1
         return added
 
     def reinforce_coactivation(self, keywords, turn: int | None = None) -> list[Link]:

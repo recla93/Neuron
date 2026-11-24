@@ -1,6 +1,14 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **A concept with no link gets one from its facts.** After each `store_turn`,
+  a concept with no link is linked to the concept it shares the most active
+  facts with: on the live graph 345 isolated concepts became 148, the rest
+  having no fact with another concept. The nearest vector was measured and
+  rejected (`sed -> java` at cos 0.90).
+- **Eviction at the cap takes the least connected concept.** At equal salience
+  (half the graph sits at 0) it took the oldest, linked or not; now the order
+  is salience, then no active fact, then fewest links, then age.
 - **A concept's last link never expires.** Same-turn links are tangential and
   expired after 5 idle turns: on the live graph 344 of 1000 concepts had no
   link at all, out of the graph walk. An expired link now goes only while both

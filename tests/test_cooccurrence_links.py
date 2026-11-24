@@ -102,3 +102,32 @@ def test_a_query_on_one_keyword_reaches_the_fact_on_another(tmp_path, monkeypatc
     recall = call("pre_turn", {"topic": "focus", "keywords": ["focus"]})
     assert "primeng" in recall, f"da focus non si arriva a primeng: {recall}"
     assert "appendTo body" in recall, f"il fatto su primeng non emerge: {recall}"
+
+
+def test_an_isolated_concept_is_linked_to_a_concept_of_its_fact():
+    """2026-11-24: 345 of 1005 live concepts had no link; 197 shared a fact. The
+    partner is the concept sharing the most facts; a concept with no fact stays
+    alone (the nearest vector was rejected: `sed -> java` at cos 0.90)."""
+    g = _graph("profiling", "slow test suite", "pytest", "lonely")
+    g.add_fact("fix", "profile one file to find a slow suite", ["profiling", "slow test suite"], turn=1)
+    g.add_fact("fix", "cProfile on pytest", ["profiling", "slow test suite", "pytest"], turn=1)
+    assert g.link_isolated_by_facts(turn=2) == 2
+    pairs = {frozenset((lk.source, lk.target)) for lk in g.links}
+    assert frozenset(("profiling", "slow test suite")) in pairs, "two shared facts win"
+    assert any("pytest" in p for p in pairs), "pytest shares one fact: linked too"
+    assert not any("lonely" in p for p in pairs), "no fact, no anchor"
+    assert all((lk.weight, lk.rationale) == ("tangential", "same fact") for lk in g.links)
+    assert g.link_isolated_by_facts(turn=3) == 0, "idempotent"
+
+
+def test_eviction_takes_the_concept_with_no_fact_and_no_link_first(monkeypatch):
+    """At equal salience the stable sort evicted the oldest, linked or not."""
+    import neuron.models as M
+    monkeypatch.setattr(M, "MAX_NODES", 3)
+    g = _graph("old linked", "old with fact", "young alone")
+    g.nodes[0].turn, g.nodes[1].turn, g.nodes[2].turn = 1, 2, 9
+    g.add_link(Link(source="old linked", target="old with fact", link_type="deepening",
+                    weight="strong", rationale="r", created_turn=1, last_active_turn=1))
+    g.add_fact("fact", "a fact", ["old with fact"], turn=2)
+    g.add_node(Node(keyword="newcomer", turn=10, topic="t", domain="d", sentiment="neutral"))
+    assert {n.keyword for n in g.nodes} == {"old linked", "old with fact", "newcomer"}

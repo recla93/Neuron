@@ -1808,6 +1808,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # 81 unrelated concepts together.
     _co_links = (0 if _facts_in and _n_restated == len(_facts_in)
                  else g.link_cooccurring(keywords, turn))
+    g.link_isolated_by_facts(turn)       # no concept stays out of the graph walk
 
     g.last_sentiment = sentiment
     g.last_topic = topic
