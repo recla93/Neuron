@@ -58,7 +58,7 @@ read_neuron_only_mode() {
 if [ "$WANT_GM" = "1" ] && [ -t 0 ] && [ "$FORCE" != "1" ] && [ "$ASSUME_YES" != "1" ]; then
     echo ""
     echo "  Installation mode:"
-    echo "    [F] Full suite — GM + Neuron + NeuRAG (recommended)"
+    echo "    [F] Full suite — GM + Neuron (recommended; NeuRAG: GM_WITH_NEURAG=1)"
     echo "    [N] Neuron only — standalone, or with GM fetched for you"
     echo "    [D] Details — what you lose without GM"
     echo ""

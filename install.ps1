@@ -121,7 +121,7 @@ function Read-NeuronOnlyMode {
 }
 if ($WantGm -and $Ask) {
     Write-Host "`n  Installation mode:"
-    Write-Host "    [F] Full suite — GM + Neuron + NeuRAG (recommended)"
+    Write-Host "    [F] Full suite — GM + Neuron (recommended; NeuRAG: GM_WITH_NEURAG=1)"
     Write-Host "    [N] Neuron only — standalone, or with GM fetched for you"
     Write-Host "    [D] Details — what you lose without GM"
     Write-Host ""

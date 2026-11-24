@@ -1,6 +1,8 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **"Full suite" in the mode selector is GM + Neuron** (see Gray Matter's
+  changelog): NeuRAG is an add-on, `GM_WITH_NEURAG=1` adds it.
 - **On Windows the suite lives in `%USERPROFILE%\GrayMatterEnvironment`**
   (option A, see Gray Matter's changelog): `config.default_suite()`, the session
   hook's copies and `install.ps1`; an existing suite under `%LOCALAPPDATA%` is
