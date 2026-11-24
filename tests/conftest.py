@@ -21,3 +21,18 @@ if src not in sys.path:
 _STORE = tempfile.mkdtemp(prefix="neuron-tests-")
 os.environ["NS_GRAPHS_DIR"] = _STORE
 atexit.register(shutil.rmtree, _STORE, True)
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_home(tmp_path_factory, monkeypatch):
+    """No test sees the user's real folders (see gray_matter/tests/conftest.py:
+    on 2026-11-23 tests that isolated only LOCALAPPDATA wrote fake values into
+    the real neuron/.env, through config.user_env_file())."""
+    d = tmp_path_factory.mktemp("home")
+    for k, v in {"USERPROFILE": d, "HOME": d, "LOCALAPPDATA": d / "AppData" / "Local",
+                 "APPDATA": d / "AppData" / "Roaming", "XDG_DATA_HOME": d / ".local" / "share"}.items():
+        monkeypatch.setenv(k, str(v))
+    for k in ("GM_HOME", "NEURAG_HOME"):
+        monkeypatch.delenv(k, raising=False)
