@@ -1,6 +1,6 @@
 # Changelog — Neuron
 
-## Unreleased
+## 7.0.0 (2026-11-27)
 - **Habits and facts about the user live in one `user` graph, read from every
   context.** They lived in whatever context was active, so a session in another
   project lost the user's rules. The profile, the fact recall, `#id` lookups and
