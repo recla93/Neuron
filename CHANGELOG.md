@@ -1,6 +1,49 @@
 # Changelog — Neuron
 
 ## Unreleased
+- **Habits and facts about the user live in one `user` graph, read from every
+  context.** They lived in whatever context was active, so a session in another
+  project lost the user's rules. The profile, the fact recall, `#id` lookups and
+  `confirm` read the `user` graph next to the active one; `store_turn` writes
+  `user` and `habit` facts there (`NEURON_USER_CONTEXT` renames it). The profile
+  is ordered by date, not turn: each graph counts its own turns.
+- **The recall cache keeps every graph in use.** It was pruned to the last
+  graph's texts, and its file rewritten with them: with the project's graph and
+  the user graph read on every message, the project's vectors were evicted and
+  re-embedded in the background while its facts were skipped. The cache and
+  `_recall_vectors.bin` now keep the texts of every graph the process uses.
+  Merging the user's facts no longer drops the newer version of a fact shown
+  beside its old one, and a word's rarity is counted over both graphs' facts.
+  Measured on 600 real messages before and after the reorganisation of the
+  contexts: facts from another project 4-5% -> 0, empty recalls 67 -> 45,
+  facts per message 2.4 either way.
+- **A call can carry its session's context (`_scope`).** Gray Matter passes the
+  context of the session's project with each call; for that call it is the
+  active one, and a `switch_context` inside it moves that session only. The
+  shared `_active_context.txt` is left to sessions without a project: on
+  2026-11-26 one session switched it and another session's facts went to the
+  wrong graph.
+- **No more automatic context switch.** The domain guessed per message moved
+  the context after two turns, with one counter shared by every session: it
+  made `backend` hold a whole project and `llm` another, and inside a project
+  session it would have saved the second turn's facts in the domain's graph.
+  Off by default, never inside a scoped call; `NEURON_AUTO_SWITCH=1` brings it
+  back. In a project session the "topic far from this context" note says where
+  there is more instead of offering a switch.
+- **`store_turn` says where a fact goes.** Habits and facts about the user go to
+  the user graph by themselves; knowledge true in any project goes to its topic
+  with `context=<topic>`.
+- **`scripts/move_facts.py` and `scripts/rename_context.py`.** Move facts
+  between graphs with their concepts and links (their legacy `episodes` rows
+  too, or a load turns them back into facts in the source), copy the concept
+  nodes of moved facts (`--nodes`, `--retire` to graveyard the ones the source
+  no longer uses), and rename a context with its rows, file and pointers. Dry
+  run by default, a snapshot before writing; run them with the daemon stopped.
+- **A function word no longer names a concept.** One word of a concept was
+  enough for the recall bonus, so `del` named `hover-prima-del-clic` and a
+  microphone fact came back on unrelated questions. Function words and common
+  verbs are ignored; `_ignored_words.txt` in the graphs folder adds your own,
+  one per line.
 - **The `merge` tool moves the facts too.** It rewired links only: the facts of
   the absorbed concept stayed indexed under a deleted name, and its topic, tags
   and file references were lost; a node merged with itself was deleted. The tool

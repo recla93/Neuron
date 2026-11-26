@@ -128,18 +128,26 @@ async def run_mode(mode: str, data: dict) -> dict:
              **({"evidence": f["evidence"]} if f.get("evidence") else {}),
              **({"gist": f["gist"]} if f.get("gist") else {})}]})
     g = S._g.get()
+    # Habits and facts about the user go to the user graph (2026-11-26): the
+    # checks below read both, and both get warm vectors.
+    u = S._g.get(S.USER_CONTEXT)
+    graphs = [g] if u is g else [g, u]
     # Past 64 new texts the recall vectors are built in a background thread, and
     # until then the vector search returns nothing. Measure a warm daemon.
     from neuron import search as _search
-    _search._search_recall("warm", 1, g)
-    while _search._recall_warming:
-        await asyncio.sleep(0.1)
-    kept = {e["text"] for eps in g.episodes.values() for e in eps}
+    for gr in graphs:
+        _search._search_recall("warm", 1, gr)
+        while _search._recall_warming:
+            await asyncio.sleep(0.1)
+        _search._ensure_recall_vecs(gr)
+        while _search._recall_warming:
+            await asyncio.sleep(0.1)
+    kept = {e["text"] for gr in graphs for eps in gr.episodes.values() for e in eps}
     # a procedure's text gains its evidence when stored (ADR-022 D3)
     stored = sum(1 for f in facts if any(k.startswith(f["text"].rstrip(".")) for k in kept))
     # A set fact stored under another kind measures something else: on 2026-11-17
     # D3 turned the set's procedures into `fact` and the bench quietly fell back.
-    by_text = {gf["text"]: gf["kind"] for gf in g.facts.values()}
+    by_text = {gf["text"]: gf["kind"] for gr in graphs for gf in gr.facts.values()}
     wrong = [f["id"] for f in facts if not any(t.startswith(f["text"].rstrip(".")) and k == f["kind"]
                                                for t, k in by_text.items())]
     if wrong:

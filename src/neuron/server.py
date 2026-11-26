@@ -458,6 +458,9 @@ def _signal_domain_switch(domain: str, intent: str,
     switch only after CONTEXT_SWITCH_THRESHOLD consecutive turns signalling
     the same non-general domain; feedback/clarification turns don't count.
     Returns (switched, pending_domain, pending_count)."""
+    from neuron.registry import _SCOPE
+    if not AUTO_SWITCH or _SCOPE.get():
+        return False, None, 0
     if domain == "general" or domain == _g.active:
         if domain == _g.active and _domain_signal["domain"]:
             _domain_signal["domain"] = None
@@ -508,6 +511,13 @@ CONSOLIDATE_PROTECT_SALIENCE = _config.env_int("NEURON_CONSOLIDATE_PROTECT_SALIE
 # turns that all signal the same non-active domain.
 # A "feedback" or "clarification" turn resets the counter (not a real signal).
 CONTEXT_SWITCH_THRESHOLD: int = 2
+# OFF by default (2026-11-26): a context the session never chose, from a domain
+# guessed per message, with one counter shared by every session. It made the
+# mixed contexts (`backend` held a whole project, `llm` another) and, inside a
+# project session, it would have sent the second turn's facts to the domain's
+# graph. A project session never auto-switches; NEURON_AUTO_SWITCH=1 brings it
+# back for the sessions without a project.
+AUTO_SWITCH = os.environ.get("NEURON_AUTO_SWITCH", "").strip().lower() in ("1", "true", "yes", "on")
 
 _domain_signal: dict = {
     "domain": None,   # domain being signaled
@@ -646,6 +656,9 @@ def _all_tools() -> list[Tool]:
                 "one sentence each, with its why; concepts = 1-5 CONCEPT nouns that index "
                 "it (never verbs or filler). A fact that updates an older one passes "
                 "supersedes=<its #id, shown by pre_turn>. Facts are never evicted. "
+                "Where: habits and facts about the user go to the shared user memory by "
+                "themselves; knowledge true in ANY project (how a language, library or tool "
+                "works) goes to its topic with context=<topic> (python, spring, bash...). "
                 "topic/keywords/links are optional extras. "
                 "Skip on trivial turns (greetings, acknowledgements, yes/no). "
                 "Field limits and pitfalls: `help`."
@@ -1705,6 +1718,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _fact_lost: dict = {}
     _n_restated = 0                 # facts already stored word for word
     _used: set = set()              # facts this turn used (ADR-015 D8, below)
+    _to_user = False                # a user/habit fact went to the user graph
     for f in _facts_in:
         cs = []
         for c in (f["concepts"] if f["concepts"] is not None else keywords):
@@ -1714,12 +1728,14 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                 cs.append(hit)
         # A fact whose concepts all fell to curation is still indexed: under the
         # turn's keywords, so it stays findable.
-        rep = g.add_fact(f["kind"], f["text"], cs or list(keywords), turn,
-                         supersedes=f["supersedes"], gist=f.get("gist", ""), source=_author)
+        tg = (_user_graph(g) or g) if f["kind"] in USER_KINDS else g
+        _to_user = _to_user or tg is not g
+        rep = tg.add_fact(f["kind"], f["text"], cs or list(keywords), turn,
+                          supersedes=f["supersedes"], gist=f.get("gist", ""), source=_author)
         if not rep:
             continue
         _n_restated += bool(rep.get("duplicate"))
-        g_kind = g.facts[rep["id"]]["kind"]
+        g_kind = tg.facts[rep["id"]]["kind"]
         _turn_ids.add(rep["id"])
         if not (rep.get("duplicate") or rep.get("superseded") or f["supersedes"]):
             _fresh.append(rep["id"])
@@ -1740,7 +1756,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             if done:
                 _fact_report[-1] += f", retires handoff {' '.join('#' + o for o in done)}"
         if f.get("link"):
-            why = g.add_fact_link(rep["id"], f["link"].get("to", ""), str(f["link"].get("type", "")))
+            why = tg.add_fact_link(rep["id"], f["link"].get("to", ""), str(f["link"].get("type", "")))
             _fact_report[-1] += (f", {f['link'].get('type')} #{str(f['link'].get('to', '')).lstrip('#')}"
                                  if not why else "")
             if why:
@@ -1756,10 +1772,10 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # The implicit signal now comes from the reply, read by GM's Stop hook
     # (memhook.used_facts -> confirm).
     for fid in _turn_ids:
-        _used.update(c for c in re.findall(r"#([0-9a-f]{8})\b", g.facts[fid]["text"])
-                     if c not in _turn_ids and c in g.facts)
+        _used.update(c for c in re.findall(r"#([0-9a-f]{8})\b", _fact_graph(fid, g).facts[fid]["text"])
+                     if c not in _turn_ids and _fact_graph(c, g))
     for fid in _used:
-        g.confirm_fact(fid)
+        _fact_graph(fid, g).confirm_fact(fid)
 
     # ADR-015 §3.2: a fact gets its vector when it is written (~120 ms each),
     # so the next recall finds it even while a cold cache warms in the
@@ -1767,7 +1783,8 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if _fact_report:
         try:
             _emb = _search._get_embedder()
-            _new = [t for t in {_search._fact_text(f) for f in g.facts.values()
+            _ug = _user_graph(g) if _to_user else None
+            _new = [t for t in {_search._fact_text(f) for f in [*g.facts.values(), *(_ug.facts.values() if _ug else ())]
                                 if f["turn"] == turn and f["status"] == "active"}
                     if (id(_emb), t) not in _search._RECALL_VECS]
             if _new:
@@ -1775,7 +1792,7 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             # D6: a new fact close to an active one is said, never merged. One
             # note, the closest: only 3 notes are shown, the others matter too.
             hits = [(fid, h) for fid in _fresh
-                    if (h := _search._similar_fact(g, g.facts[fid], FACT_SIMILAR))]
+                    if (h := _search._similar_fact(_fact_graph(fid, g), _fact_graph(fid, g).facts[fid], FACT_SIMILAR))]
             if hits:
                 fid, (o, sim) = max(hits, key=lambda x: x[1][1])
                 _fact_notes.append(
@@ -1832,6 +1849,8 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
             g.cache_add(nd.keyword, score=min(1.0, nd.salience / 10.0))
     removed = g.prune_tangential()
     _g.save(ctx or None)
+    if _to_user:
+        _g.save(USER_CONTEXT)
     if consolidate_auto and g.turn_count % CONSOLIDATE_EVERY == 0:
         # E2.2: protect high-salience nodes from being merged away.
         g.consolidate(drop_orphans=True, protect_salience=CONSOLIDATE_PROTECT_SALIENCE)
@@ -2127,14 +2146,42 @@ def _last_stop(g, message: str, exclude=frozenset()) -> list:
     return (hand + named + [f for f in recent if f not in named])[:LAST_STOP_N]
 
 
+# Who the user is and how they work, valid in every project: one graph shared by
+# all contexts (2026-11-26). It lived in whatever context was active, so a
+# session in any other project lost the user's rules.
+USER_CONTEXT = (os.environ.get("NEURON_USER_CONTEXT") or "user").strip().lower().strip("/") or "user"
+USER_KINDS = ("user", "habit")
+
+
+def _user_graph(g):
+    """The user graph, or None when `g` is it."""
+    u = _g.get(USER_CONTEXT)
+    return None if u is g else u
+
+
+def _fact_graph(fid: str, g):
+    """The graph holding fact `fid`: `g`, else the user graph; None if neither."""
+    fid = str(fid).lstrip("#")
+    if fid in g.facts:
+        return g
+    u = _user_graph(g)
+    return u if u is not None and fid in u.facts else None
+
+
 def _profile_facts(g, cap: int) -> list:
     """Active user/habit facts, as many as fit in `cap` chars: the habits (how
     to work, valid in every turn) first, then the user facts, newest first in
-    each. Newest first alone kept the oldest rules out for good (2026-11-17)."""
+    each. Newest first alone kept the oldest rules out for good (2026-11-17).
+    From the user graph and `g` both."""
+    u = _user_graph(g)
+    pool = {f["id"]: f for f in [*(u.facts.values() if u else ()), *g.facts.values()]}
     out, used = [], 0
-    for f in sorted((f for f in g.facts.values()
-                     if f["status"] == "active" and f["kind"] in ("user", "habit")),
-                    key=lambda f: (f["kind"] == "habit", f["turn"] or 0), reverse=True):
+    for f in sorted((f for f in pool.values()
+                     if f["status"] == "active" and f["kind"] in USER_KINDS),
+                    # created_at, not turn: each graph counts its own turns, and the
+                    # user graph gathers facts from all of them (turn breaks ties).
+                    key=lambda f: (f["kind"] == "habit", f.get("created_at") or "", f["turn"] or 0),
+                    reverse=True):
         used += len(fact_shown(f)) + 20      # "[habit] ... #12345678 | "
         if used > cap:
             break
@@ -2182,10 +2229,31 @@ def _fact_hits(query: str, g, k: int, floor: float, delta: float,
                newer: bool = False, exclude=frozenset(), use: float = 0.0) -> list:
     """search._search_facts with the recall bonus. A replaced embedding (tests)
     is used for the query and the facts alike, never mixed with the model's."""
-    return _search._search_facts(
-        query, g, k, floor, FACT_NAMED_BONUS, delta,
-        embed=None if _get_embedding is _search._get_embedding else _get_embedding,
-        newer=newer, exclude=exclude, lex=FACT_LEX_BONUS, use=use, proc=FACT_PROC_BONUS)
+    u = _user_graph(g)
+    pool = ([f for gr in (g, u) for f in gr.facts.values() if f["status"] == "active"]
+            if u is not None and u.facts else None)
+
+    def one(gr):
+        return _search._search_facts(
+            query, gr, k, floor, FACT_NAMED_BONUS, delta,
+            embed=None if _get_embedding is _search._get_embedding else _get_embedding,
+            newer=newer, exclude=exclude, lex=FACT_LEX_BONUS, use=use, proc=FACT_PROC_BONUS,
+            idf_pool=pool)
+    hits = one(g)
+    if u is not None and u.facts:          # the user's facts compete in every context
+        # Into the project's list as it is: re-sorting it dropped the newer
+        # version _with_newer puts beside its old one, past the k slots (on 600
+        # real messages, 2.40 -> 2.2 facts each). A user fact takes the last
+        # place only when it beats it; none strong enough: the list is unchanged.
+        uh = one(u)
+        top = max((h[1] for h in hits + uh), default=0.0)
+        res = list(hits)
+        for h in sorted(uh, key=lambda h: -h[1]):
+            if h[1] < top - delta:
+                break
+            res.insert(next((j for j, x in enumerate(res) if x[1] < h[1]), len(res)), h)
+        hits = res[:max(len(hits), k)]
+    return hits
 
 
 async def _tool_forgotten(arguments: dict, ctx: str, g) -> list[TextContent]:
@@ -2504,7 +2572,7 @@ def _expand_facts(topic: str, g) -> "str | None":
     ids = _FACT_IDS.findall(topic or "")
     if not ids or _FACT_IDS.sub("", topic).strip(" ,;|"):
         return None
-    rows = [g.facts[i] for i in dict.fromkeys(ids) if i in g.facts]
+    rows = [gr.facts[i] for i in dict.fromkeys(ids) if (gr := _fact_graph(i, g))]
     if not rows:
         return f"No fact with id {', '.join('#' + i for i in ids)} in this context."
     return _as_data("\n".join(f"[{f['kind']}] {f['text']} #{f['id']}" for f in rows))
@@ -2669,9 +2737,14 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     if _cross and _cross[0][2] > _best_sim + _config.env_float(
             "NEURON_ROUTE_MARGIN", 0.15):
         _c, _ckw, _csim = _cross[0]
-        warns_pt.append(f"⚠ topic far from the active context '{ctx_label}' "
-                        f"({_best_sim:.2f}) — '{_c}' is closer "
-                        f"({_ckw} {_csim:.2f}): switch_context('{_c}')?")
+        from neuron.registry import _SCOPE
+        if _SCOPE.get():   # a project session stays put: say where, do not offer a switch
+            warns_pt.append(f"⚠ topic far from this project '{ctx_label}' ({_best_sim:.2f}) — "
+                            f"'{_c}' has more ({_ckw} {_csim:.2f}): switch_context('{_c}') moves this session only")
+        else:
+            warns_pt.append(f"⚠ topic far from the active context '{ctx_label}' "
+                            f"({_best_sim:.2f}) — '{_c}' is closer "
+                            f"({_ckw} {_csim:.2f}): switch_context('{_c}')?")
     # Same rule as get_context's compact format: the note on the method must
     # not make it look as if there were content. (keep-in-sync: the two lists
     # are built in two places.)
@@ -2757,12 +2830,16 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
             _reinforce(g, kw, confidence, boost)].append(kw)
     # ADR-015 D8: the signal on the fact; a refute counts one back.
     facts_ok = [str(f).lstrip("#") for f in (arguments.get("facts") or [])
-                if g.confirm_fact(f, 1 if confidence >= 0 else -1)]
+                if (gr := _fact_graph(f, g)) and gr.confirm_fact(str(f).lstrip("#"), 1 if confidence >= 0 else -1)]
     # ADR-021 D1: the facts the recall showed this turn, used or not. Reported by
     # GM's Stop hook with the used ones: one write per turn, off the recall's path.
-    shown_ok = [f for f in (arguments.get("shown") or []) if g.note_shown(f)]
+    shown_ok = [f for f in (arguments.get("shown") or [])
+                if (gr := _fact_graph(f, g)) and gr.note_shown(str(f).lstrip("#"))]
     if confirmed or facts_ok or shown_ok:
         _g.save(ctx or None)
+        u = _user_graph(g)
+        if u is not None and any(str(f).lstrip("#") in u.facts for f in facts_ok + shown_ok):
+            _g.save(USER_CONTEXT)
     return [TextContent(type="text", text=json.dumps({
         **({"facts_confirmed": facts_ok} if arguments.get("facts") else {}),
         "confirmed": confirmed,
@@ -2923,9 +3000,17 @@ async def _call_tool_impl(name: str, arguments: dict) -> list[TextContent]:
     handler = _HANDLERS.get(name)
     if handler is None:
         return [TextContent(type="text", text=f"Unknown command: {name}")]
-    ctx = arguments.get("context", "")
-    g = _g.get(ctx) if ctx else _g.get()
-    return await handler(arguments, ctx, g)
+    # `_scope`: the caller's session context (Gray Matter sets it), for this
+    # call only; `context` keeps its meaning (a tool's target or override).
+    scope = str(arguments.pop("_scope", "") or "") if isinstance(arguments, dict) else ""
+    token = _g.scope(scope) if scope else None
+    try:
+        ctx = arguments.get("context", "")
+        g = _g.get(ctx) if ctx else _g.get()
+        return await handler(arguments, ctx, g)
+    finally:
+        if token is not None:
+            _g.unscope(token)
 
 
 # ---------------------------------------------------------------------------

@@ -312,7 +312,8 @@ def test_a_call_with_only_facts_saves_typed_facts(_isolated):
     assert "saved" in out.lower() and "error" not in out.lower(), out
     assert "facts: 2 saved" in out and "habit" in out and "fix" in out, out
     g = S._g.get()   # the module registry: other tests' facts may share the graph
-    mine = {f["kind"]: f["concepts"] for f in g.facts.values()
+    every = [*g.facts.values(), *S._g.get(S.USER_CONTEXT).facts.values()]   # habits: user graph
+    mine = {f["kind"]: f["concepts"] for f in every
             if f["text"].startswith(("Dopo un push", "WAL bloccato"))}
     assert mine == {"habit": ["ci", "push"], "fix": ["pyturso", "wal"]}, mine
 
@@ -347,7 +348,7 @@ def test_restating_a_fact_with_a_gist_fills_it_in_place(_isolated):
     again = _call("store_turn", {"facts": [{"kind": "habit", "text": text, "concepts": ["release"],
                                             "gist": "live installer test before release"}]})
     assert "(already stored), gist added" in again, again
-    g = S._g.get()
+    g = S._g.get(S.USER_CONTEXT)        # a habit lives in the user graph
     mine = [f for f in g.facts.values() if f["text"] == text and f["status"] == "active"]
     assert len(mine) == 1 and mine[0]["gist"] == "live installer test before release", mine
     assert mine[0]["id"] in first   # same fact, not a new one
@@ -443,11 +444,12 @@ def test_a_fact_without_kind_or_concepts_goes_under_the_turn(_isolated):
     assert f["kind"] == "fact" and f["concepts"] == ["pyturso"], f
 
 
-def test_the_profile_puts_the_habits_before_the_user_facts():
+def test_the_profile_puts_the_habits_before_the_user_facts(monkeypatch):
     """The oldest rule still beats the newest user fact for a place in the
     profile; within each kind the newest comes first."""
     from neuron.models import Graph
     g = Graph()
+    monkeypatch.setattr(S, "_user_graph", lambda g: None)   # this graph alone
     old_rule = g.add_fact("habit", "Never commit before a real usage test.", ["commit"], 1)["id"]
     new_rule = g.add_fact("habit", "Chat in Italian, repo in English.", ["language"], 9)["id"]
     users = [g.add_fact("user", f"The user fact number {i} about work.", ["user"], 10 + i)["id"] for i in range(3)]

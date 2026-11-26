@@ -329,3 +329,22 @@ def test_a_procedure_lists_its_solutions_and_the_links_survive_a_reload(tmp_path
     again = Graph()
     again.load_sqlite(str(db), context="default")
     assert again.fact_links == g.fact_links, (again.fact_links, g.fact_links)
+
+
+def test_a_function_word_does_not_name_a_concept(tmp_path, monkeypatch):
+    """Live, 2026-11-25: "del" named hover-prima-del-clic and a microphone fact
+    came back on a navbar question. The user's file adds words; a concept made
+    only of ignored words can still be named; a short real concept too."""
+    import types
+    from neuron import search as se
+    from neuron.search import _names, _words
+    monkeypatch.setattr(se._S(), "_g", types.SimpleNamespace(_graphs_dir=str(tmp_path)))
+    msg = _words("prima di toccare il pannello del desktop")
+    assert not _names("hover-prima-del-clic", msg) and not _names("soglia-di-richiamo", msg)
+    assert _names("soglia-di-richiamo", _words("la soglia e' giusta?"))
+    assert _names("gm", _words("installa solo gm")) and _names("prima", msg)
+    assert _names("desktop shortcut", msg)
+    (tmp_path / "_ignored_words.txt").write_text("# mine\nDesktop  # everywhere\n", encoding="utf-8")
+    assert not _names("desktop shortcut", msg)
+    (tmp_path / "_ignored_words.txt").unlink()
+    assert _names("desktop shortcut", msg)

@@ -147,16 +147,16 @@ def test_a_new_fact_close_to_an_active_one_is_reported_not_merged(words, tmp_pat
     monkeypatch.setattr(S, "_g", GraphRegistry(graphs_dir=str(tmp_path)))
     monkeypatch.setattr(S, "TURSO_ENGINE", False)
     call = lambda facts: asyncio.run(S.call_tool("store_turn", {"facts": facts}))[0].text  # noqa: E731
-    call([{"kind": "habit", "text": "no push if something breaks in use", "concepts": ["push"]}])
+    call([{"kind": "decision", "text": "no push if something breaks in use", "concepts": ["push"]}])
     old = next(iter(S._g.get().facts.values()))
 
-    out = call([{"kind": "habit", "text": "no push if anything breaks in use", "concepts": ["push"]}])
+    out = call([{"kind": "decision", "text": "no push if anything breaks in use", "concepts": ["push"]}])
     assert f"is similar to #{old['id']}" in out and f'supersedes="{old["id"]}"' in out, out
     assert len([f for f in S._g.get().facts.values() if f["status"] == "active"]) == 2, "never merged"
 
     other_kind = call([{"kind": "fix", "text": "no push if something breaks in use", "concepts": ["push"]}])
     assert "is similar to" not in other_kind, other_kind
-    replaced = call([{"kind": "habit", "text": "no push when something breaks in use",
+    replaced = call([{"kind": "decision", "text": "no push when something breaks in use",
                       "concepts": ["push"], "supersedes": old["id"]}])
     assert "is similar to" not in replaced, replaced
 
@@ -173,9 +173,9 @@ def test_a_fact_cited_or_confirmed_counts_one_use_a_shared_concept_does_not(word
     call = lambda tool, args: asyncio.run(S.call_tool(tool, args))[0].text  # noqa: E731
     call("store_turn", {"facts": [
         {"kind": "fix", "text": "pacchetti importati dalla cartella sbagliata", "concepts": ["python"]},
-        {"kind": "habit", "text": "the user tests before committing", "concepts": ["python"]}]})
+        {"kind": "decision", "text": "the user tests before committing", "concepts": ["python"]}]})
     g = S._g.get()
-    fix, habit = (next(f for f in g.facts.values() if f["kind"] == k) for k in ("fix", "habit"))
+    fix, habit = (next(f for f in g.facts.values() if f["kind"] == k) for k in ("fix", "decision"))
 
     shown = call("pre_turn", {"topic": "pacchetti importati cartella sbagliata",
                               "keywords": ["python"], "profile": True})

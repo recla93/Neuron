@@ -95,6 +95,7 @@ def test_confirm_confidence_raises_trust():
     g.add_node(_node("kafka"))
     class _NoSave:
         def save(self, *a, **k): pass
+        def get(self, *a, **k): return None
     old = srv._g; srv._g = _NoSave()
     try:
         out = asyncio.run(srv._tool_confirm(
@@ -123,6 +124,7 @@ def test_refute_negative_confidence_lowers_trust():
     g.add_node(_node("kafka", sal=5, trust=0.8))
     class _NoSave:
         def save(self, *a, **k): pass
+        def get(self, *a, **k): return None
     old = srv._g; srv._g = _NoSave()
     try:
         asyncio.run(srv._tool_confirm({"keywords": ["kafka"], "confidence": -0.5}, "", g))

@@ -26,7 +26,7 @@ import threading
 import weakref
 from array import array
 
-from neuron.extraction import DOMAIN_ALIASES, _fold_accents
+from neuron.extraction import DOMAIN_ALIASES, STOP_WORDS, _fold_accents
 
 log = logging.getLogger("neuron.search")
 from neuron.db import SQLITE_MIN_VALID_SIZE
@@ -308,6 +308,11 @@ def _recall_texts(g, nd) -> list[str]:
 # vector per fact is ~6000 texts at MAX_NODES=1000, past that cache's 4096 cap,
 # and an evicted text would be embedded again on every query.
 _RECALL_VECS: dict = {}
+# The recall texts of every graph this process has used, by graph id. The cache
+# and its file keep their union: a recall reads the project's graph AND the user
+# graph (2026-11-26), and keeping only the last graph's texts evicted the other
+# on every message, so the project's facts were skipped while they re-embedded.
+_RECALL_LIVE: dict = {}
 # Embedding the whole `ai` graph took 47 s (713 texts, 2026-11-04): paid once,
 # then kept in a file next to the graphs — a cache, rebuilt if it is lost.
 # More missing texts than this are embedded in the background, so the first
@@ -398,6 +403,8 @@ def _ensure_recall_vecs(graph, per: "dict | None" = None) -> int:
     facts = {_fact_text(f) for f in getattr(graph, "facts", {}).values()
              if f["status"] == "active"}
     texts = {t for ts in per.values() for t in ts} | facts
+    _RECALL_LIVE[id(graph)] = texts
+    keep = set().union(*_RECALL_LIVE.values())
     # Facts first: the recall reads facts, and with a cold cache it waited for
     # every node text too (44 s on a 137-text graph, 2026-11-08).
     missing = sorted((t for t in texts if (eid, t) not in _RECALL_VECS),
@@ -412,7 +419,7 @@ def _ensure_recall_vecs(graph, per: "dict | None" = None) -> int:
     if missing and len(missing) <= _RECALL_INLINE_MAX:
         _embed_recall(emb, eid, missing)
         if persist:
-            _recall_to_disk(eid, texts)
+            _recall_to_disk(eid, keep)
     elif missing and not _recall_warming:
         _recall_warming = True
 
@@ -421,13 +428,13 @@ def _ensure_recall_vecs(graph, per: "dict | None" = None) -> int:
             try:
                 _embed_recall(emb, eid, missing)
                 if persist:
-                    _recall_to_disk(eid, texts)
+                    _recall_to_disk(eid, keep)
             finally:
                 _recall_warming = False
         threading.Thread(target=_warm, name="recall-warm", daemon=True).start()
-    if not _recall_warming and len(_RECALL_VECS) > 2 * len(texts) + 1000:
-        # old facts, other graphs: drop them, keep this graph's
-        _RECALL_VECS = {k: v for k, v in _RECALL_VECS.items() if k[1] in texts}
+    if not _recall_warming and len(_RECALL_VECS) > 2 * len(keep) + 1000:
+        # old facts and texts no graph in use has any more: drop them
+        _RECALL_VECS = {k: v for k, v in _RECALL_VECS.items() if k[1] in keep}
     return eid
 
 
@@ -435,24 +442,60 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", _fold_accents(text).lower()))
 
 
-def _names(concept: str, words: set[str]) -> bool:
+# STOP_WORDS lacks these: the extractor drops every word of 2 letters by length,
+# the naming must not (`gm`, `db` are concepts).
+_IGNORED = frozenset(STOP_WORDS | {"di", "da", "ed", "ad", "od", "nell", "dell", "sull", "all", "dall", "sul", "sulla"})
+_IGNORED_FILE = "_ignored_words.txt"
+_ignored_cache: tuple = ("", 0, frozenset())
+
+
+def _ignored_words() -> frozenset:
+    """The words that never name a concept on their own: the built-in list plus
+    the user's file in the graphs folder (one word per line, # for a comment),
+    read again when it changes. No word is learned by frequency: measured
+    2026-11-25 on 1207 real messages, the frequent words that are no concept by
+    themselves include `gm`, `gray`, `matter`, `desktop`, `test`, `db`."""
+    global _ignored_cache
+    d = getattr(getattr(_S(), "_g", None), "_graphs_dir", None)
+    if not d:
+        return _IGNORED
+    path = os.path.join(d, _IGNORED_FILE)
+    try:
+        stamp = os.stat(path).st_mtime_ns
+        if _ignored_cache[:2] != (path, stamp):
+            with open(path, encoding="utf-8-sig") as fh:
+                extra = set().union(*(_words(ln.split("#", 1)[0]) for ln in fh))
+            _ignored_cache = (path, stamp, _IGNORED | extra)
+    except (OSError, ValueError):
+        return _IGNORED
+    return _ignored_cache[2]
+
+
+def _names(concept: str, words: set[str], ignored: "frozenset | None" = None) -> bool:
     """The message names ``concept`` when one of its words is a word of the
     message, or the start of one: an Italian verb or a plural (wheel -> wheels,
     push -> pushiamo, commit -> committare, committiamo). A stem of 5+ letters
     takes any ending; a shorter one up to 4 letters, so `test` does not reach
     every word that starts with it. (3 letters missed "committare": a usage
     test on 2026-11-08 lost the habit about commits that way.)"""
+    parts = [w for w in _words(concept) if len(w) >= 2]
+    # `di` named soglia-di-richiamo and `del` hover-prima-del-clic (live,
+    # 2026-11-25). A concept made only of such words keeps them: else no
+    # message could ever name it.
+    # `ignored`: read once per search by the caller (a stat per concept is slow).
+    ignored = _ignored_words() if ignored is None else ignored
+    parts = [w for w in parts if w not in ignored] or parts
     return any(w in words or any(
         t.startswith(w) and (len(w) >= 5 or (len(w) >= 3 and len(t) - len(w) <= 4))
         for t in words)
-        for w in _words(concept) if len(w) >= 2)
+        for w in parts)
 
 
 def _names_whole(concept: str, words: set[str]) -> bool:
     """Every word of ``concept`` is named, not one of them: the procedure bonus
     on real messages (2026-11-17) fired on "test" for `test suite` and on "user"
     for `computer-use`, and pushed a profiling procedure into 11 of 209 turns."""
-    return all(_names(w, words) for w in _words(concept) if len(w) >= 2)
+    return all(_names(w, words, frozenset()) for w in _words(concept) if len(w) >= 2)
 
 
 def _lex_keys(text: str) -> set[str]:
@@ -495,7 +538,8 @@ def _search_facts(query: str, graph, k: int, min_score: float,
                   named_bonus: float, delta: float = 1.0,
                   embed=None, newer: bool = False,
                   exclude=frozenset(), lex: float = 0.0,
-                  use: float = 0.0, proc: float = 0.0) -> list[tuple[dict, float, str]]:
+                  use: float = 0.0, proc: float = 0.0,
+                  idf_pool: "list | None" = None) -> list[tuple[dict, float, str]]:
     """ADR-015 D7: the facts that answer a message, not the nodes near it.
 
     Score = cosine(message, `concepts. sentence`) + ``named_bonus`` when the
@@ -546,14 +590,16 @@ def _search_facts(query: str, graph, k: int, min_score: float,
     else:
         q = embed(query)
         vec = lambda f: embed(_fact_text(f))  # noqa: E731
-    words = _words(query)
-    worded = _lexical(query, active) if lex else {}
+    words, ignored = _words(query), _ignored_words()
+    # `idf_pool`: every fact the caller ranks together (a project's and the
+    # user's): a word's rarity over a 49-fact pool alone doubled its weight.
+    worded = _lexical(query, idf_pool or active) if lex else {}
     out = []
     for f in active:
         v = vec(f)
         if v is None:          # still warming
             continue
-        named = [c for c in f["concepts"] if _names(c, words)]
+        named = [c for c in f["concepts"] if _names(c, words, ignored)]
         score = (sum(a * b for a, b in zip(q, v)) + (named_bonus if named else 0.0)
                  + lex * worded.get(f["id"], 0.0) + use * _use_rate(f)
                  + (proc if f["kind"] == "procedure" and any(_names_whole(c, words) for c in named) else 0.0))

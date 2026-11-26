@@ -7,6 +7,7 @@ Cross-context links connect nodes across different graphs.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -15,6 +16,13 @@ from typing import Any
 
 from neuron import db as _db
 from neuron.models import Graph
+
+# The context of ONE call, set by the caller that knows the session (Gray
+# Matter, from the session's project). The pointer file below is shared by
+# every session on the machine: 2026-11-26 one session switched it and another
+# session's facts went to the wrong graph. A scoped call reads and switches
+# only this, never the file.
+_SCOPE: "contextvars.ContextVar[str | None]" = contextvars.ContextVar("neuron_scope", default=None)
 
 log = logging.getLogger("neuron.registry")
 
@@ -122,7 +130,7 @@ class GraphRegistry:
 
     def get(self, context: str | None = None) -> Graph:
         """Get (or create) the graph for a context."""
-        ctx = (context or self._active).lower().strip("/")
+        ctx = (context or self.active).lower().strip("/")
         if not ctx:
             ctx = "default"
         if ctx not in self._graphs:
@@ -165,7 +173,7 @@ class GraphRegistry:
 
     def resolve_chain(self, context: str | None = None) -> list[Graph]:
         """Return [current, parent, grandparent, ..., default] for inheritance lookup."""
-        ctx = (context or self._active).lower().strip("/")
+        ctx = (context or self.active).lower().strip("/")
         parts = ctx.split("/")
         chain: list[Graph] = []
         seen: set[str] = set()
@@ -184,7 +192,17 @@ class GraphRegistry:
 
     @property
     def active(self) -> str:
-        return self._active
+        return _SCOPE.get() or self._active
+
+    @staticmethod
+    def scope(context: str):
+        """Make `context` the active one for the current call only; returns the
+        token for `unscope`. Nothing is written to disk."""
+        return _SCOPE.set(context.lower().strip("/") or "default")
+
+    @staticmethod
+    def unscope(token) -> None:
+        _SCOPE.reset(token)
 
     def switch(self, context: str) -> str:
         """Switch active context, creating it if needed.
@@ -199,6 +217,9 @@ class GraphRegistry:
                 ctx = existing
                 break
         self.get(ctx)
+        if _SCOPE.get():          # a scoped call switches its own session only
+            _SCOPE.set(ctx)
+            return ctx
         self._active = ctx
         # Persist active context to disk
         try:
