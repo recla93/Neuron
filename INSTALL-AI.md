@@ -31,10 +31,8 @@ and its `INSTALL-AI.md`.
 
 | # | Model | Size | Note |
 |---|---|---|---|
-| 1 | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 220 MB | multilingual (EN+IT), default |
-| 2 | `sentence-transformers/all-MiniLM-L6-v2` | 90 MB | English only, smallest |
-| 3 | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | 1.0 GB | multilingual, stronger |
-| 4 | `intfloat/multilingual-e5-large` | 2.2 GB | multilingual, best, heavy |
+| 1 | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | 1.0 GB | multilingual (EN+IT), default: best recall |
+| 2 | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 220 MB | multilingual (EN+IT), light: for a weak PC |
 
 **If an install already exists**, ask: refresh the code (`-Force` /
 `--force`), rebuild the venv (`-Clear` / `--clear`), or leave it. Data is kept

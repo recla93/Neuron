@@ -91,14 +91,12 @@ fi
 # dim MUST match the model — models.py guards VECTOR_DIM on the first embed.
 # Names/dims/sizes verified against fastembed's list_supported_models().
 # Keep in sync with $EmbedModels in install.ps1.
-EM_1="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - default, best size/quality"
-EM_2="sentence-transformers/all-MiniLM-L6-v2|384|90 MB|English only - smallest and fastest"
-EM_3="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual, stronger - 2x storage per vector"
-EM_4="intfloat/multilingual-e5-large|1024|2.2 GB|multilingual, best quality - heavy (RAM + disk)"
+EM_1="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual (EN+IT) - default, best recall (2x storage per vector)"
+EM_2="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - light, for a weak PC"
 CHOSEN_MODEL=""; CHOSEN_DIM=""; CHOSEN_SIZE=""
 select_embed_model() {
     if [ -n "$EMBED_MODEL" ]; then
-        for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4"; do
+        for e in "$EM_1" "$EM_2"; do
             [ "${e%%|*}" = "$EMBED_MODEL" ] && { _set_chosen "$e"; return; }
         done
         # Unknown name is not an error: fastembed supports more than we list.
@@ -109,7 +107,7 @@ select_embed_model() {
     echo ""
     echo "  Embedding model (downloaded once, defines the memory's vector space):"
     i=1
-    for e in "$EM_1" "$EM_2" "$EM_3" "$EM_4"; do
+    for e in "$EM_1" "$EM_2"; do
         _rest="${e#*|}"; _dim="${_rest%%|*}"
         _rest="${_rest#*|}"; _size="${_rest%%|*}"; _note="${_rest#*|}"
         echo "    [$i] $_note"
@@ -121,8 +119,6 @@ select_embed_model() {
     printf "  Choice [1]: "; read -r mc
     case "$mc" in
         2) _set_chosen "$EM_2" ;;
-        3) _set_chosen "$EM_3" ;;
-        4) _set_chosen "$EM_4" ;;
         *) _set_chosen "$EM_1" ;;
     esac
 }
@@ -163,7 +159,21 @@ save_embed_model() {  # $1 = venv python
     # Persisted to the per-user .env (neuron.config.user_env_file), NOT to this
     # shell's env: the MCP client respawns the server from an arbitrary cwd, so
     # a variable here would be gone by the time it matters.
-    _vpy="$1"; _dim="$CHOSEN_DIM"
+    _vpy="$1"
+    # An existing memory keeps its model unless EMBED_MODEL says otherwise: the
+    # menu's first entry (mpnet since 2026-11-27) must not re-space a MiniLM store.
+    if [ -z "$EMBED_MODEL" ]; then
+        _keep=$("$_vpy" -c "from neuron.config import saved_embed_model
+m, w = saved_embed_model()
+print(w + '|' + m if m else '')" 2>/dev/null || echo "")
+        if [ -n "$_keep" ]; then
+            echo "  Embedding model: keeping ${_keep#*|} (set EMBED_MODEL to change it)."
+            [ "${_keep%%|*}" = "env" ] && return 0
+            CHOSEN_MODEL="${_keep#*|}"; CHOSEN_DIM=0; CHOSEN_SIZE="?"
+            for e in "$EM_1" "$EM_2"; do [ "${e%%|*}" = "$CHOSEN_MODEL" ] && _set_chosen "$e"; done
+        fi
+    fi
+    _dim="$CHOSEN_DIM"
     if [ "$_dim" = "0" ]; then
         # Custom model: ask fastembed for the real width instead of guessing.
         _dim=$("$_vpy" -c "from fastembed import TextEmbedding

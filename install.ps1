@@ -247,10 +247,8 @@ function Ensure-Python {
 # dim MUST match the model — models.py guards VECTOR_DIM on the first embed.
 # Names/dims/sizes verified against fastembed's list_supported_models().
 $EmbedModels = @(
-    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - default, best size/quality" },
-    @{ name = "sentence-transformers/all-MiniLM-L6-v2";                      dim = 384;  size = "90 MB";  note = "English only - smallest and fastest" },
-    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual, stronger - 2x storage per vector" },
-    @{ name = "intfloat/multilingual-e5-large";                              dim = 1024; size = "2.2 GB"; note = "multilingual, best quality - heavy (RAM + disk)" }
+    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual (EN+IT) - default, best recall (2x storage per vector)" },
+    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - light, for a weak PC" }
 )
 function Select-EmbedModel {
     # Explicit -EmbedModel wins; otherwise prompt, defaulting to the multilingual.
@@ -458,7 +456,19 @@ function Install-Standalone {
         else { & $Vpy -m pip install -q $TursoPin }
         if ($LASTEXITCODE -ne 0) { Write-Host "  WARNING: $TursoPin not installed - Neuron runs on the sqlite3 tier." }
     }
-    Save-EmbedModel $Vpy $Chosen
+    # An existing memory keeps its model unless -EmbedModel says otherwise: the
+    # menu's first entry (mpnet since 2026-11-27) must not re-space a MiniLM store.
+    $keep = if ($EmbedModel) { "" } else { "$(& $Vpy -c "from neuron.config import saved_embed_model as s; m, w = s(); print(w + '|' + m if m else '')")".Trim() }
+    if ($keep) {
+        $kWhere, $kName = $keep -split '\|', 2
+        Write-Host "  Embedding model: keeping $kName (pass -EmbedModel to change it)."
+        if ($kWhere -eq "store") {
+            $known = $EmbedModels | Where-Object { $_.name -eq $kName } | Select-Object -First 1
+            Save-EmbedModel $Vpy $(if ($known) { $known } else { @{ name = $kName; dim = 0; size = "?"; note = "kept" } })
+        }
+    } else {
+        Save-EmbedModel $Vpy $Chosen
+    }
     # Ship our OWN copy of gray_matter (the wheel we vendor) into the standalone
     # venv. Without it `import gray_matter` fails here, which silently disabled:
     # the direct-register guard, go-standalone/release_tool, and the GME write
