@@ -87,6 +87,8 @@ def test_context_names_are_checked_by_words():
     assert similar_contexts("gray-matter", have) == ["graymatter"]
     assert similar_contexts("bash", have) == ["studio/bash"]
     assert similar_contexts("reboot", have) == [] and similar_contexts("react", have) == []
+    assert similar_contexts("qwen3", have) == ["qwen"] and similar_contexts("llm2", have) == ["llm"]
+    assert similar_contexts("2026", have) == []          # only digits: no word to compare
 
 
 def test_an_unknown_context_goes_to_the_inbox_unless_created(tmp_path, monkeypatch):

@@ -534,7 +534,10 @@ def similar_contexts(name: str, names) -> list[str]:
         jb = "".join(b)
         if not b or other == name:
             continue
-        if (ja == jb or set(a) & set(b)
+        # A version number is the same subject: qwen3 -> qwen, python3 -> python.
+        # ponytail: springfield -> spring stays a false hit; it only costs a
+        # "did you mean" question, a word list if that ever annoys.
+        if (ja == jb or set(a) & set(b) or ja.rstrip("0123456789") == jb.rstrip("0123456789")
                 or any(len(t) >= 5 and ja.startswith(t) for t in b)
                 or any(len(t) >= 5 and jb.startswith(t) for t in a)):
             out.append(other)

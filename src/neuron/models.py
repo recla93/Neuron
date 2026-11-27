@@ -73,7 +73,7 @@ SLEEP_IDLE_SECONDS       = _env_int("NEURON_SLEEP_IDLE_SECONDS", 1800)     # 30 
 # append-only: an update is a new fact that supersedes the old one, and no
 # eviction, merge or orphan drop of a node deletes a fact (until 6.9 all four
 # did, with the per-node cap of 5).
-FACT_KINDS = ("progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure")
+FACT_KINDS = ("progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure", "pending")
 # Typed edges between facts (2026-11-18). A note found by "#id" in a text could
 # not tell a correction from a mention: 24 of 191 real recalls showed progress
 # facts as "notes". disputes: src corrects dst. solves / failed_for: src is a
@@ -663,22 +663,25 @@ class Graph:
         self._dirty = True
         return report
 
-    def retire(self, old_id: str, by_id: str, mark: bool = True) -> bool:
+    def retire(self, old_id: str, by_id: str, mark: bool = True, by: "Graph | None" = None) -> bool:
         """Mark the active fact ``old_id`` superseded by ``by_id``. False when
-        there is no such active fact (or it is ``by_id`` itself)."""
+        there is no such active fact (or it is ``by_id`` itself). ``by``: the
+        graph holding ``by_id`` when it is another one (a pending closed by a
+        fact of its project); ``mark`` then does nothing."""
+        by = by or self
         old = self.facts.get(old_id)
-        if not old or old["status"] != "active" or old_id == by_id or by_id not in self.facts:
+        if not old or old["status"] != "active" or old_id == by_id or by_id not in by.facts:
             return False
         old["status"] = "superseded"
         self._fact_status.add(old_id)
         # D8: superseded means used — the new version carries the
         # old one's confirmations, plus this one.
-        self.confirm_fact(by_id, old.get("confirmed", 0) + 1)
+        by.confirm_fact(by_id, old.get("confirmed", 0) + 1)
         # ...and its showings, plus the one this use came from: used/shown stays a rate.
-        self.note_shown(by_id, old.get("shown", 0) + 1)
+        by.note_shown(by_id, old.get("shown", 0) + 1)
         for kw in old["concepts"]:
             self.episodes[kw] = [e for e in self.episodes.get(kw, []) if e["id"] != old_id]
-        if mark and not self.facts[by_id].get("supersedes"):
+        if mark and by is self and not self.facts[by_id].get("supersedes"):
             self.facts[by_id]["supersedes"] = old_id
         self._dirty = True
         return True

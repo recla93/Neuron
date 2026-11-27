@@ -675,8 +675,8 @@ def _all_tools() -> list[Tool]:
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string",   # literal: tests read the schema from source; = models.FACT_KINDS
-                                         "enum": ["progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure"],
-                                         "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work) | procedure (steps of a task, in order, proven by an outcome)"},
+                                         "enum": ["progress", "decision", "fix", "fact", "idea", "user", "habit", "procedure", "pending"],
+                                         "description": "progress | decision | fix | fact | idea | user (who the user is, what they want) | habit (how they work) | procedure (steps of a task, in order, proven by an outcome) | pending (a thing left to do: shown at every session start, in the order stored, until a fact closes it with supersedes=<its id>; concept 'blocker' puts it first)"},
                                 "text": {"type": "string",
                                          "description": f"One sentence with its why, ideally under {EPISODE_MAX_CHARS} chars. "
                                                         "ENGLISH ONLY, whatever the chat language: the memory's pivot language."},
@@ -1722,6 +1722,9 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _n_restated = 0                 # facts already stored word for word
     _used: set = set()              # facts this turn used (ADR-015 D8, below)
     _to_user = False                # a user/habit fact went to the user graph
+    _home = ctx or _g.active        # the project a pending belongs to
+    _pg = _g.get(PENDING_CONTEXT)
+    _to_pending = False
     for f in _facts_in:
         cs = []
         for c in (f["concepts"] if f["concepts"] is not None else keywords):
@@ -1733,8 +1736,16 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         # turn's keywords, so it stays findable.
         tg = (_user_graph(g) or g) if f["kind"] in USER_KINDS else g
         _to_user = _to_user or tg is not g
+        _sup, _closes = f["supersedes"], None
+        if f["kind"] == "pending" and tg is not _pg:
+            # its project as a concept: the session start of that project shows it
+            tg, cs = _pg, list(dict.fromkeys([_home, *(cs or keywords)]))
+            _to_pending = True
+        elif _sup and tg is not _pg and str(_sup).lstrip("#") in _pg.facts:
+            # a fact of the project closes a pending: it stays here, the pending retires there
+            _sup, _closes = None, str(_sup).lstrip("#")
         rep = tg.add_fact(f["kind"], f["text"], cs or list(keywords), turn,
-                          supersedes=f["supersedes"], gist=f.get("gist", ""), source=_author)
+                          supersedes=_sup, gist=f.get("gist", ""), source=_author)
         if not rep:
             continue
         _n_restated += bool(rep.get("duplicate"))
@@ -1746,6 +1757,12 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
                             + (" (already stored)" if rep.get("duplicate") else "")
                             + (", gist added" if rep.get("gist_added") else "")
                             + (f" supersedes #{rep['superseded']}" if rep.get("superseded") else ""))
+        if _closes:
+            if _pg.retire(_closes, rep["id"], mark=False, by=tg):
+                _to_pending = True
+                _fact_report[-1] += f", closes pending #{_closes}"
+            else:
+                _fact_notes.append(f"pending #{_closes} is not open: nothing closed")
         if "truncated" in rep:
             _fact_lost["truncated"] = rep["truncated"]
         if "supersedes_unknown" in rep:
@@ -1854,6 +1871,8 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _g.save(ctx or None)
     if _to_user:
         _g.save(USER_CONTEXT)
+    if _to_pending:
+        _g.save(PENDING_CONTEXT)
     if consolidate_auto and g.turn_count % CONSOLIDATE_EVERY == 0:
         # E2.2: protect high-salience nodes from being merged away.
         g.consolidate(drop_orphans=True, protect_salience=CONSOLIDATE_PROTECT_SALIENCE)
@@ -2160,6 +2179,44 @@ USER_KINDS = ("user", "habit")
 # here and reads every graph, each fact labelled with the graph it comes from.
 INBOX_CONTEXT = (os.environ.get("NEURON_INBOX_CONTEXT") or "inbox").strip().lower().strip("/") or "inbox"
 
+# What is left to do, of every project, in one graph (the user, 2026-11-27): a
+# pending is shown at each session start of its project, before "where we
+# stopped", until a fact of that project closes it (supersedes=<its id>). Its
+# project is one of its concepts, added at store time.
+# ponytail: a pending naming another project as a concept shows there too;
+# a home column if that ever confuses.
+PENDING_CONTEXT = (os.environ.get("NEURON_PENDING_CONTEXT") or "pending").strip().lower().strip("/") or "pending"
+PENDING_MAX = _config.env_int("NEURON_PENDING_MAX", 8)
+PENDING_STALE_DAYS = _config.env_int("NEURON_PENDING_STALE_DAYS", 7)
+BLOCKER = "blocker"          # the concept of a pending that blocks the rest (a push, a release)
+_SPECIAL_CONTEXTS = (USER_CONTEXT, INBOX_CONTEXT, PENDING_CONTEXT)
+
+
+def _open_pending(home: str, exclude=frozenset()) -> list:
+    """The open pendings of project `home` (every project's in the inbox), in
+    the plan's order: blockers first, then oldest first, so a list stored in
+    order stays in order (ARBOR's Plan Zone: the role comes from the plan, not
+    from arrival; newest first had reversed it)."""
+    pg = _g.get(PENDING_CONTEXT)
+    act = [f for f in pg.facts.values() if f["status"] == "active" and f["kind"] == "pending"
+           and f["id"] not in exclude and (home == INBOX_CONTEXT or pg._norm(home) in f["concepts"])]
+    return sorted(act, key=lambda f: (BLOCKER not in f["concepts"], f.get("created_at") or "",
+                                      f["turn"] or 0))
+
+
+def _pending_line(f: dict) -> str:
+    """One pending as the session start shows it: [blocker], text, id, date,
+    and `stale Nd` past PENDING_STALE_DAYS (drift: shown, never hidden)."""
+    from datetime import datetime
+    when = f.get("created_at") or ""
+    tag = "[blocker] " if BLOCKER in f["concepts"] else ""
+    try:   # created_at is local time without a zone (models.add_fact)
+        age = (datetime.now() - datetime.fromisoformat(when)).days
+    except (ValueError, TypeError):
+        age = 0
+    stale = f", stale {age}d" if age > PENDING_STALE_DAYS else ""
+    return f"{tag}{fact_shown(f)} #{f['id']} ({when[8:10]}/{when[5:7]}{stale})"
+
 
 def _user_graph(g):
     """The user graph, or None when `g` is it."""
@@ -2176,7 +2233,7 @@ def _other_graphs(g) -> list:
         out.append(("", u))
     if g is _g.get(INBOX_CONTEXT):
         for ctx in sorted(_g._contexts_on_disk()):
-            if ctx not in (INBOX_CONTEXT, USER_CONTEXT):
+            if ctx not in _SPECIAL_CONTEXTS:
                 gr = _g.get(ctx)
                 if gr is not g:
                     out.append((ctx, gr))
@@ -2188,7 +2245,8 @@ def _fact_graph(fid: str, g):
     fid = str(fid).lstrip("#")
     if fid in g.facts:
         return g
-    return next((gr for _l, gr in _other_graphs(g) if fid in gr.facts), None)
+    pg = _g.get(PENDING_CONTEXT)
+    return next((gr for _l, gr in [*_other_graphs(g), ("", pg)] if fid in gr.facts), None)
 
 
 def _contexts_line() -> str:
@@ -2197,7 +2255,7 @@ def _contexts_line() -> str:
     (the user, 2026-11-27: "when we talk about something, save it there")."""
     rows = []
     for ctx in sorted(_g._contexts_on_disk()):
-        if ctx == USER_CONTEXT:
+        if ctx in (USER_CONTEXT, PENDING_CONTEXT):
             continue
         n = sum(f["status"] == "active" for f in _g.get(ctx).facts.values())
         if n or ctx == INBOX_CONTEXT:
@@ -2670,6 +2728,10 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     _seen_ids |= {f["id"] for f in _profile}
     _last = _last_stop(g_pt, _fact_q, _seen_ids) if arguments.get("profile") else []
     _seen_ids |= {f["id"] for f in _last}
+    _pend = _open_pending(ctx or _g.active, _seen_ids) if arguments.get("profile") else []
+    _pend_more = max(0, len(_pend) - PENDING_MAX)     # said, never hidden in silence
+    _pend = _pend[:PENDING_MAX]
+    _seen_ids |= {f["id"] for f in _pend}
     try:
         _hits = _fact_hits(_fact_q, g_pt, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA,
                            newer=True, exclude=_seen_ids,
@@ -2844,11 +2906,15 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         ctx_out_pt = "profile: " + " | ".join(
             f"[{f['kind']}] {fact_shown(f)} #{f['id']}" for f in _profile) + (
             f" | {ctx_out_pt}" if parts_pt or _last else "")
+    if _pend:      # first of all: what is left to do (a hook budget cuts the tail)
+        ctx_out_pt = "pending: " + " | ".join(_pending_line(f) for f in _pend) + (
+            f" | +{_pend_more} more pending" if _pend_more else "") + (
+            f" | {ctx_out_pt}" if parts_pt or _last or _profile else "")
     # Once per session, under the header: the names a fact can go to (first, so
     # the hook's budget never cuts it).
     ctx_names = [_contexts_line()] if arguments.get("profile") else []
     out_pt = "\n".join([status_line, *warns_pt, *ctx_names,
-                        _as_data(ctx_out_pt) if parts_pt or _profile or _last else ctx_out_pt])
+                        _as_data(ctx_out_pt) if parts_pt or _profile or _last or _pend else ctx_out_pt])
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
     # The 🧠 stimulus (live and pre-staged) was parked on 2026-11-14: without a
@@ -3087,7 +3153,7 @@ def _check_context(want: str, new: bool) -> "tuple[str, str]":
     known = set(_g._contexts_on_disk()) | set(_g._graphs)
     if name in known:
         return name, f"saved in '{name}'"
-    alike = similar_contexts(name, known - {USER_CONTEXT, INBOX_CONTEXT})
+    alike = similar_contexts(name, known - set(_SPECIAL_CONTEXTS))
     hint = f"; similar existing: {', '.join(alike)}" if alike else ""
     if new:
         return name, f"new context '{name}' created{hint}"

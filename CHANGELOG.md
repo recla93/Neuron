@@ -1,6 +1,17 @@
 # Changelog — Neuron
 
 ## 7.0.0 (2026-11-27)
+- **Pendings: what is left to do, shown first at every session start.** A fact
+  of kind `pending` goes to one `pending` graph with its project as a concept;
+  the session start of that project shows the open ones before the profile and
+  "where we stopped" (the inbox shows every project's), in the order they were
+  stored, a `blocker` concept first, `stale Nd` past 7 days and `+N more
+  pending` past 8. A fact of the project closes one with `supersedes=<its id>`:
+  the fact stays in the project's graph, the pending retires. Measured on real
+  session openers, same context with and without the block: open items named
+  in the reply 2.3 -> 9.0 of 11, none already done stated as open either way.
+- **A version number names the same context**: `qwen3` -> `qwen`, `llm2` -> `llm`
+  in the name check of `store_turn(context=...)`.
 - **A scoped session's turn is saved in its own graph.** `registry.save()` with
   no context saved the shared pointer's graph, so a session working in another
   project (or the inbox) kept its facts in memory only, lost on the next
