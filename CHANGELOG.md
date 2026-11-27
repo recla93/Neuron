@@ -1,6 +1,19 @@
 # Changelog — Neuron
 
 ## 7.0.0 (2026-11-27)
+- **A project's recall brings one fact of another project when it is very
+  close.** It used to name only a concept there ("other contexts: [arbor]
+  risk"). Now the single closest fact of any other project joins the list
+  (every own fact stays) at the place of its score, labelled with its
+  project (`(arbor: risk)`); last, the hook's trim cut it on the very message
+  where it was the best fact. It comes when its cosine
+  alone (no bonus) is at least 0.60 (`NEURON_CROSS_FACT_SIM`, 0 = off).
+  Measured on 282 real messages against every other project's facts, judged
+  blind: at 0.60, 19 of 21 useful (0.55: 29/39), on 7% of the messages; the
+  replay of 1274 recalls changed 13, none lost a fact. Restricted to `fix` and
+  `procedure` facts it fired on 1 message: what helps across projects is
+  mostly ideas and decisions. Never in the flash, never in the inbox (which
+  reads every graph already); `confirm` saves the graph it touched.
 - **Pendings: what is left to do, shown first at every session start.** A fact
   of kind `pending` goes to one `pending` graph with its project as a concept;
   the session start of that project shows the open ones before the profile and

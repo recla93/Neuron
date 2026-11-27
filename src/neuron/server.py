@@ -2246,7 +2246,38 @@ def _fact_graph(fid: str, g):
     if fid in g.facts:
         return g
     pg = _g.get(PENDING_CONTEXT)
-    return next((gr for _l, gr in [*_other_graphs(g), ("", pg)] if fid in gr.facts), None)
+    found = next((gr for _l, gr in [*_other_graphs(g), ("", pg)] if fid in gr.facts), None)
+    if found is None and CROSS_FACT_SIM > 0:   # a fact the recall brought from another project
+        found = next((gr for c in sorted(_g._contexts_on_disk())
+                      if fid in (gr := _g.get(c)).facts), None)
+    return found
+
+
+# A project's recall may bring ONE fact from another project, by cosine alone
+# (no bonus), when it is very close. Measured 2026-11-27 on 282 real messages
+# against every other project's facts, judged blind: at >= 0.60, 19 of 21 were
+# useful (0.55: 29/39, 0.65: 11/11), firing on 7% of the messages; restricted
+# to fix/procedure facts it fired on 1. 0 turns it off.
+CROSS_FACT_SIM = _config.env_float("NEURON_CROSS_FACT_SIM", 0.60)
+
+
+def _cross_project_fact(query: str, g, exclude=frozenset()) -> list:
+    """The closest fact of another project, as [(fact, score, "ctx: concept")], or []."""
+    if CROSS_FACT_SIM <= 0 or g is _g.get(INBOX_CONTEXT) or g is _g.get(USER_CONTEXT):
+        return []                  # the inbox reads every graph already; the user graph is shared
+    embed = None if _get_embedding is _search._get_embedding else _get_embedding
+    best = None
+    for ctx in sorted(_g._contexts_on_disk()):
+        if ctx in _SPECIAL_CONTEXTS:
+            continue
+        gr = _g.get(ctx)
+        if gr is g or not gr.facts:
+            continue
+        for f, sc, kw in _search._search_facts(query, gr, 1, CROSS_FACT_SIM, 0.0, 1.0,
+                                                embed=embed, exclude=exclude):
+            if best is None or sc > best[1]:
+                best = (f, sc, f"{ctx}: {kw}")
+    return [best] if best else []
 
 
 def _contexts_line() -> str:
@@ -2329,7 +2360,8 @@ def _client_tag(by=None) -> str:
 
 
 def _fact_hits(query: str, g, k: int, floor: float, delta: float,
-               newer: bool = False, exclude=frozenset(), use: float = 0.0) -> list:
+               newer: bool = False, exclude=frozenset(), use: float = 0.0,
+               cross: bool = False) -> list:
     """search._search_facts with the recall bonus. A replaced embedding (tests)
     is used for the query and the facts alike, never mixed with the model's."""
     others = [(lbl, gr) for lbl, gr in _other_graphs(g) if gr.facts]
@@ -2356,6 +2388,15 @@ def _fact_hits(query: str, g, k: int, floor: float, delta: float,
                 break
             res.insert(next((j for j, x in enumerate(res) if x[1] < h[1]), len(res)), h)
         hits = res[:max(len(hits), k)]
+    # `cross`: the recall only (the flash stays in the session's project).
+    # It adds, it never takes a place: every fact of the list stays. But it
+    # goes where its score puts it, not last: last, the hook's trim cut it on
+    # the one message where it was the best fact (2026-11-27, a qwen session).
+    if cross:
+        seen = {h[0]["id"] for h in hits}
+        for h in _cross_project_fact(query, g, exclude):
+            if h[0]["id"] not in seen:
+                hits.insert(next((j for j, x in enumerate(hits) if x[1] < h[1]), len(hits)), h)
     return hits
 
 
@@ -2735,7 +2776,7 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     try:
         _hits = _fact_hits(_fact_q, g_pt, FACT_RECALL_K, FACT_MIN_SCORE, FACT_DELTA,
                            newer=True, exclude=_seen_ids,
-                           use=FACT_USE_BONUS if arguments.get("arm") else 0.0)
+                           use=FACT_USE_BONUS if arguments.get("arm") else 0.0, cross=True)
     except Exception as _e:  # noqa: BLE001 — no embedder: the graph still answers
         # Without vectors the old window: the newest facts of the top nodes.
         log.debug("fact recall by vector skipped: %s", _e)
@@ -2953,9 +2994,11 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     if confirmed or facts_ok or shown_ok:
         _g.save(ctx or None)
         touched = {id(gr) for f in facts_ok + shown_ok if (gr := _fact_graph(f, g)) is not None and gr is not g}
-        for lbl, gr in _other_graphs(g):
-            if id(gr) in touched:
-                _g.save(lbl or USER_CONTEXT)
+        # Every context it touched: the user's, the inbox's others, and a fact
+        # the recall brought from another project.
+        for c in (_g._contexts_on_disk() if touched else ()):
+            if id(_g.get(c)) in touched:
+                _g.save(c)
     return [TextContent(type="text", text=json.dumps({
         **({"facts_confirmed": facts_ok} if arguments.get("facts") else {}),
         "confirmed": confirmed,
