@@ -93,3 +93,21 @@ def test_copy_nodes_shares_by_copy_and_retires_only_unused(tmp_path):
     assert {n.keyword for n in m.nodes} == {"release", "vsix"} and len(m.links) == 1
     assert m.get_node("release").salience == 3 and m.get_node("release").vector
     assert {n.keyword for n in g.nodes} == {"release"} and not g.links   # shared stays, unused goes
+
+
+def test_triage_proposes_a_home_only_with_a_clear_lead(tmp_path):
+    spec = importlib.util.spec_from_file_location(
+        "triage_inbox", pathlib.Path(__file__).parents[1] / "scripts" / "triage_inbox.py")
+    T = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(T)
+    reg = GraphRegistry(str(tmp_path))
+    reg.get("spring").add_fact("fact", "spring beans", ["bean"], 1)
+    reg.get("mocoder").add_fact("fact", "mocoder vsix", ["vsix"], 1)
+    reg.get("inbox").add_fact("fact", "about spring", ["bean"], 1)
+    reg.get("inbox").add_fact("fact", "about both", ["x"], 1)
+    for c in ("spring", "mocoder", "inbox"):
+        reg.save(c)
+    vec = {"spring beans": [1.0, 0.0], "mocoder vsix": [0.0, 1.0], "about spring": [0.95, 0.31], "about both": [0.71, 0.70]}
+    embed = lambda t: next(v for k, v in vec.items() if t.endswith(k))   # noqa: E731
+    rows = {r["text"]: r["to"] for r in T.propose(GraphRegistry(str(tmp_path)), "inbox", set(), embed, 0.5, 0.05)}
+    assert rows == {"about spring": "spring", "about both": ""}

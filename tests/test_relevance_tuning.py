@@ -247,6 +247,8 @@ def test_a_handoff_retires_the_previous_one_and_opens_the_next_session(tmp_path,
 
 def test_profile_respects_its_cap_and_is_not_repeated_as_a_fact(tmp_path, monkeypatch):
     g, call = _setup(tmp_path, monkeypatch, {"commit": [1.0, 0.0, 0.0]})
+    import neuron.server as _srv
+    monkeypatch.setattr(_srv, "PROFILE_MAX_CHARS", 1000)   # the cap, whatever its default
     _node(g, "commit")
     keep = g.add_fact("habit", "commit only after a usage test", ["commit"], 2)
     g.add_fact("habit", "x" * 1100, ["commit"], 1)           # older, past the cap

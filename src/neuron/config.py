@@ -221,3 +221,34 @@ def graphs_dir() -> str:
     """Resolved graph store: ``NS_GRAPHS_DIR`` override, else the per-user
     default (e.g. to keep an existing ``./graphs``). Always normalized."""
     return os.path.normpath(os.environ.get("NS_GRAPHS_DIR") or default_graphs_dir())
+
+
+def saved_embed_model() -> "tuple[str, str]":
+    """The embedding model this install already uses, as (model, where):
+    "env" from the user .env, "store" from a graph's meta, or ("", "").
+
+    The installers keep it: a reinstall without -EmbedModel picked the menu's
+    first entry and saved it, so changing the default model (mpnet, 2026-11-27)
+    would have switched every MiniLM memory's vector space on the next update."""
+    import glob
+    import re
+    import sqlite3
+    try:
+        with open(user_env_file(), encoding="utf-8") as fh:
+            m = re.search(r"^NS_EMBED_MODEL=(.+)$", fh.read(), re.M)
+        if m and m.group(1).strip():
+            return m.group(1).strip(), "env"
+    except OSError:
+        pass
+    for path in sorted(glob.glob(os.path.join(graphs_dir(), "graph_*.db"))):
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                row = conn.execute("SELECT value FROM meta WHERE key='embed_model'").fetchone()
+            finally:
+                conn.close()
+            if row and str(row[0]).strip():
+                return str(row[0]).strip(), "store"
+        except sqlite3.Error:
+            continue
+    return "", ""

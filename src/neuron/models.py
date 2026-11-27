@@ -128,13 +128,21 @@ def fact_age(f: dict, now: "float | None" = None) -> str:
 # How many of a node's newest facts pre_turn considers. A read window: nothing
 # past it is dropped from the store.
 EPISODES_PER_NODE = _env_int("NEURON_EPISODES_PER_NODE", 5)
-# Embedding dimension. Default 384 (the multilingual MiniLM-L12-v2 default below,
-# and the common 384-dim models). Overridable via NS_EMBED_DIM for a model with a
-# different width — must match NS_EMBED_MODEL (see server._get_embedding guard).
-VECTOR_DIM               = int(os.environ.get("NS_EMBED_DIM", "384"))
-# Nome del modello di embedding attivo (deve combaciare con i vettori nello
-# store: vettori di modelli diversi non sono confrontabili — vedi load_sqlite).
-EMBED_MODEL              = os.environ.get("NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
+# The embedding model (its vectors must match the store's: vectors of different
+# models are not comparable — see load_sqlite). Default since 2026-11-27: the
+# multilingual mpnet, measured on the bench (recall.json 0.545 -> 0.636 with
+# K=3, procedures 0.60 -> 0.70, no expected fact lost) and blind on 30 real
+# messages (12 better, 5 worse); MiniLM-L12 stays the light second choice.
+DEFAULT_EMBED_MODEL      = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+EMBED_MODEL              = (os.environ.get("NS_EMBED_MODEL") or DEFAULT_EMBED_MODEL).strip()
+# Width of the known models, so choosing one is enough; NS_EMBED_DIM for another
+# (a mismatch raises on the first embedding, see search._get_embedding).
+_KNOWN_DIMS = {"paraphrase-multilingual-mpnet-base-v2": 768, "paraphrase-multilingual-MiniLM-L12-v2": 384,
+               "all-MiniLM-L6-v2": 384, "multilingual-e5-large": 1024}
+# ("0", or a non-number, means unset: an installer writes 0 for a custom model.)
+_dim_env = (os.environ.get("NS_EMBED_DIM") or "").strip()
+VECTOR_DIM               = (int(_dim_env) if _dim_env.isdigit() and int(_dim_env) > 0
+                            else _KNOWN_DIMS.get(EMBED_MODEL.rsplit("/", 1)[-1], 384))
 # Evict lowest-salience nodes beyond this cap. 500 was reached by the real `ai`
 # graph on 2026-11-04: from then on every new concept archived an old one.
 # Range and help text live in config.KNOBS (the control center sets it).

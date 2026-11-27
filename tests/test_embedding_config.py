@@ -21,11 +21,22 @@ if _src not in sys.path:
 
 # --- VECTOR_DIM via NS_EMBED_DIM (no heavy deps) ----------------------------
 
-def test_vector_dim_default_is_384():
-    os.environ.pop("NS_EMBED_DIM", None)
+def test_vector_dim_follows_the_model():
+    """The width comes from the model (mpnet 768 by default since 2026-11-27;
+    MiniLM 384): choosing a model is enough, NS_EMBED_DIM only for another one."""
     import neuron.models as m
-    importlib.reload(m)
-    assert m.VECTOR_DIM == 384
+    os.environ.pop("NS_EMBED_DIM", None)
+    try:
+        for model, dim in (("", 768), ("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", 384)):
+            if model:
+                os.environ["NS_EMBED_MODEL"] = model
+            else:
+                os.environ.pop("NS_EMBED_MODEL", None)
+            importlib.reload(m)
+            assert m.VECTOR_DIM == dim, model
+    finally:
+        os.environ.pop("NS_EMBED_MODEL", None)
+        importlib.reload(m)
 
 
 def test_vector_dim_env_override():
@@ -42,27 +53,31 @@ def test_vector_dim_env_override():
 
 # --- NS_EMBED_MODEL selection + dim guard (need the server module) ----------
 
-def test_embed_model_default_is_multilingual():
-    # ADR-001: default flipped to the 384-dim multilingual model (EN+IT).
+def test_embed_model_default_is_multilingual_mpnet():
+    # ADR-001: multilingual (EN+IT); mpnet since 2026-11-27 (bench + blind check).
     pytest.importorskip("mcp")
     pytest.importorskip("fastembed")
     os.environ.pop("NS_EMBED_MODEL", None)
+    import neuron.models as m
     import neuron.server as srv
+    importlib.reload(m)
     importlib.reload(srv)
-    assert srv.NS_EMBED_MODEL == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    assert srv.NS_EMBED_MODEL == "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 
 
 def test_embed_model_env_override():
     pytest.importorskip("mcp")
     pytest.importorskip("fastembed")
     os.environ["NS_EMBED_MODEL"] = "intfloat/multilingual-e5-small"
+    import neuron.models as m
+    import neuron.server as srv
     try:
-        import neuron.server as srv
+        importlib.reload(m)          # the server takes the name from models.py
         importlib.reload(srv)
         assert srv.NS_EMBED_MODEL == "intfloat/multilingual-e5-small"
     finally:
         os.environ.pop("NS_EMBED_MODEL", None)
-        import neuron.server as srv
+        importlib.reload(m)
         importlib.reload(srv)
 
 

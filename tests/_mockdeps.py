@@ -16,12 +16,15 @@ import types
 
 
 class FakeEmbed:
-    """384-dim constant embedder (non-unit vector, norm ~1.96)."""
+    """Constant embedder (non-unit vector) as wide as the active model: 384 was
+    hard-coded, and once the default became the 768-dim mpnet (2026-11-27) every
+    test after this mock broke on the dimension guard."""
     def __init__(self, *a, **kw): pass
     def embed(self, texts, **_kw):  # batch_size, as fastembed
+        from neuron.models import VECTOR_DIM
         texts = list(texts) if not isinstance(texts, list) else texts
         for _ in texts:
-            yield [0.1] * 384
+            yield [0.1] * VECTOR_DIM
 
 
 class FakeSrv:

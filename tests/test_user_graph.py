@@ -88,3 +88,35 @@ def test_user_hits_join_without_dropping_the_newer_version(S, monkeypatch):
     assert [h[0]["id"] for h in S._fact_hits("q", proj, 3, 0.4, 0.15, newer=True)] == ["a", "a_new", "b", "c"]
     lists[id(user)] = [(f("u_strong"), 0.75, "x")]
     assert [h[0]["id"] for h in S._fact_hits("q", proj, 3, 0.4, 0.15, newer=True)] == ["a", "u_strong", "a_new", "b"]
+
+
+def test_the_inbox_reads_every_graph_with_its_label(S, monkeypatch):
+    moc = S._g.get("mocoder")
+    moc.add_fact("decision", "mocoder 1.0 waits for the Java path run.", ["release"], 1)
+    S._g.save("mocoder")
+    S._g.switch("inbox")
+    inbox = S._g.get()
+    f = lambda i: {"id": i, "kind": "fact", "concepts": ["x"], "text": i}   # noqa: E731
+    lists = {id(moc): [(f("m1"), 0.70, "release")]}
+    monkeypatch.setattr(S._search, "_search_facts", lambda q, gr, *a, **k: lists.get(id(gr), []))
+    assert [(h[0]["id"], h[2]) for h in S._fact_hits("q", inbox, 3, 0.4, 0.15)] == [("m1", "mocoder: release")]
+    S._g.switch("graymatter")                       # a project reads its own and the user's only
+    assert S._fact_hits("q", S._g.get(), 3, 0.4, 0.15) == []
+
+
+def test_a_confirm_from_the_inbox_saves_the_graph_it_touched(S, tmp_path):
+    from neuron.registry import GraphRegistry
+    fid = S._g.get("mocoder").add_fact("decision", "mocoder license is MIT.", ["license"], 1)["id"]
+    S._g.save("mocoder")
+    S._g.switch("inbox")
+    assert fid in _call(S, "confirm", {"facts": [fid]})
+    assert GraphRegistry(S._g._graphs_dir).get("mocoder").facts[fid]["confirmed"] == 1
+
+
+def test_the_session_start_lists_the_contexts(S):
+    S._g.get("mocoder").add_fact("decision", "mocoder license is MIT.", ["license"], 1)
+    S._g.save("mocoder")
+    out = _call(S, "pre_turn", {"topic": "where were we", "profile": True})
+    line = next(l for l in out.splitlines() if l.startswith("contexts: "))
+    assert "mocoder 1" in line and "context=" in line and "user" not in line.split(" — ")[0], line
+    assert "contexts: " not in _call(S, "pre_turn", {"topic": "next message"})

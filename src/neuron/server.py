@@ -129,7 +129,7 @@ VEC_FALLBACK_DELTA = 0.20   # vector-fallback node kept if within this of the be
 FACT_DELTA = _config.env_float("NEURON_FACT_DELTA", 0.15)   # a fact is kept within this of the best
 # ADR-015 D7, tuned on bench/recall.json v1 (see search._search_facts). K 3 -> 2
 # on 2026-11-15: on v2 and both English sets, same facts found, 1-3 fewer wrong.
-FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 2)
+FACT_RECALL_K    = _config.env_int("NEURON_FACT_RECALL_K", 3)   # 3 with mpnet (2026-11-27)
 FACT_MIN_SCORE   = _config.env_float("NEURON_FACT_MIN_SCORE", 0.40)
 FACT_NAMED_BONUS = _config.env_float("NEURON_FACT_NAMED_BONUS", 0.20)
 # Wording shared with the message (search._lexical), 2026-11-16: see _search_facts.
@@ -140,12 +140,16 @@ FACT_LEX_BONUS   = _config.env_float("NEURON_FACT_LEX_BONUS", 0.15)
 # compares the two halves.
 FACT_USE_BONUS   = _config.env_float("NEURON_FACT_USE_BONUS", 0.0)
 # ADR-022 D2: a procedure whose task the message names (search._search_facts `proc`).
-FACT_PROC_BONUS  = _config.env_float("NEURON_FACT_PROC_BONUS", 0.20)
+FACT_PROC_BONUS  = _config.env_float("NEURON_FACT_PROC_BONUS", 0.25)   # 0.25 with mpnet: same found, noise 0.57 -> 0.43 (2026-11-27)
 # ADR-015 D7.1: user/habit facts on the first call of a session, newest first.
 # shortcut: a fixed cap drops the oldest past it; 600 dropped 2 of 4 live
 # (one long `user` fact, 2026-11-08), 4 now take ~850. Rank by `confirmed`
 # when the profile outgrows it.
-PROFILE_MAX_CHARS = _config.env_int("NEURON_PROFILE_MAX_CHARS", 1000)
+PROFILE_MAX_CHARS = _config.env_int("NEURON_PROFILE_MAX_CHARS", 2400)
+# 2026-11-27: with 13 habits and 36 user facts in the user graph, 1000 chars held
+# 9 habits and no user fact, and the rule "every proposal states gain, loss,
+# worth it" was the one left out. Every habit goes in, then this many user facts.
+PROFILE_USER_FACTS = _config.env_int("NEURON_PROFILE_USER_FACTS", 6)
 # ADR-015 D6, measured 2026-11-08 on `backend`: 33 pairs of distinct active facts
 # (same kind, a shared concept) top out at 0.73; restated facts 0.92-0.96, a
 # fact and its newer progress 0.64-0.80. 0.75: no false alarm, every restatement.
@@ -284,9 +288,7 @@ from neuron.stimulus import (  # noqa: E402
 # models are NOT comparable, so changing the model requires a full re-embed
 # (scripts/reembed.py); the dimension is validated on first use against VECTOR_DIM.
 
-NS_EMBED_MODEL = os.environ.get(
-    "NS_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-).strip()
+from neuron.models import EMBED_MODEL as NS_EMBED_MODEL   # one source: models.py
 
 _embedder: TextEmbedding | None = None
 _embed_dim_checked = False
@@ -709,8 +711,9 @@ def _all_tools() -> list[Tool]:
                     },
                     "topic": {"type": "string", "description": "Optional: topic of the turn (3-5 words); defaults to the first fact"},
                     "keywords": {"type": "array", "items": {"type": "string"}, "description": "Optional: extra concept keywords; the facts' concepts are added"},
-                    "domain": {"type": "string", "default": "general", "description": "Keep 'general'. The same other value on two consecutive turns SWITCHES the active context."},
-                    "context": {"type": "string", "description": "Context path; defaults to the active one."},
+                    "domain": {"type": "string", "default": "general", "description": "Keep 'general'."},
+                    "context": {"type": "string", "description": "An existing context (a topic like spring, or a project); defaults to the session's. An unknown name goes to the inbox unless new_context is true."},
+                    "new_context": {"type": "boolean", "description": "true to create `context` when it does not exist yet"},
                     # Not declared, still accepted (the schema allows extra
                     # fields): intent, sentiment, entities, tags and the legacy
                     # `episode`. ~2k chars of schema per session for fields the
@@ -2153,19 +2156,55 @@ USER_CONTEXT = (os.environ.get("NEURON_USER_CONTEXT") or "user").strip().lower()
 USER_KINDS = ("user", "habit")
 
 
+# Where a session of no project works (Gray Matter's `_scope` for it): it writes
+# here and reads every graph, each fact labelled with the graph it comes from.
+INBOX_CONTEXT = (os.environ.get("NEURON_INBOX_CONTEXT") or "inbox").strip().lower().strip("/") or "inbox"
+
+
 def _user_graph(g):
     """The user graph, or None when `g` is it."""
     u = _g.get(USER_CONTEXT)
     return None if u is g else u
 
 
+def _other_graphs(g) -> list:
+    """The graphs a recall in `g` reads besides it, as (label, graph): the user
+    graph always (label ""); every other context when `g` is the inbox."""
+    out = []
+    u = _user_graph(g)
+    if u is not None:
+        out.append(("", u))
+    if g is _g.get(INBOX_CONTEXT):
+        for ctx in sorted(_g._contexts_on_disk()):
+            if ctx not in (INBOX_CONTEXT, USER_CONTEXT):
+                gr = _g.get(ctx)
+                if gr is not g:
+                    out.append((ctx, gr))
+    return out
+
+
 def _fact_graph(fid: str, g):
-    """The graph holding fact `fid`: `g`, else the user graph; None if neither."""
+    """The graph holding fact `fid`: `g`, else one it reads (_other_graphs)."""
     fid = str(fid).lstrip("#")
     if fid in g.facts:
         return g
-    u = _user_graph(g)
-    return u if u is not None and fid in u.facts else None
+    return next((gr for _l, gr in _other_graphs(g) if fid in gr.facts), None)
+
+
+def _contexts_line() -> str:
+    """The contexts a fact can be stored in, with their active facts: shown once
+    per session so the model passes a real name to store_turn(context=...)
+    (the user, 2026-11-27: "when we talk about something, save it there")."""
+    rows = []
+    for ctx in sorted(_g._contexts_on_disk()):
+        if ctx == USER_CONTEXT:
+            continue
+        n = sum(f["status"] == "active" for f in _g.get(ctx).facts.values())
+        if n or ctx == INBOX_CONTEXT:
+            rows.append((n, ctx))
+    names = " · ".join(f"{c} {n}" for n, c in sorted(rows, reverse=True))
+    return (f"contexts: {names} — store_turn(context=<one of these>) when the facts belong "
+            "to another project or topic; a new one needs new_context=true")
 
 
 def _profile_facts(g, cap: int) -> list:
@@ -2175,13 +2214,19 @@ def _profile_facts(g, cap: int) -> list:
     From the user graph and `g` both."""
     u = _user_graph(g)
     pool = {f["id"]: f for f in [*(u.facts.values() if u else ()), *g.facts.values()]}
+    act = [f for f in pool.values() if f["status"] == "active"]
+    # created_at, not turn: each graph counts its own turns, and the user graph
+    # gathers facts from all of them (turn breaks ties).
+    habits = sorted((f for f in act if f["kind"] == "habit"),
+                    key=lambda f: (f.get("created_at") or "", f["turn"] or 0), reverse=True)
+    # The user facts that proved useful first, then those with a gist (short),
+    # then the newest: a long self-report without a gist costs three habits.
+    users = sorted((f for f in act if f["kind"] == "user"),
+                   key=lambda f: (f.get("confirmed", 0), bool(f.get("gist")), f.get("created_at") or "",
+                                  f["turn"] or 0),
+                   reverse=True)[:PROFILE_USER_FACTS]
     out, used = [], 0
-    for f in sorted((f for f in pool.values()
-                     if f["status"] == "active" and f["kind"] in USER_KINDS),
-                    # created_at, not turn: each graph counts its own turns, and the
-                    # user graph gathers facts from all of them (turn breaks ties).
-                    key=lambda f: (f["kind"] == "habit", f.get("created_at") or "", f["turn"] or 0),
-                    reverse=True):
+    for f in [*habits, *users]:
         used += len(fact_shown(f)) + 20      # "[habit] ... #12345678 | "
         if used > cap:
             break
@@ -2229,9 +2274,9 @@ def _fact_hits(query: str, g, k: int, floor: float, delta: float,
                newer: bool = False, exclude=frozenset(), use: float = 0.0) -> list:
     """search._search_facts with the recall bonus. A replaced embedding (tests)
     is used for the query and the facts alike, never mixed with the model's."""
-    u = _user_graph(g)
-    pool = ([f for gr in (g, u) for f in gr.facts.values() if f["status"] == "active"]
-            if u is not None and u.facts else None)
+    others = [(lbl, gr) for lbl, gr in _other_graphs(g) if gr.facts]
+    pool = ([f for gr in (g, *(gr for _l, gr in others)) for f in gr.facts.values()
+             if f["status"] == "active"] if others else None)
 
     def one(gr):
         return _search._search_facts(
@@ -2240,15 +2285,15 @@ def _fact_hits(query: str, g, k: int, floor: float, delta: float,
             newer=newer, exclude=exclude, lex=FACT_LEX_BONUS, use=use, proc=FACT_PROC_BONUS,
             idf_pool=pool)
     hits = one(g)
-    if u is not None and u.facts:          # the user's facts compete in every context
-        # Into the project's list as it is: re-sorting it dropped the newer
+    if others:              # the user's facts in every context; every graph's in the inbox
+        # Into this graph's list as it is: re-sorting it dropped the newer
         # version _with_newer puts beside its old one, past the k slots (on 600
-        # real messages, 2.40 -> 2.2 facts each). A user fact takes the last
-        # place only when it beats it; none strong enough: the list is unchanged.
-        uh = one(u)
-        top = max((h[1] for h in hits + uh), default=0.0)
+        # real messages, 2.40 -> 2.2 facts each). Another graph's fact takes the
+        # last place only when it beats it; none strong enough: the list is unchanged.
+        oh = [(f, sc, f"{lbl}: {kw}" if lbl else kw) for lbl, gr in others for f, sc, kw in one(gr)]
+        top = max((h[1] for h in hits + oh), default=0.0)
         res = list(hits)
-        for h in sorted(uh, key=lambda h: -h[1]):
+        for h in sorted(oh, key=lambda h: -h[1]):
             if h[1] < top - delta:
                 break
             res.insert(next((j for j, x in enumerate(res) if x[1] < h[1]), len(res)), h)
@@ -2734,7 +2779,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         # are the only useful thing when nothing is here.
         parts_pt = [pp for pp in parts_pt if pp.startswith(("other contexts:", "facts:"))]
         lks, nodes_pt = [], []
-    if _cross and _cross[0][2] > _best_sim + _config.env_float(
+    # The inbox reads every graph already: "far from this context" says nothing there.
+    if _cross and ctx_label != INBOX_CONTEXT and _cross[0][2] > _best_sim + _config.env_float(
             "NEURON_ROUTE_MARGIN", 0.15):
         _c, _ckw, _csim = _cross[0]
         from neuron.registry import _SCOPE
@@ -2798,7 +2844,10 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         ctx_out_pt = "profile: " + " | ".join(
             f"[{f['kind']}] {fact_shown(f)} #{f['id']}" for f in _profile) + (
             f" | {ctx_out_pt}" if parts_pt or _last else "")
-    out_pt = "\n".join([status_line, *warns_pt,
+    # Once per session, under the header: the names a fact can go to (first, so
+    # the hook's budget never cuts it).
+    ctx_names = [_contexts_line()] if arguments.get("profile") else []
+    out_pt = "\n".join([status_line, *warns_pt, *ctx_names,
                         _as_data(ctx_out_pt) if parts_pt or _profile or _last else ctx_out_pt])
     # Guard-rail: re-teach the loop in-context. Appended AFTER the token budget
     # so the hint is always present and never truncated away (~15 tokens).
@@ -2837,9 +2886,10 @@ async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
                 if (gr := _fact_graph(f, g)) and gr.note_shown(str(f).lstrip("#"))]
     if confirmed or facts_ok or shown_ok:
         _g.save(ctx or None)
-        u = _user_graph(g)
-        if u is not None and any(str(f).lstrip("#") in u.facts for f in facts_ok + shown_ok):
-            _g.save(USER_CONTEXT)
+        touched = {id(gr) for f in facts_ok + shown_ok if (gr := _fact_graph(f, g)) is not None and gr is not g}
+        for lbl, gr in _other_graphs(g):
+            if id(gr) in touched:
+                _g.save(lbl or USER_CONTEXT)
     return [TextContent(type="text", text=json.dumps({
         **({"facts_confirmed": facts_ok} if arguments.get("facts") else {}),
         "confirmed": confirmed,
@@ -3005,12 +3055,45 @@ async def _call_tool_impl(name: str, arguments: dict) -> list[TextContent]:
     scope = str(arguments.pop("_scope", "") or "") if isinstance(arguments, dict) else ""
     token = _g.scope(scope) if scope else None
     try:
+        note = ""
+        if name == "store_turn" and isinstance(arguments, dict):
+            arguments = dict(arguments)
+            new = bool(arguments.pop("new_context", False))
+            if str(arguments.get("context") or "").strip():
+                arguments["context"], note = _check_context(str(arguments["context"]), new)
+            elif _g.active == INBOX_CONTEXT:
+                note = (f"saved in '{INBOX_CONTEXT}' (no project here): pass context=<topic or "
+                        "project> when the facts belong to one")
         ctx = arguments.get("context", "")
         g = _g.get(ctx) if ctx else _g.get()
-        return await handler(arguments, ctx, g)
+        out = await handler(arguments, ctx, g)
+        if note and out and out[0].type == "text":
+            out = [TextContent(type="text", text=out[0].text + chr(10) + note), *out[1:]]
+        return out
     finally:
         if token is not None:
             _g.unscope(token)
+
+
+def _check_context(want: str, new: bool) -> "tuple[str, str]":
+    """Where a store_turn with context=`want` writes, and what to tell the model.
+
+    An existing context: there. An unknown one with new_context: created, said
+    so, with the existing names that look alike. An unknown one without it: the
+    inbox, never lost, with the look-alikes as a question (2026-11-27: one
+    context had been born named after a whole sentence)."""
+    from neuron.registry import similar_contexts
+    name = want.lower().strip("/")
+    known = set(_g._contexts_on_disk()) | set(_g._graphs)
+    if name in known:
+        return name, f"saved in '{name}'"
+    alike = similar_contexts(name, known - {USER_CONTEXT, INBOX_CONTEXT})
+    hint = f"; similar existing: {', '.join(alike)}" if alike else ""
+    if new:
+        return name, f"new context '{name}' created{hint}"
+    return INBOX_CONTEXT, (f"context '{name}' does not exist: saved in '{INBOX_CONTEXT}'"
+                           + (f"; did you mean {' or '.join(repr(a) for a in alike)}?" if alike else "")
+                           + "; new_context=true creates it")
 
 
 # ---------------------------------------------------------------------------

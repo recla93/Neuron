@@ -300,7 +300,7 @@ class GraphRegistry:
                 "nodes":   len(g.nodes),
                 "links":   len(g.links),
                 "turns":   g.turn_count,
-                "active":  ctx == self._active,
+                "active":  ctx == self.active,
             })
         return result
 
@@ -329,8 +329,11 @@ class GraphRegistry:
         self._save_cross_links()
 
     def save(self, context: str | None = None) -> None:
-        """Persist a single context graph (never writes to seed)."""
-        ctx = context or self._active
+        """Persist a single context graph (never writes to seed). No context: the
+        ACTIVE one, the call's scope included: `_active` here saved the shared
+        pointer's graph, and a scoped session's turn was lost on the next
+        restart (2026-11-27, one fact)."""
+        ctx = context or self.active
         g   = self.get(ctx)
         db  = self._db_path(ctx)
         g.save_sqlite(db, context=ctx)
@@ -510,3 +513,29 @@ class GraphRegistry:
             self._cross_links.clear()
             self._active = "default"
             self.get("default")
+
+
+def _name_words(name: str) -> list[str]:
+    from neuron.curation import _dup_key       # case, accents, plurals
+    import re
+    return [t for t in re.split(r"[\s\-_/.]+", _dup_key(name.replace("-", " ").replace("_", " "))) if t]
+
+
+def similar_contexts(name: str, names) -> list[str]:
+    """Existing context names that spell the same subject as `name`, by WORDS:
+    `springboot`, `Spring Boot`, `java/spring` -> `spring`. A LIKE on a substring
+    would also take `reboot` for `%boot%`. Spelling only, not meaning; a hit is a
+    question to the caller, never a merge (2026-11-27)."""
+    a = _name_words(name)
+    ja = "".join(a)
+    out = []
+    for other in names:
+        b = _name_words(other)
+        jb = "".join(b)
+        if not b or other == name:
+            continue
+        if (ja == jb or set(a) & set(b)
+                or any(len(t) >= 5 and ja.startswith(t) for t in b)
+                or any(len(t) >= 5 and jb.startswith(t) for t in a)):
+            out.append(other)
+    return sorted(out)

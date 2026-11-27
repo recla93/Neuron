@@ -1,6 +1,38 @@
 # Changelog — Neuron
 
 ## 7.0.0 (2026-11-27)
+- **A scoped session's turn is saved in its own graph.** `registry.save()` with
+  no context saved the shared pointer's graph, so a session working in another
+  project (or the inbox) kept its facts in memory only, lost on the next
+  restart; one fact was lost that way on 2026-11-27.
+- **The procedure bonus is 0.25** (with mpnet: same 14/20 procedures found,
+  unexpected facts 0.57 -> 0.43 per message); the named-concept bonus stays
+  0.20. New bench baselines `N7-mpnet-K3-*`: recall.json 21/33, procedures 14/20.
+- **The default embedding model is the multilingual mpnet, with 3 facts per
+  recall.** On the bench `recall.json` 0.545 -> 0.636 and the procedures 0.60 ->
+  0.70 with no expected fact lost; blind on 30 real messages 12 better, 5 worse.
+  MiniLM-L12 stays the light second choice. The dimension follows the model
+  (768 / 384), so `NS_EMBED_DIM` is only needed for another one; an install keeps
+  the model its memory was built with (`config.saved_embed_model`).
+- **The session start carries every habit and six facts about the user.** With
+  13 habits and 36 user facts, 1000 characters held 9 habits and no user fact,
+  and the rule left out was "every proposal states gain, loss, worth it". All
+  habits now, then the user facts that proved useful, those with a gist, the
+  newest (`NEURON_PROFILE_USER_FACTS`, 6; the cap is 2400 characters).
+- **The session start lists the contexts** with their facts, so a fact that
+  belongs to another project or topic goes there with `context=`.
+- **A session of no project works in the `inbox`.** It writes there, never in a
+  project's graph, and reads every graph, each fact labelled with its graph
+  (`mocoder: release`). With the automatic switch off, these sessions (83% of
+  the OpenCode history) wrote in whatever context was active.
+- **`store_turn(context=...)` checks the name.** An existing context: saved
+  there. An unknown one: saved in the inbox, with the existing names that
+  spell the same subject (`springboot`, `Spring Boot`, `java/spring` ->
+  `spring`, by words, so `reboot` is not `%boot%`) as a question;
+  `new_context=true` creates it. The answer says where the facts went.
+- **`scripts/triage_inbox.py` proposes a home for each inbox fact**, the graph
+  whose facts it resembles most when it leads by a margin, and prints the
+  `move_facts.py` commands; it moves nothing.
 - **Habits and facts about the user live in one `user` graph, read from every
   context.** They lived in whatever context was active, so a session in another
   project lost the user's rules. The profile, the fact recall, `#id` lookups and
