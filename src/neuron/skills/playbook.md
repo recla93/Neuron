@@ -156,7 +156,9 @@ neuron_store_turn(facts=[
 ```
 Kinds: `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit`, `procedure`
 (the steps of a task, in order, once an outcome proved them: pass `evidence`,
-or it is stored as `fact`).
+or it is stored as `fact`), `pending` (something left to do: shown first at the
+project's next session start; close it with a fact that `supersedes` it).
+A recalled `[progress · outdated]` is a state that has moved on: trust the newer facts.
 A procedure holds every step of its task, the shared ones too (the gate in the
 release procedure): it is recalled alone.
 Its concepts name the task (`websearch`, `release`), never the tool or client

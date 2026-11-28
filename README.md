@@ -90,8 +90,9 @@ Neuron runs a simple **two-step loop** around every substantial turn:
 ```
 
 Each **fact** is one sentence with its why and a kind (`progress`, `decision`, `fix`,
-`fact`, `idea`, `user`, `habit`, `procedure`); a newer fact can **supersede** an older one, which stays on
-disk but leaves recall. Facts are indexed by **concepts**: each concept is a **node**
+`fact`, `idea`, `user`, `habit`, `procedure`, `pending`); a newer fact can **supersede** an older one, which stays on
+disk but leaves recall, and `retire` takes one out with no replacement (reversible). A `progress`
+fact followed by three newer ones on its subject is shown as **outdated**: the state moved on. Facts are indexed by **concepts**: each concept is a **node**
 (keyword + embedding + salience + domain), each
 relationship a **typed link** (`cause-effect`, `analogy`, `evolution`, `contrast`,
 `deepening`, `instance-of`). Links that keep co-activating get **reinforced**; idle tangential

@@ -621,7 +621,10 @@ _ADMIN_TOOLS = frozenset({"prune", "consolidate", "dedup", "flash", "reset",
                           # model sees pre_turn, store_turn, switch_context. help/skill
                           # cost a call per session, explicit confirm was used 1% of
                           # the time (ledger), status/list_contexts are upkeep.
-                          "status", "help", "skill", "confirm", "list_contexts"})
+                          "status", "help", "skill", "confirm", "list_contexts",
+                          # 2026-11-28: retiring takes memory away: the user's
+                          # call (gray-matter gm-neuron retire), not the loop's.
+                          "retire"})
 
 # Mid-band similarity to a topic: above it the node is already what get_context
 # serves, below it is noise. Used by forgotten(near).
@@ -811,6 +814,27 @@ def _all_tools() -> list[Tool]:
                         "default": 1.0,
                     },
                     "context": {"type": "string", "description": "Context path. Defaults to active context.", "default": ""},
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="retire",
+            description=(
+                "Retire facts with no replacement (junk, a test residue, a state no longer "
+                "true), in whatever context they live; `restore` brings them back. Never a "
+                "delete: only the status moves. A newer version of a fact is store_turn "
+                "with supersedes instead."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "facts": {"type": "array", "items": {"type": "string"},
+                              "description": "Fact ids (as shown: #0a1b2c3d)"},
+                    "concepts": {"type": "array", "items": {"type": "string"},
+                                 "description": "Concepts (nodes) with no active fact: to the graveyard, links dropped"},
+                    "restore": {"type": "boolean", "default": False,
+                                "description": "Bring retired facts back to active"},
                 },
                 "required": [],
             },
@@ -2332,13 +2356,45 @@ def _said(f) -> str:
     return " ".join(fact_shown(f).split()).replace(" | ", " / ")[:NOTE_SHOWN_CHARS]
 
 
+# A progress fact is a snapshot of a state. Once OUTDATED_AFTER newer progress
+# facts share one of its concepts, the state it describes has moved on: it is
+# labelled and goes after the current facts, never removed. On the live probes
+# (2026-11-27) an old state led 2 questions of 9 and a model takes the first
+# fact as true. On the graymatter graph, >= 3 marks 64 of 106 progress facts;
+# "one newer fact with all its concepts" marked 1. 0 turns it off.
+OUTDATED_AFTER = _config.env_int("NEURON_OUTDATED_AFTER", 3)
+_OUTDATED_CACHE: dict = {}
+
+
+def _outdated(g) -> frozenset:
+    """Ids of the outdated progress facts of `g` (computed at read time, cached
+    while the graph's facts do not change)."""
+    if OUTDATED_AFTER <= 0:
+        return frozenset()
+    prog = [f for f in g.facts.values() if f["status"] == "active" and f["kind"] == "progress"]
+    key = (id(g), len(g.facts), len(prog))
+    hit = _OUTDATED_CACHE.get(key)
+    if hit is not None:
+        return hit
+    concepts = {f["id"]: {g._norm(c) for c in f["concepts"]} for f in prog}
+    when = {f["id"]: (f.get("created_at") or "", f["turn"] or 0) for f in prog}
+    out = frozenset(f["id"] for f in prog
+                    if sum(1 for o in prog if when[o["id"]] > when[f["id"]]
+                           and concepts[o["id"]] & concepts[f["id"]]) >= OUTDATED_AFTER)
+    if len(_OUTDATED_CACHE) > 64:
+        _OUTDATED_CACHE.clear()
+    _OUTDATED_CACHE[key] = out
+    return out
+
+
 def _fact_line(g, f, kw: str) -> str:
     """One recalled fact, with what is linked to it (2026-11-18):
     - a correction (`disputes`) beside it with what it says: the bare id made a
       fresh model follow the disputed fact 2 times in 2, its gist 4 in 4;
     - under a procedure, its solutions: worked first, then untried (an idea),
       then the ones that failed, so a model does not retry those."""
-    line = f"[{f['kind']}] {fact_shown(f)} ({kw}) #{f['id']}{fact_age(f)}"
+    kind = f"{f['kind']} · outdated" if f["id"] in _outdated(g) else f["kind"]
+    line = f"[{kind}] {fact_shown(f)} ({kw}) #{f['id']}{fact_age(f)}"
     line += "".join(f" ↳#{n['id']}: {_said(n)}" for n, _k in g.linked_to(f["id"], ("disputes",), 2))
     if f["kind"] == "procedure":
         sols = g.linked_to(f["id"], ("solves", "failed_for"), 4)
@@ -2388,6 +2444,11 @@ def _fact_hits(query: str, g, k: int, floor: float, delta: float,
                 break
             res.insert(next((j for j, x in enumerate(res) if x[1] < h[1]), len(res)), h)
         hits = res[:max(len(hits), k)]
+    # Outdated progress after the current facts, in their order: a moved, not
+    # re-scored list (re-sorting dropped the newer version _with_newer places).
+    old = _outdated(g)
+    if old:
+        hits = [h for h in hits if h[0]["id"] not in old] + [h for h in hits if h[0]["id"] in old]
     # `cross`: the recall only (the flash stays in the session's project).
     # It adds, it never takes a place: every fact of the list stays. But it
     # goes where its score puts it, not last: last, the hook's trim cut it on
@@ -2968,6 +3029,49 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     return [TextContent(type="text", text=out_pt)]
 
 
+async def _tool_retire(arguments: dict, ctx: str, g) -> list[TextContent]:
+    """retire(facts, restore): the status of each fact moves, in its own graph,
+    and every graph touched is saved. Admin: the user's call (CLI, GUI), not the
+    loop's — retiring takes memory away."""
+    restore = bool(arguments.get("restore"))
+    done, skipped, unknown, touched = [], [], [], set()
+    for raw in arguments.get("facts") or []:
+        fid = str(raw).strip().lstrip("#")
+        # The active context first: a fact just written may not be on disk yet.
+        home = next((c for c in dict.fromkeys([_g.active, *sorted(_g._contexts_on_disk())])
+                     if fid in _g.get(c).facts), None)
+        if home is None:
+            unknown.append(fid)
+        elif _g.get(home).retire_fact(fid, restore=restore):
+            done.append(f"{home}:{fid}")
+            touched.add(home)
+        else:
+            skipped.append(f"{home}:{fid} ({_g.get(home).facts[fid]['status']})")
+    # `concepts`: nodes, to the graveyard, in every context that has them.
+    concepts_done = []
+    for kw in ([] if restore else arguments.get("concepts") or []):
+        found = False
+        for c in dict.fromkeys([_g.active, *sorted(_g._contexts_on_disk())]):
+            gr = _g.get(c)
+            if gr.get_node(kw) is None:
+                continue
+            found = True
+            res = gr.retire_concept(kw, gr.turn_count)
+            if res == "retired":
+                concepts_done.append(f"{c}:{kw}")
+                touched.add(c)
+            else:
+                skipped.append(f"{c}:{kw} ({res})")
+        if not found:
+            unknown.append(kw)
+    for c in sorted(touched):
+        _g.save(c)
+    out = {("restored" if restore else "retired"): done, "unchanged": skipped, "unknown": unknown}
+    if concepts_done:
+        out["concepts_retired"] = concepts_done
+    return [TextContent(type="text", text=json.dumps(out, ensure_ascii=False))]
+
+
 async def _tool_confirm(arguments: dict, ctx: str, g) -> list[TextContent]:
     keywords = [str(k) for k in arguments.get("keywords", [])]
     boost    = _clamp_int(arguments.get("boost", 2), default=2, lo=0, hi=5)
@@ -3149,6 +3253,7 @@ _HANDLERS = {
     "list_contexts": _tool_list_contexts,
     "pre_turn": _tool_pre_turn,
     "confirm": _tool_confirm,
+    "retire": _tool_retire,
     "dismiss": _tool_dismiss,
     "recall": _tool_recall,
     "merge": _tool_merge,

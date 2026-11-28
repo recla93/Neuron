@@ -1,6 +1,22 @@
 # Changelog — Neuron
 
 ## 7.0.0 (2026-11-27)
+- **`retire`: a fact leaves the memory with no replacement.** The only way
+  out was `store_turn` with `supersedes`, which needs a new fact in its place:
+  for junk or a test residue, a tombstone that was noise itself. `retire`
+  moves the status of the given facts to `retired`, in whatever context they
+  live, and `restore` brings them back; the row is never deleted. An admin
+  tool, not announced to the model (retiring takes memory away):
+  `gray-matter gm-neuron retire '{"facts": ["#id"]}'`. `concepts` retires
+  nodes with no active fact: to the graveyard, links dropped (`recall`
+  brings one back); a node that still holds facts is refused.
+- **An old state is labelled outdated.** A `progress` fact is a snapshot; on
+  the live probes an old one led 2 questions of 9 ("GTX 1080", a release of
+  the night before) and a model takes the first fact as true. Once 3 newer
+  progress facts share one of its concepts it shows as
+  `[progress · outdated]` and goes after the current facts, never removed
+  (`NEURON_OUTDATED_AFTER`, 0 = off). Computed at read time: no migration.
+  Other kinds never age so: a fix or a decision holds until disputed.
 - **A project's recall brings one fact of another project when it is very
   close.** It used to name only a concept there ("other contexts: [arbor]
   risk"). Now the single closest fact of any other project joins the list

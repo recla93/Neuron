@@ -281,7 +281,8 @@ _LINK_UPSERT = (
 )
 
 # Facts are append-only: INSERT OR IGNORE, never an upsert that could rewrite
-# another writer's text. Only `status` changes, and only active -> superseded.
+# another writer's text. Only `status` changes: active -> superseded (a newer
+# version), active <-> retired (retire_fact: no replacement, reversible).
 _FACT_INSERT = (
     "INSERT OR IGNORE INTO facts (context, id, kind, text, turn, created_at, source, "
     "supersedes, status, confirmed, gist, shown, owner, space) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
@@ -685,6 +686,48 @@ class Graph:
             self.facts[by_id]["supersedes"] = old_id
         self._dirty = True
         return True
+
+    def retire_fact(self, fid: str, restore: bool = False) -> bool:
+        """Retire the active fact ``fid`` with no replacement (junk, a test
+        residue, a state no longer true), or ``restore`` a retired one. Never a
+        delete: the row stays, only its status moves, so it can come back.
+        False when the fact is not in the state the call expects."""
+        f = self.facts.get(fid)
+        frm, to = ("retired", "active") if restore else ("active", "retired")
+        if not f or f["status"] != frm:
+            return False
+        f["status"] = to
+        self._fact_status.add(fid)
+        for kw in f["concepts"]:
+            if restore:
+                self._index_one(kw, f)
+            else:
+                self.episodes[kw] = [e for e in self.episodes.get(kw, []) if e["id"] != fid]
+        self._dirty = True
+        return True
+
+    def retire_concept(self, keyword: str, turn: int) -> str:
+        """Retire a concept: to the graveyard (recoverable with
+        reactivate_from_graveyard), its links dropped. Only a concept with no
+        active fact: a node must not take memory away unseen, so its facts are
+        retired first. Returns "retired", "unknown" or "has active facts"."""
+        nd = self.get_node(keyword)
+        if nd is None:
+            return "unknown"
+        k = self._norm(nd.keyword)
+        if any(f["status"] == "active" and k in {self._norm(c) for c in f["concepts"]}
+               for f in self.facts.values()):
+            return "has active facts"
+        self._graveyard.append({"keyword": nd.keyword, "salience": nd.salience, "domain": nd.domain,
+                                "reason": f"retired by the user (topic: {nd.topic})"[:300], "turn": turn})
+        for lk in [lk for lk in self.links if k in (self._norm(lk.source), self._norm(lk.target))]:
+            self.remove_link(lk)
+        self.nodes.remove(nd)
+        self._removed_nodes.add(nd.keyword)      # as stored: the targeted DELETE is exact
+        self._session_cache.pop(k, None)
+        self._dirty = True
+        self._rebuild_node_map()
+        return "retired"
 
     def _index_one(self, kw: str, fact: dict) -> None:
         eps = self.episodes.setdefault(kw, [])
