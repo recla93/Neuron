@@ -247,8 +247,8 @@ function Ensure-Python {
 # dim MUST match the model — models.py guards VECTOR_DIM on the first embed.
 # Names/dims/sizes verified against fastembed's list_supported_models().
 $EmbedModels = @(
-    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual (EN+IT) - default, best recall (2x storage per vector)" },
-    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - light, for a weak PC" }
+    @{ name = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"; dim = 768;  size = "1.0 GB"; note = "multilingual (EN+IT) - default, best recall (2x storage per vector); ~1.7 GB RAM (8 GB PC minimum)" },
+    @{ name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"; dim = 384;  size = "220 MB"; note = "multilingual (EN+IT) - light, for a weak PC; ~0.65 GB RAM" }
 )
 function Select-EmbedModel {
     # Explicit -EmbedModel wins; otherwise prompt, defaulting to the multilingual.

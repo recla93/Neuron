@@ -91,8 +91,8 @@ fi
 # dim MUST match the model — models.py guards VECTOR_DIM on the first embed.
 # Names/dims/sizes verified against fastembed's list_supported_models().
 # Keep in sync with $EmbedModels in install.ps1.
-EM_1="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual (EN+IT) - default, best recall (2x storage per vector)"
-EM_2="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - light, for a weak PC"
+EM_1="sentence-transformers/paraphrase-multilingual-mpnet-base-v2|768|1.0 GB|multilingual (EN+IT) - default, best recall (2x storage per vector); ~1.7 GB RAM (8 GB PC minimum)"
+EM_2="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|384|220 MB|multilingual (EN+IT) - light, for a weak PC; ~0.65 GB RAM"
 CHOSEN_MODEL=""; CHOSEN_DIM=""; CHOSEN_SIZE=""
 select_embed_model() {
     if [ -n "$EMBED_MODEL" ]; then
