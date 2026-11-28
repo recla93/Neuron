@@ -2900,7 +2900,8 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         if search_kws_pt:          # the function checks the flag itself
             _cross = cross_context_matches(
                 _get_embedding(" ".join(sorted(search_kws_pt))),
-                _g.active, GRAPHS_DIR)
+                _g.active, GRAPHS_DIR,
+                words=set(re.findall(r"\w+", " ".join(map(str, search_kws_pt)).lower())))
             if _cross:
                 parts_pt.append("other contexts: " + " | ".join(
                     f"[{c}] {kw} ({sim:.2f})" for c, kw, sim in _cross))

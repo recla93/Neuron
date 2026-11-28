@@ -27,18 +27,58 @@ def test_skips_the_active_context(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
     monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
+    monkeypatch.setattr(ns, "_neutral_sim", lambda b: 0.0)
 
     class _DB:
         @staticmethod
         def connect_local(path):
             seen.append(path)
-            return _fake_conn([("auto elettrica", 0.63)])
+            return _fake_conn([("auto elettrica", 0.63, b"")])
     monkeypatch.setattr(ns, "_S", lambda: type("S", (), {"_db": _DB})())
 
     out = ns.cross_context_matches([0.1] * 384, "ai", str(tmp_path), top_n=5, threshold=0.5)
     assert all("graph_ai.db" not in p for p in seen), "il contesto attivo non va riletto"
     assert out == [("veicoli", "auto elettrica", 0.63)]
 
+
+
+def test_an_attractor_is_dropped(tmp_path, monkeypatch):
+    """A short name close to any short text ('ollama' at 0.70 on "va bene,
+    procedi pure", 2026-11-28) needs the message closer than an empty one."""
+    (tmp_path / "graph_mocoder.db").write_bytes(b"SQLite format 3\x00" + b"\x00" * 600)
+    monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
+    monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
+    monkeypatch.setattr(ns, "_neutral_sim", {b"o": 0.65, b"v": 0.2}.get)
+
+    class _DB:
+        @staticmethod
+        def connect_local(path):
+            return _fake_conn([("vram", 0.75, b"v"), ("ollama", 0.70, b"o")])
+    monkeypatch.setattr(ns, "_S", lambda: type("S", (), {"_db": _DB})())
+
+    out = ns.cross_context_matches([0.1] * 384, "graymatter", str(tmp_path), top_n=5, threshold=0.5)
+    assert out == [("mocoder", "vram", 0.75)]
+
+
+def test_a_named_concept_passes_the_neutral_check(tmp_path, monkeypatch):
+    """The vector put 'ollama' closer to "va bene" (0.712) than to "come
+    configuro ollama" (0.670), live 2026-11-28: a concept the message names
+    is shown whatever the neutral baseline says."""
+    (tmp_path / "graph_mocoder.db").write_bytes(b"SQLite format 3" + bytes(601))
+    monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
+    monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
+    monkeypatch.setattr(ns, "_neutral_sim", lambda b: 0.71)
+
+    class _DB:
+        @staticmethod
+        def connect_local(path):
+            return _fake_conn([("ollama", 0.67, b"o")])
+    monkeypatch.setattr(ns, "_S", lambda: type("S", (), {"_db": _DB})())
+
+    q = [0.1] * 384
+    assert ns.cross_context_matches(q, "graymatter", str(tmp_path), top_n=5, threshold=0.5) == []
+    assert ns.cross_context_matches(q, "graymatter", str(tmp_path), top_n=5, threshold=0.5,
+                                    words={"configuro", "ollama"}) == [("mocoder", "ollama", 0.67)]
 
 def test_a_broken_context_is_skipped_not_fatal(tmp_path, monkeypatch):
     """Motore senza vector SQL (degrado L2), file in uso, DB corrotto: il
@@ -47,13 +87,14 @@ def test_a_broken_context_is_skipped_not_fatal(tmp_path, monkeypatch):
         (tmp_path / name).write_bytes(b"SQLite format 3\x00" + b"\x00" * 600)
     monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
     monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
+    monkeypatch.setattr(ns, "_neutral_sim", lambda b: 0.0)
 
     class _DB:
         @staticmethod
         def connect_local(path):
             if path.endswith("graph_a.db"):
                 raise RuntimeError("no such function: vector_distance_cos")
-            return _fake_conn([("ok", 0.9)])
+            return _fake_conn([("ok", 0.9, b"")])
     monkeypatch.setattr(ns, "_S", lambda: type("S", (), {"_db": _DB})())
 
     out = ns.cross_context_matches([0.1] * 384, "ai", str(tmp_path), top_n=5, threshold=0.5)
@@ -70,11 +111,12 @@ def test_ranks_across_contexts_and_caps(tmp_path, monkeypatch):
         (tmp_path / name).write_bytes(b"SQLite format 3\x00" + b"\x00" * 600)
     monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
     monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
+    monkeypatch.setattr(ns, "_neutral_sim", lambda b: 0.0)
 
     class _DB:
         @staticmethod
         def connect_local(path):
-            return _fake_conn([("basso", 0.56)] if path.endswith("x.db") else [("alto", 0.88)])
+            return _fake_conn([("basso", 0.56, b"")] if path.endswith("x.db") else [("alto", 0.88, b"")])
     monkeypatch.setattr(ns, "_S", lambda: type("S", (), {"_db": _DB})())
 
     out = ns.cross_context_matches([0.1] * 384, "ai", str(tmp_path), top_n=1, threshold=0.5)
@@ -100,6 +142,7 @@ def test_only_concepts_that_hold_an_active_fact(tmp_path, monkeypatch):
     c.commit(); c.close()
     monkeypatch.setattr(ns, "_sqlite_usable", lambda p: True)
     monkeypatch.setattr(ns, "pack_vector", lambda v: b"blob")
+    monkeypatch.setattr(ns, "_neutral_sim", lambda b: 0.0)
 
     class _DB:
         @staticmethod

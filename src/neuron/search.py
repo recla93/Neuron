@@ -30,7 +30,7 @@ from neuron.extraction import DOMAIN_ALIASES, STOP_WORDS, _fold_accents
 
 log = logging.getLogger("neuron.search")
 from neuron.db import SQLITE_MIN_VALID_SIZE
-from neuron.models import pack_vector
+from neuron.models import pack_vector, unpack_vector
 
 
 def _S():
@@ -534,6 +534,32 @@ def _use_rate(f: dict) -> float:
     return min(1.0, f.get("confirmed", 0) / shown) if shown >= 2 else 0.0
 
 
+# Experiment 2026-11-28: the named bonus scaled by the concept's rarity,
+# (log(N/df) / log(N)) ** NAMED_IDF over the ranked pool. 5 of the bench's 16
+# noisy facts came in on 'neuron', the product's name, named in most messages.
+# 0 = off (flat bonus, as before). Bench 2026-11-28, message mode, 0 -> 1.5:
+# recall.json 64% -> 67%, noise 0.73 -> 0.64; recall_en_all 61% -> 67%, 0.82 -> 0.59;
+# recall_proc 70% = 70%, 0.43 -> 0.36; off-topic 0 everywhere; 2 gives the same
+# but on English noise 0.55. Off by default: the replay at 1.5 changed 699 of
+# 1294 real recalls, procedures shown 291 -> 261, and a read sample got worse
+# (ADR-022 again: the bench said better). A blind judgment decides.
+NAMED_IDF = float(os.environ.get("NEURON_NAMED_IDF", "0"))
+
+
+def _concept_rarity(facts) -> dict:
+    """concept -> (log(N/df) / log(N)) ** NAMED_IDF, in (0, 1]: 1 for a concept
+    of one fact, toward 0 for one that indexes every fact."""
+    import math
+    n = len(facts)
+    if n < 2:
+        return {}
+    df: dict = {}
+    for f in facts:
+        for c in set(f["concepts"]):
+            df[c] = df.get(c, 0) + 1
+    return {c: max(math.log(n / d) / math.log(n), 0.01) ** NAMED_IDF for c, d in df.items()}
+
+
 def _search_facts(query: str, graph, k: int, min_score: float,
                   named_bonus: float, delta: float = 1.0,
                   embed=None, newer: bool = False,
@@ -594,13 +620,15 @@ def _search_facts(query: str, graph, k: int, min_score: float,
     # `idf_pool`: every fact the caller ranks together (a project's and the
     # user's): a word's rarity over a 49-fact pool alone doubled its weight.
     worded = _lexical(query, idf_pool or active) if lex else {}
+    rare = _concept_rarity(idf_pool or active) if NAMED_IDF > 0 else {}
     out = []
     for f in active:
         v = vec(f)
         if v is None:          # still warming
             continue
         named = [c for c in f["concepts"] if _names(c, words, ignored)]
-        score = (sum(a * b for a, b in zip(q, v)) + (named_bonus if named else 0.0)
+        bonus = named_bonus * max((rare.get(c, 1.0) for c in named), default=1.0) if rare else named_bonus
+        score = (sum(a * b for a, b in zip(q, v)) + (bonus if named else 0.0)
                  + lex * worded.get(f["id"], 0.0) + use * _use_rate(f)
                  + (proc if f["kind"] == "procedure" and any(_names_whole(c, words) for c in named) else 0.0))
         if score >= min_score:
@@ -805,10 +833,32 @@ CROSS_ENABLED = os.environ.get(
 # stesso definisce i drift "the noisiest". Meglio due ponti veri che dieci forse.
 CROSS_SIM = float(os.environ.get("NEURON_CROSS_SIM", "0.55"))
 CROSS_TOP_N = int(os.environ.get("NEURON_CROSS_TOP_N", "2"))
+# A concept of another context is shown only when the message is closer to it
+# than an empty one is. Short names attract any short text ('ollama' scored 0.70
+# on "va bene, procedi pure"). Measured 2026-11-28, 219 concepts of the other
+# contexts, 20 acks vs the 340 real turns of turns.jsonl: margin 0.15 over these
+# phrases cut the acks with a hint 17 -> 6 and the real turns 81 -> 80; 0.35
+# reached 1 ack but 49 real. 0 turns it off. A concept the message NAMES passes
+# anyway: the vector cannot tell "come configuro ollama" (0.670 on 'ollama')
+# from "va bene" (0.712), measured live the same day; the words can.
+CROSS_NEUTRAL_MARGIN = float(os.environ.get("NEURON_CROSS_NEUTRAL_MARGIN", "0.15"))
+_NEUTRAL_PHRASES = ("ok va bene procedi", "si grazie", "perfetto continua", "va bene")
+_neutral_vecs: list = []
+
+
+def _neutral_sim(blob) -> float:
+    """How close a concept's stored vector is to a message that says nothing."""
+    if CROSS_NEUTRAL_MARGIN <= 0:
+        return -1.0
+    if not _neutral_vecs:
+        _neutral_vecs.extend(_get_embedding(p) for p in _NEUTRAL_PHRASES)
+    v = unpack_vector(bytes(blob))
+    return max(sum(a * b for a, b in zip(v, n)) for n in _neutral_vecs)
 
 
 def cross_context_matches(query_vec, active_ctx: str, graphs_dir: str,
-                          top_n: int = 0, threshold: float = 0.0) -> list[tuple]:
+                          top_n: int = 0, threshold: float = 0.0,
+                          words: "set | None" = None) -> list[tuple]:
     """Similar concepts that live in OTHER contexts. Returns [(ctx, keyword, sim)].
 
     Queries the `graph_*.db` files by path, without instantiating the Graphs:
@@ -853,22 +903,24 @@ def cross_context_matches(query_vec, active_ctx: str, graphs_dir: str,
                 # held 125 such names of 127, and "pro e contro?" was routed
                 # there on `cosa` (0.59), "ok procedi" on `qualsiasi` (0.74).
                 rows = conn.execute(
-                    "SELECT keyword, sim FROM ("
-                    "  SELECT keyword, 1.0 - vector_distance_cos(embedding, ?) AS sim "
+                    "SELECT keyword, sim, embedding FROM ("
+                    "  SELECT keyword, embedding, 1.0 - vector_distance_cos(embedding, ?) AS sim "
                     "  FROM node_vectors v WHERE EXISTS ("
                     "    SELECT 1 FROM fact_concepts fc JOIN facts f"
                     "      ON f.context = fc.context AND f.id = fc.fact_id"
                     "    WHERE fc.context = v.context AND fc.keyword = v.keyword"
                     "      AND f.status = 'active')"
                     ") WHERE sim > ? ORDER BY sim DESC LIMIT ?",
-                    (query_blob, threshold, top_n),
+                    (query_blob, threshold, top_n + 8),
                 ).fetchall()
             finally:
                 try:
                     conn.close()
                 except Exception:  # noqa: BLE001
                     pass
-            out.extend((ctx, kw, round(float(sim), 4)) for kw, sim in rows)
+            out.extend((ctx, kw, round(float(sim), 4)) for kw, sim, emb in rows
+                       if set(re.findall(r"\w+", kw.lower())) <= (words or set())
+                       or float(sim) - _neutral_sim(emb) > CROSS_NEUTRAL_MARGIN)
         except Exception as e:  # noqa: BLE001 — motore senza vector SQL, file in uso, ...
             log.debug("cross-context search skipped %s: %s", ctx, e)
     out.sort(key=lambda r: -r[2])
