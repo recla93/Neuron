@@ -80,3 +80,23 @@ def test_vendored_wheel_is_not_older_than_the_sibling_gm():
     assert _tuple(wheel) >= _tuple(sibling), (
         f"la wheel vendorata è {wheel} ma Gray Matter è {sibling}: ricostruiscila "
         f"(vedi RELEASE-CHECKLIST) o un install offline parte già vecchio")
+
+
+def test_vendored_wheel_matches_the_tree():
+    """Same version is not same content: the wheel went stale three times
+    (27/11, 28/11 twice) with the version unchanged, and a standalone install
+    would have shipped Gray Matter without the day's fixes. Every file of the
+    wheel's gray_matter/ must equal the sibling checkout's."""
+    import zipfile
+    gm = ROOT.parent / "gray_matter"
+    whls = sorted(VENDOR.glob("gray_matter-*.whl"))
+    if not whls or not (gm / "pyproject.toml").exists():
+        pytest.skip("no vendored wheel or no sibling gray_matter in this checkout")
+    z = zipfile.ZipFile(whls[-1])
+    stale = [n for n in z.namelist()
+             if n.startswith("gray_matter/") and not n.endswith("/")
+             and (gm / n[len("gray_matter/"):]).is_file()
+             and z.read(n).replace(b"\r\n", b"\n")
+             != (gm / n[len("gray_matter/"):]).read_bytes().replace(b"\r\n", b"\n")]
+    assert not stale, ("vendored Gray Matter wheel is stale, rebuild it "
+                       "(RELEASE-CHECKLIST 0.2): " + ", ".join(stale[:5]))
