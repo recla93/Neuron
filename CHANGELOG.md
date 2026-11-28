@@ -1,6 +1,16 @@
 # Changelog — Neuron
 
 ## 7.0.0 (2026-11-27)
+- **Another project's concept is offered when the message names it, or is
+  closer to it than an acknowledgement.** Short concept names attract any
+  short text: `ollama` came back as an "other contexts" hint on "va bene,
+  procedi pure" (0.70). Now it needs the message to name it, or to beat four
+  neutral phrases by 0.15 (`NEURON_CROSS_NEUTRAL_MARGIN`). Measured: acks with
+  a hint 17 -> 6 of 20, real turns 81 -> 80 of 340; "come configuro ollama"
+  keeps its hint.
+- **`NEURON_NAMED_IDF`, an experiment, off by default.** It scales the named
+  bonus by the concept's rarity: better on every bench set, but it moved half
+  of the real recalls in the replay; a blind judgment decides.
 - **No far-topic warning on a message of two words.** Its vector is one
   word's, and a lone word matches at random: "Si, ritirali" matched mocoder's
   `ollama` at 0.81 and the session was told to move. Below 3 words (topic
