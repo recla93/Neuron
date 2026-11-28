@@ -1753,11 +1753,22 @@ async def _tool_store_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         cs = []
         for c in (f["concepts"] if f["concepts"] is not None else keywords):
             acc, _n = _cur.vet_keywords([c], _existing_map)
-            hit = _canon_kw.get(_cur._dup_key(acc[0])) if acc else None
-            if hit and hit not in cs:
+            if not acc:
+                continue
+            # A concept past the turn's keyword cap is not a keyword of this turn,
+            # but it is still this fact's: it stays on the fact (2026-11-28: the
+            # fifth fact of a batch lost all of its concepts to the cap).
+            hit = _canon_kw.get(_cur._dup_key(acc[0])) or acc[0]
+            if hit not in cs:
                 cs.append(hit)
-        # A fact whose concepts all fell to curation is still indexed: under the
-        # turn's keywords, so it stays findable.
+        # Every concept refused by curation (verbs only): the fact keeps its own
+        # words, never the whole turn's keywords, which in a turn of several
+        # facts are the OTHER facts' concepts. The turn's keywords only for the
+        # legacy `episode`, which brings none of its own.
+        if not cs and f["concepts"]:
+            cs = list(dict.fromkeys(f["concepts"]))[:5]
+        # A fact whose concepts all fell to curation is still indexed, so it
+        # stays findable.
         tg = (_user_graph(g) or g) if f["kind"] in USER_KINDS else g
         _to_user = _to_user or tg is not g
         _sup, _closes = f["supersedes"], None

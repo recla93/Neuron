@@ -1,6 +1,12 @@
 # Changelog — Neuron
 
 ## 7.0.0 (2026-11-27)
+- **A fact keeps its own concepts in a turn of several facts.** A turn keeps
+  at most 8 keywords; the concepts of the last facts fell past that cap,
+  found no keyword, and the fact was indexed under the whole turn's keywords,
+  which are the other facts' concepts. Live, the fifth pending of a batch got
+  `blocker` and showed as a blocker. A concept past the cap now stays on its
+  fact; a fact whose concepts curation refused keeps its own words.
 - **`retire`: a fact leaves the memory with no replacement.** The only way
   out was `store_turn` with `supersedes`, which needs a new fact in its place:
   for junk or a test residue, a tombstone that was noise itself. `retire`
