@@ -159,6 +159,9 @@ Kinds: `progress`, `decision`, `fix`, `fact`, `idea`, `user`, `habit`, `procedur
 or it is stored as `fact`), `pending` (something left to do: shown first at the
 project's next session start; close it with a fact that `supersedes` it).
 A recalled `[progress · outdated]` is a state that has moved on: trust the newer facts.
+Pass `store_turn(context=...)` with the `ctx=` of the latest recall header
+(`[neuron] ctx=graymatter`): in Claude Desktop one gateway serves every session,
+and without it a fact can land in the project of another session's newest message.
 A procedure holds every step of its task, the shared ones too (the gate in the
 release procedure): it is recalled alone.
 Its concepts name the task (`websearch`, `release`), never the tool or client

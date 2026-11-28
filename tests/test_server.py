@@ -555,6 +555,16 @@ def test_pre_turn_names_the_context_that_actually_holds_the_topic(monkeypatch):
     assert "switch_context('studio/bash')" in text, text
 
 
+def test_a_message_of_two_words_gets_no_far_topic_warning(monkeypatch):
+    """A lone word matches at random: live, "Si, ritirali" matched mocoder's
+    'ollama' at 0.81 and the session was told to move (2026-11-28)."""
+    pytest.importorskip("mcp")
+    text = _pre_turn_via_vectors(monkeypatch, ranked=[("extraheader", 0.0)],
+                                 best_sim=0.11, topic="Si, ritirali",
+                                 cross=[("mocoder", "ollama", 0.81)])
+    assert "topic far from" not in text, text
+
+
 def test_pre_turn_declares_the_route_it_answered_through():
     """R1: uno stato che cambia il comportamento dev'essere osservabile nella
     risposta del tool. Il degrado L2 (Turso -> sqlite3 sullo stesso file)

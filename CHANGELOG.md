@@ -1,6 +1,13 @@
 # Changelog — Neuron
 
 ## 7.0.0 (2026-11-27)
+- **No far-topic warning on a message of two words.** Its vector is one
+  word's, and a lone word matches at random: "Si, ritirali" matched mocoder's
+  `ollama` at 0.81 and the session was told to move. Below 3 words the topic
+  is not known, and the warning stays silent.
+- **`store_turn` asks for the session's project.** The schema of `context`
+  says to pass the `ctx=` of the latest recall header: one gateway can serve
+  several sessions.
 - **A fact keeps its own concepts in a turn of several facts.** A turn keeps
   at most 8 keywords; the concepts of the last facts fell past that cap,
   found no keyword, and the fact was indexed under the whole turn's keywords,

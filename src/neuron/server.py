@@ -715,7 +715,7 @@ def _all_tools() -> list[Tool]:
                     "topic": {"type": "string", "description": "Optional: topic of the turn (3-5 words); defaults to the first fact"},
                     "keywords": {"type": "array", "items": {"type": "string"}, "description": "Optional: extra concept keywords; the facts' concepts are added"},
                     "domain": {"type": "string", "default": "general", "description": "Keep 'general'."},
-                    "context": {"type": "string", "description": "An existing context (a topic like spring, or a project); defaults to the session's. An unknown name goes to the inbox unless new_context is true."},
+                    "context": {"type": "string", "description": "An existing context (a topic like spring, or a project). With the memory hook, pass the ctx= of the latest recall header: one gateway can serve several sessions, and the default is the newest message's project, not always yours. An unknown name goes to the inbox unless new_context is true."},
                     "new_context": {"type": "boolean", "description": "true to create `context` when it does not exist yet"},
                     # Not declared, still accepted (the schema allows extra
                     # fields): intent, sentiment, entities, tags and the legacy
@@ -2374,6 +2374,7 @@ def _said(f) -> str:
 # fact as true. On the graymatter graph, >= 3 marks 64 of 106 progress facts;
 # "one newer fact with all its concepts" marked 1. 0 turns it off.
 OUTDATED_AFTER = _config.env_int("NEURON_OUTDATED_AFTER", 3)
+MIN_ROUTE_WORDS = 3      # the far-topic warning needs a message that says what it is about
 _OUTDATED_CACHE: dict = {}
 
 
@@ -2955,7 +2956,11 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
         parts_pt = [pp for pp in parts_pt if pp.startswith(("other contexts:", "facts:"))]
         lks, nodes_pt = [], []
     # The inbox reads every graph already: "far from this context" says nothing there.
-    if _cross and ctx_label != INBOX_CONTEXT and _cross[0][2] > _best_sim + _config.env_float(
+    # Nor does a message of a few words: its vector is one word's, and a lone
+    # word matches at random ("Si, ritirali" -> mocoder's 'ollama' at 0.81, live
+    # 2026-11-28). Below MIN_ROUTE_WORDS the topic is not known: no warning.
+    if _cross and ctx_label != INBOX_CONTEXT and len(re.findall(r"\w+", topic_pt)) >= MIN_ROUTE_WORDS \
+            and _cross[0][2] > _best_sim + _config.env_float(
             "NEURON_ROUTE_MARGIN", 0.15):
         _c, _ckw, _csim = _cross[0]
         from neuron.registry import _SCOPE
