@@ -486,7 +486,7 @@ def test_pre_turn_admits_it_has_nothing_instead_of_padding(monkeypatch):
     assert "no context" in text, f"the admission must survive: {text!r}"
 
 
-def _pre_turn_via_vectors(monkeypatch, ranked, best_sim, topic, cross=None):
+def _pre_turn_via_vectors(monkeypatch, ranked, best_sim, topic, cross=None, keywords=None):
     """pre_turn con la risposta poggiata SUI VETTORI (fallback), non su un
     richiamo esatto per keyword: e' il solo caso in cui la soglia di rilevanza
     morde. Il punteggio e' iniettato invece che coaxato da un grafo finto — con
@@ -510,7 +510,8 @@ def _pre_turn_via_vectors(monkeypatch, ranked, best_sim, topic, cross=None):
     old_g = srv._g
     srv._g = _make_registry_with({"default": g}, "default")
     try:
-        return asyncio.run(srv.call_tool("pre_turn", {"topic": topic}))[0].text
+        args = {"topic": topic, **({"keywords": keywords} if keywords else {})}
+        return asyncio.run(srv.call_tool("pre_turn", args))[0].text
     finally:
         srv._g = old_g
 
@@ -563,6 +564,15 @@ def test_a_message_of_two_words_gets_no_far_topic_warning(monkeypatch):
                                  best_sim=0.11, topic="Si, ritirali",
                                  cross=[("mocoder", "ollama", 0.81)])
     assert "topic far from" not in text, text
+
+
+def test_a_short_topic_with_keywords_still_gets_the_warning(monkeypatch):
+    """The model's own keywords say what a short topic is about."""
+    pytest.importorskip("mcp")
+    text = _pre_turn_via_vectors(monkeypatch, ranked=[("extraheader", 0.0)],
+                                 best_sim=0.11, topic="ollama",
+                                 cross=[("mocoder", "ollama", 0.81)], keywords=["ollama", "gpu"])
+    assert "topic far from" in text, text
 
 
 def test_pre_turn_declares_the_route_it_answered_through():

@@ -2959,7 +2959,10 @@ async def _tool_pre_turn(arguments: dict, ctx: str, g) -> list[TextContent]:
     # Nor does a message of a few words: its vector is one word's, and a lone
     # word matches at random ("Si, ritirali" -> mocoder's 'ollama' at 0.81, live
     # 2026-11-28). Below MIN_ROUTE_WORDS the topic is not known: no warning.
-    if _cross and ctx_label != INBOX_CONTEXT and len(re.findall(r"\w+", topic_pt)) >= MIN_ROUTE_WORDS \
+    # The model's own keywords count: "ollama setup" with keywords says what it is about.
+    _route_words = len(re.findall(r"\w+", " ".join(
+        [str(topic_pt), *(str(k) for k in (extra_kws_pt if isinstance(extra_kws_pt, list) else []))])))
+    if _cross and ctx_label != INBOX_CONTEXT and _route_words >= MIN_ROUTE_WORDS \
             and _cross[0][2] > _best_sim + _config.env_float(
             "NEURON_ROUTE_MARGIN", 0.15):
         _c, _ckw, _csim = _cross[0]
